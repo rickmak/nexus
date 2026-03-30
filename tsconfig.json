@@ -15,19 +15,10 @@
     "sourceMap": true,
     "resolveJsonModule": true,
     "allowSyntheticDefaultImports": true,
-    "baseUrl": ".",
-    "paths": {
-      "@nexus-enforcer/*": ["packages/enforcer/src/*"],
-      "@nexus-opencode/*": ["packages/opencode/src/*"],
-      "@nexus-claude/*": ["packages/claude/src/*"],
-      "@nexus-cursor/*": ["packages/cursor/src/*"]
-    }
+    "baseUrl": "."
   },
   "include": [
-    "packages/enforcer/src/**/*",
-    "packages/opencode/src/**/*",
-    "packages/claude/src/**/*",
-    "packages/cursor/src/**/*"
+    "packages/workspace-sdk/src/**/*"
   ],
   "exclude": ["node_modules", "dist"]
 }

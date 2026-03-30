@@ -3,8 +3,9 @@
 ## Prerequisites
 
 - Go 1.21+
-- Docker 24+
-- Git 2.5+
+- Node.js 18+
+- pnpm
+- task (Taskfile runner)
 
 ## Install from Source
 
@@ -13,29 +14,23 @@
 git clone https://github.com/inizio/nexus
 cd nexus
 
-# Build the binary
-go build -o nexus ./cmd/nexus/
+# Install dependencies
+pnpm install
 
-# Move to PATH (optional)
-sudo mv nexus /usr/local/bin/
+# Build core packages
+task build
 ```
 
 ## Verify Installation
 
 ```bash
-nexus --version
-nexus --help
-```
-
-## Docker Setup
-
-Ensure Docker is running:
-
-```bash
-docker --version
-docker ps
+# Run core verification
+cd packages/workspace-daemon && go test ./...
+cd ../workspace-sdk && pnpm exec tsc --noEmit && pnpm exec jest --runInBand
 ```
 
 ## Next Steps
 
-- [Your First Workspace](first-workspace.md)
+- [Workspace Daemon Reference](../reference/workspace-daemon.md)
+- [Workspace SDK Reference](../reference/workspace-sdk.md)
+- [Workspace Config Reference](../reference/workspace-config.md)

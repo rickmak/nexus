@@ -2,40 +2,26 @@
 
 ## Project Overview
 
-This is the **Nexus** project - an AI-native development environment with multiple components:
+This repository is the Nexus remote workspace core.
 
 ### Components
 
 | Component | Status | Description |
 |-----------|--------|-------------|
-| **Enforcer** | ✅ Implemented | Task enforcement with idle detection and mini-workflows |
-| **Workspace** | 🚧 In Development | Isolated dev environments (inspired by opencode-devcontainer, sprite) |
-| **Telemetry** | 📋 Planned | Agent Trace specification implementation for attribution tracking |
+| **Workspace Daemon** | ✅ Active | Go server for workspace lifecycle, RPC handlers, services, spotlight |
+| **Workspace SDK** | ✅ Active | TypeScript SDK for remote workspace control |
 
 ### Packages
 
-| Package | Component | Status |
-|---------|-----------|--------|
-| `packages/enforcer` | Enforcer | ✅ Core enforcement library |
-| `packages/opencode-plugin` | Enforcer | ✅ OpenCode integration |
-| `packages/opencode` | Enforcer | ✅ OpenCode CLI tool |
-| `packages/claude` | Enforcer | ✅ Claude Code integration |
-| `packages/cursor` | Enforcer | 🚧 Cursor IDE extension |
-| `packages/workspace-sdk` | Workspace | 🚧 WebSocket SDK |
-| `packages/workspace-daemon` | Workspace | 🚧 Go server |
+| Package | Status | Description |
+|---------|--------|-------------|
+| `packages/workspace-daemon` | ✅ Active | Go daemon runtime |
+| `packages/workspace-sdk` | ✅ Active | TypeScript SDK |
 
-### What IS Implemented
+### Scope Notes
 
-- **Boulder/Enforcer System**: Idle detection, mini-workflows (docs, git, CI enforcement)
-- **IDE Plugins**: OpenCode, Claude Code (Cursor in progress)
-- **Workspace SDK**: Partial implementation for remote file/exec operations
-
-### What Is NOT Yet Implemented
-
-- Full Docker container workspace management
-- Complete remote workspace lifecycle
-- Telemetry/Agent Trace tracking
-- `nexus` CLI (use `boulder` CLI instead)
+- Keep repository changes centered on workspace-daemon and workspace-sdk.
+- Do not reintroduce removed non-core package surfaces.
 
 ---
 
@@ -88,16 +74,10 @@ ADRs go in `docs/dev/decisions/`:
 
 - `docs/dev/decisions/001-worktree-isolation.md`
 - `docs/dev/decisions/002-port-allocation.md`
-- `docs/dev/decisions/003-telemetry-design.md`
 
 ### What NOT to Reference
 
-Never reference in documentation:
-
-- `nexus` CLI commands (they don't exist)
-- Docker container workspaces (not implemented)
-- Workspace lifecycle management (not implemented)
-- Remote workspaces via SSH (not implemented)
+Never reference removed module surfaces as active capabilities.
 
 If a feature doesn't exist, don't document it as if it does. Instead, note it as planned/future.
 
@@ -105,26 +85,12 @@ If a feature doesn't exist, don't document it as if it does. Instead, note it as
 
 ```
 docs/
-├── index.md                 # Home
-├── tutorials/              # User tutorials
-│   ├── installation.md
-│   └── plugin-setup.md
-├── reference/              # API/CLI reference
-│   ├── boulder-cli.md
-│   ├── enforcer-config.md
-│   └── workspace-sdk.md   # Note: workspace SDK not fully implemented
-├── explanation/           # Concepts
-│   ├── architecture.md
-│   └── boulder-system.md
-└── dev/                    # Developer docs
+├── index.md
+├── reference/
+│   ├── workspace-daemon.md
+│   ├── workspace-sdk.md
+│   └── workspace-config.md
+└── dev/
     ├── contributing.md
-    ├── roadmap.md
-    ├── decisions/         # ADRs
-    └── internal/          # Historical docs (not user-facing)
-        ├── implementation/
-        ├── plans/
-        ├── design/
-        ├── research/
-        ├── testing/
-        └── ARCHIVE/
+    └── migration-core-prune.md
 ```

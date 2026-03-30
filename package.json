@@ -1,8 +1,8 @@
 {
-  "name": "nexus-enforcer-monorepo",
+  "name": "nexus-workspace-monorepo",
   "version": "1.0.0",
   "private": true,
-  "description": "Nexus Enforcer - Self-evolving enforcement rules for AI agents",
+  "description": "Nexus remote workspace daemon and SDK",
   "workspaces": [
     "packages/*"
   ],
@@ -10,7 +10,6 @@
     "build": "task build",
     "test": "task test",
     "lint": "task lint",
-    "publish": "task publish",
     "clean": "task clean"
   },
   "devDependencies": {
@@ -22,10 +21,10 @@
     "pnpm": ">=8.0.0"
   },
   "keywords": [
-    "enforcement",
-    "ai-agents",
-    "monorepo",
-    "self-evolving"
+    "workspace",
+    "remote",
+    "sdk",
+    "daemon"
   ],
   "author": "Nexus Team",
   "license": "MIT",

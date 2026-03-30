@@ -46,6 +46,8 @@ vendor/
 # Nexus worktrees
 .nexus/worktrees/
 .nexus/dogfooding/
+.nexus/case-studies/
+.case-studies/
 
 # Nexus collection data (may contain credentials)
 .nexus/collection/data/
@@ -63,6 +65,7 @@ vendor/
 # Node modules
 node_modules/
 **/node_modules/
+**/node_modules.root-owned.bak*/
 
 # Build artifacts
 dist/

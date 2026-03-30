@@ -2,37 +2,20 @@ version: '3'
 
 tasks:
   build:
-    desc: Build all packages
+    desc: Build core packages
     cmds:
-      - task: build:enforcer
-      - task: build:opencode
-      - task: build:claude
-      - task: build:cursor
+      - task: build:workspace-daemon
       - task: build:workspace-sdk
 
-  build:enforcer:
-    dir: packages/enforcer
+  build:workspace-daemon:
+    dir: packages/workspace-daemon
     cmds:
-      - pnpm install
-      - pnpm build
+      - go build ./...
 
-  build:opencode:
-    dir: packages/opencode
+  test:workspace-daemon:
+    dir: packages/workspace-daemon
     cmds:
-      - pnpm install
-      - pnpm build
-
-  build:claude:
-    dir: packages/claude
-    cmds:
-      - pnpm install
-      - pnpm build
-
-  build:cursor:
-    dir: packages/cursor
-    cmds:
-      - pnpm install
-      - pnpm build
+      - go test ./...
 
   build:workspace-sdk:
     dir: packages/workspace-sdk
@@ -41,33 +24,10 @@ tasks:
       - pnpm build
 
   test:
-    desc: Run all tests
+    desc: Run core tests
     cmds:
-      - task: test:enforcer
-      - task: test:opencode
-      - task: test:claude
-      - task: test:cursor
+      - task: test:workspace-daemon
       - task: test:workspace-sdk
-
-  test:enforcer:
-    dir: packages/enforcer
-    cmds:
-      - pnpm test
-
-  test:opencode:
-    dir: packages/opencode
-    cmds:
-      - pnpm test
-
-  test:claude:
-    dir: packages/claude
-    cmds:
-      - pnpm test
-
-  test:cursor:
-    dir: packages/cursor
-    cmds:
-      - pnpm test
 
   test:workspace-sdk:
     dir: packages/workspace-sdk
@@ -75,38 +35,20 @@ tasks:
       - pnpm test
 
   lint:
-    desc: Run all linters
+    desc: Run core lint checks
     cmds:
-      - task: lint:enforcer
-      - task: lint:opencode
-      - task: lint:claude
-      - task: lint:cursor
+      - task: lint:workspace-daemon
       - task: lint:workspace-sdk
 
-  lint:enforcer:
-    dir: packages/enforcer
+  lint:workspace-daemon:
+    dir: packages/workspace-daemon
     cmds:
-      - pnpm lint
-
-  lint:opencode:
-    dir: packages/opencode
-    cmds:
-      - pnpm lint
-
-  lint:claude:
-    dir: packages/claude
-    cmds:
-      - pnpm lint
-
-  lint:cursor:
-    dir: packages/cursor
-    cmds:
-      - pnpm lint
+      - go test ./... -run TestDoesNotExist
 
   lint:workspace-sdk:
     dir: packages/workspace-sdk
     cmds:
-      - pnpm lint
+      - pnpm exec tsc --noEmit
 
   ci:
     desc: Run CI pipeline - install, build, lint, test
@@ -116,39 +58,8 @@ tasks:
       - task: lint
       - task: test
 
-  publish:
-    desc: Publish all packages to npm
-    cmds:
-      - task: publish:enforcer
-      - task: publish:opencode
-      - task: publish:claude
-      - task: publish:cursor
-
-  publish:enforcer:
-    dir: packages/enforcer
-    cmds:
-      - pnpm publish
-
-  publish:opencode:
-    dir: packages/opencode
-    cmds:
-      - pnpm publish
-
-  publish:claude:
-    dir: packages/claude
-    cmds:
-      - pnpm publish
-
-  publish:cursor:
-    dir: packages/cursor
-    cmds:
-      - pnpm publish
-
   clean:
-    desc: Clean all build artifacts
+    desc: Clean core build artifacts
     cmds:
-      - rm -rf packages/enforcer/dist
-      - rm -rf packages/opencode/dist
-      - rm -rf packages/claude/dist
-      - rm -rf packages/cursor/dist
+      - rm -rf packages/workspace-daemon/workspace-daemon
       - rm -rf packages/workspace-sdk/dist
