@@ -65,3 +65,20 @@ func TestAssertNoManualACPFindsCommand(t *testing.T) {
 		t.Fatal("expected error when manual ACP startup command exists")
 	}
 }
+
+func TestEnsureDotEnvCopiesFromExample(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, ".env.example"), []byte("FOO=bar\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureDotEnv(dir); err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, ".env"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != "FOO=bar\n" {
+		t.Fatalf("unexpected .env content: %q", string(data))
+	}
+}

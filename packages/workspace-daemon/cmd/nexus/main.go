@@ -132,6 +132,14 @@ func run(opts options) error {
 		return err
 	}
 
+	if err := ensureDotEnv(opts.projectRoot); err != nil {
+		return err
+	}
+
+	if os.Getenv("GLITCHTIP_DSN") == "" {
+		_ = os.Setenv("GLITCHTIP_DSN", "placeholder")
+	}
+
 	if _, _, err := config.LoadWorkspaceConfig(opts.projectRoot); err != nil {
 		return fmt.Errorf("invalid workspace config: %w", err)
 	}
@@ -307,6 +315,32 @@ func assertNoManualACP(lifecycleDir string) error {
 		}
 	}
 
+	return nil
+}
+
+func ensureDotEnv(projectRoot string) error {
+	dotEnvPath := filepath.Join(projectRoot, ".env")
+	if _, err := os.Stat(dotEnvPath); err == nil {
+		return nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return fmt.Errorf("stat .env: %w", err)
+	}
+
+	dotEnvExamplePath := filepath.Join(projectRoot, ".env.example")
+	if _, err := os.Stat(dotEnvExamplePath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil
+		}
+		return fmt.Errorf("stat .env.example: %w", err)
+	}
+
+	data, err := os.ReadFile(dotEnvExamplePath)
+	if err != nil {
+		return fmt.Errorf("read .env.example: %w", err)
+	}
+	if err := os.WriteFile(dotEnvPath, data, 0o600); err != nil {
+		return fmt.Errorf("write .env from .env.example: %w", err)
+	}
 	return nil
 }
 
