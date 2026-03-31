@@ -2,6 +2,7 @@ package workspacemgr
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -17,10 +18,65 @@ type Manager struct {
 }
 
 func NewManager(root string) *Manager {
-	return &Manager{
+	m := &Manager{
 		root:       root,
 		workspaces: make(map[string]*Workspace),
 	}
+	_ = m.loadAll()
+	return m
+}
+
+func (m *Manager) workspacesDir() string {
+	return filepath.Join(m.root, "workspaces")
+}
+
+func (m *Manager) recordPath(id string) string {
+	return filepath.Join(m.workspacesDir(), id+".json")
+}
+
+func (m *Manager) loadAll() error {
+	dir := m.workspacesDir()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return fmt.Errorf("read workspaces dir: %w", err)
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
+			continue
+		}
+		id := entry.Name()[:len(entry.Name())-5]
+		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
+		if err != nil {
+			continue
+		}
+		var ws Workspace
+		if err := json.Unmarshal(data, &ws); err != nil {
+			continue
+		}
+		m.workspaces[id] = &ws
+	}
+	return nil
+}
+
+func (m *Manager) persistWorkspace(ws *Workspace) error {
+	if err := os.MkdirAll(m.workspacesDir(), 0o755); err != nil {
+		return fmt.Errorf("create workspaces dir: %w", err)
+	}
+	data, err := json.Marshal(ws)
+	if err != nil {
+		return fmt.Errorf("marshal workspace: %w", err)
+	}
+	if err := os.WriteFile(m.recordPath(ws.ID), data, 0o644); err != nil {
+		return fmt.Errorf("write workspace record: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) deleteRecord(id string) {
+	_ = os.Remove(m.recordPath(id))
 }
 
 func (m *Manager) Create(_ context.Context, spec CreateSpec) (*Workspace, error) {
@@ -41,6 +97,10 @@ func (m *Manager) Create(_ context.Context, spec CreateSpec) (*Workspace, error)
 		return nil, fmt.Errorf("create workspace root: %w", err)
 	}
 
+	authBinding := spec.AuthBinding
+	if authBinding == nil {
+		authBinding = make(map[string]string)
+	}
 	ws := &Workspace{
 		ID:            id,
 		Repo:          spec.Repo,
@@ -48,8 +108,10 @@ func (m *Manager) Create(_ context.Context, spec CreateSpec) (*Workspace, error)
 		WorkspaceName: spec.WorkspaceName,
 		AgentProfile:  spec.AgentProfile,
 		Policy:        spec.Policy,
-		State:         StateSetup,
+		State:         StateCreated,
 		RootPath:      rootPath,
+		Backend:       spec.Backend,
+		AuthBinding:   authBinding,
 		CreatedAt:     now,
 		UpdatedAt:     now,
 	}
@@ -57,6 +119,10 @@ func (m *Manager) Create(_ context.Context, spec CreateSpec) (*Workspace, error)
 	m.mu.Lock()
 	m.workspaces[id] = ws
 	m.mu.Unlock()
+
+	if err := m.persistWorkspace(ws); err != nil {
+		return nil, fmt.Errorf("persist workspace: %w", err)
+	}
 
 	return cloneWorkspace(ws), nil
 }
@@ -96,9 +162,99 @@ func (m *Manager) Remove(id string) bool {
 
 	if ok {
 		_ = os.RemoveAll(ws.RootPath)
+		m.deleteRecord(id)
 	}
 
 	return ok
+}
+
+func (m *Manager) Stop(id string) error {
+	m.mu.Lock()
+	ws, ok := m.workspaces[id]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("workspace not found: %s", id)
+	}
+	if ws.State == StateRemoved {
+		m.mu.Unlock()
+		return fmt.Errorf("cannot stop removed workspace: %s", id)
+	}
+	ws.State = StateStopped
+	ws.UpdatedAt = time.Now().UTC()
+	m.mu.Unlock()
+
+	if err := m.persistWorkspace(ws); err != nil {
+		return fmt.Errorf("persist stop: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) Restore(id string) (*Workspace, bool) {
+	m.mu.Lock()
+	ws, ok := m.workspaces[id]
+	if !ok {
+		m.mu.Unlock()
+		return nil, false
+	}
+	if ws.State == StateRemoved {
+		m.mu.Unlock()
+		return nil, false
+	}
+	ws.State = StateRestored
+	ws.UpdatedAt = time.Now().UTC()
+	m.mu.Unlock()
+
+	if err := m.persistWorkspace(ws); err != nil {
+		return nil, false
+	}
+	return cloneWorkspace(ws), true
+}
+
+func (m *Manager) SetBackend(id string, backend string) error {
+	m.mu.Lock()
+	ws, ok := m.workspaces[id]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("workspace not found: %s", id)
+	}
+	if ws.State == StateRemoved {
+		m.mu.Unlock()
+		return fmt.Errorf("cannot update backend for removed workspace: %s", id)
+	}
+	ws.Backend = backend
+	ws.UpdatedAt = time.Now().UTC()
+	m.mu.Unlock()
+
+	if err := m.persistWorkspace(ws); err != nil {
+		return fmt.Errorf("persist backend: %w", err)
+	}
+
+	return nil
+}
+
+func (m *Manager) Start(id string) error {
+	m.mu.Lock()
+	ws, ok := m.workspaces[id]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("workspace not found: %s", id)
+	}
+	if ws.State == StateRemoved {
+		m.mu.Unlock()
+		return fmt.Errorf("cannot start removed workspace: %s", id)
+	}
+	ws.State = StateRunning
+	ws.UpdatedAt = time.Now().UTC()
+	m.mu.Unlock()
+
+	if err := m.persistWorkspace(ws); err != nil {
+		return fmt.Errorf("persist start: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) Root() string {
+	return m.root
 }
 
 func cloneWorkspace(in *Workspace) *Workspace {
@@ -106,5 +262,15 @@ func cloneWorkspace(in *Workspace) *Workspace {
 		return nil
 	}
 	out := *in
+	if in.AuthBinding != nil {
+		out.AuthBinding = make(map[string]string, len(in.AuthBinding))
+		for k, v := range in.AuthBinding {
+			out.AuthBinding[k] = v
+		}
+	}
+	if in.Policy.AuthProfiles != nil {
+		out.Policy.AuthProfiles = make([]AuthProfile, len(in.Policy.AuthProfiles))
+		copy(out.Policy.AuthProfiles, in.Policy.AuthProfiles)
+	}
 	return &out
 }

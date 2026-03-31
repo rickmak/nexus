@@ -10,11 +10,9 @@ For docker-compose projects, most users do not need this file: Nexus auto-detect
 
 ## Schema
 
-Use raw GitHub schema URL until a Nexus website exists:
-
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/IniZio/nexus/main/schemas/workspace.v1.schema.json",
+  "$schema": "./schemas/workspace.v1.schema.json",
   "version": 1
 }
 ```
@@ -36,7 +34,7 @@ Effective config resolution order:
 
 ```json
 {
-  "$schema": "https://raw.githubusercontent.com/IniZio/nexus/main/schemas/workspace.v1.schema.json",
+  "$schema": "./schemas/workspace.v1.schema.json",
   "version": 1,
   "readiness": {
     "profiles": {
@@ -70,7 +68,7 @@ Effective config resolution order:
   },
   "lifecycle": {
     "onSetup": ["pnpm install"],
-    "onStart": ["opencode serve"],
+    "onStart": [],
     "onTeardown": []
   }
 }
@@ -85,3 +83,116 @@ Without any config file, Nexus will:
 - auto-forward all published ports via Spotlight on `workspace.ready`
 
 Use `.nexus/workspace.json` only when you need overrides (custom readiness profiles, service defaults, explicit spotlight defaults, auth defaults).
+
+## Runtime Requirements
+
+The `runtime` block declares isolated workspace backend constraints:
+
+```json
+{
+  "version": 1,
+  "runtime": {
+    "required": ["dind", "lxc"],
+    "selection": "prefer-first"
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `required` | `string[]` | Allowed backends: `dind` (Docker-in-Docker), `lxc` (LXC container). Empty means any backend. |
+| `selection` | `string` | Backend selection strategy. `"prefer-first"` selects the first available from `required`. |
+
+When no `runtime` block is present, Nexus selects a backend automatically.
+
+## Capability Requirements
+
+The `capabilities` block declares toolchain and runtime capability requirements:
+
+```json
+{
+  "version": 1,
+  "capabilities": {
+    "required": ["spotlight.tunnel"]
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `required` | `string[]` | Required capability names (e.g., `spotlight.tunnel`). Unknown capabilities cause workspace creation to fail. |
+
+## Doctor Health Checks
+
+`nexus doctor` runs two sequential phases:
+
+1. **probes** — readiness and liveness checks. If any required probe fails, `tests` are skipped.
+2. **tests** — behavioral and integration checks. Only run after all required probes pass.
+
+```json
+{
+  "version": 1,
+  "doctor": {
+    "probes": [
+      {
+        "name": "runtime-http",
+        "command": "bash",
+        "args": [".nexus/lifecycles/probe-runtime.sh"],
+        "timeoutMs": 300000,
+        "retries": 1,
+        "required": true
+      }
+    ],
+    "tests": [
+      {
+        "name": "auth-flow",
+        "command": "bash",
+        "args": [".nexus/lifecycles/test-auth-flow.sh"],
+        "timeoutMs": 300000,
+        "retries": 0,
+        "required": true
+      }
+    ]
+  }
+}
+```
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `probes` | `DoctorCommandProbe[]` | Readiness/liveness checks. Run first. Required probe failure gates `tests`. |
+| `tests` | `DoctorCommandCheck[]` | Behavioral/integration checks. Only run after required probes pass. |
+
+### DoctorCheck fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `name` | `string` | Unique check name used in reports. |
+| `command` | `string` | Executable path or name. |
+| `args` | `string[]` | Arguments passed to `command`. |
+| `timeoutMs` | `number` | Per-check timeout in milliseconds. Default: 60000. |
+| `retries` | `number` | Retry count on failure. Default: 0. |
+| `required` | `boolean` | If `true`, failure causes doctor to return a non-zero exit code. Default: `false`. |
+
+CLI helpers:
+
+- `--report-json .nexus/run/doctor-report.json` writes structured phase results (`"phase": "probe"` or `"phase": "test"`) for CI artifact upload.
+
+### Android / Maestro example (probes only)
+
+```json
+{
+  "version": 1,
+  "doctor": {
+    "probes": [
+      {
+        "name": "android-maestro-pr",
+        "command": "maestro",
+        "args": ["test", "--include-tags=pull-request", "./.maestro/flows"],
+        "timeoutMs": 900000,
+        "retries": 0,
+        "required": true
+      }
+    ]
+  }
+}
+```

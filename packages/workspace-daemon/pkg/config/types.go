@@ -3,13 +3,49 @@ package config
 import "fmt"
 
 type WorkspaceConfig struct {
-	Schema    string            `json:"$schema,omitempty"`
-	Version   int               `json:"version"`
-	Readiness ReadinessConfig   `json:"readiness,omitempty"`
-	Services  ServicesConfig    `json:"services,omitempty"`
-	Spotlight SpotlightConfig   `json:"spotlight,omitempty"`
-	Auth      AuthConfig        `json:"auth,omitempty"`
-	Lifecycle LifecycleCompatV1 `json:"lifecycle,omitempty"`
+	Schema       string                 `json:"$schema,omitempty"`
+	Version      int                    `json:"version"`
+	Readiness    ReadinessConfig        `json:"readiness,omitempty"`
+	Services     ServicesConfig         `json:"services,omitempty"`
+	Spotlight    SpotlightConfig        `json:"spotlight,omitempty"`
+	Auth         AuthConfig             `json:"auth,omitempty"`
+	Lifecycle    LifecycleCompatV1      `json:"lifecycle,omitempty"`
+	Doctor       DoctorConfig           `json:"doctor,omitempty"`
+	Runtime      RuntimeConfig          `json:"runtime,omitempty"`
+	Capabilities CapabilityRequirements `json:"capabilities,omitempty"`
+}
+
+type RuntimeConfig struct {
+	Required  []string `json:"required,omitempty"`
+	Selection string   `json:"selection,omitempty"`
+}
+
+type CapabilityRequirements struct {
+	Required []string `json:"required,omitempty"`
+}
+
+type DoctorCommandCheck struct {
+	Name      string   `json:"name"`
+	Command   string   `json:"command"`
+	Args      []string `json:"args,omitempty"`
+	TimeoutMs int      `json:"timeoutMs,omitempty"`
+	Retries   int      `json:"retries,omitempty"`
+	Required  bool     `json:"required,omitempty"`
+}
+
+type DoctorConfig struct {
+	RequiredHostPorts []int                `json:"requiredHostPorts,omitempty"`
+	Probes            []DoctorCommandProbe `json:"probes,omitempty"`
+	Tests             []DoctorCommandCheck `json:"tests,omitempty"`
+}
+
+type DoctorCommandProbe struct {
+	Name      string   `json:"name"`
+	Command   string   `json:"command"`
+	Args      []string `json:"args,omitempty"`
+	TimeoutMs int      `json:"timeoutMs,omitempty"`
+	Retries   int      `json:"retries,omitempty"`
+	Required  bool     `json:"required,omitempty"`
 }
 
 type ReadinessConfig struct {
@@ -87,6 +123,50 @@ func (c WorkspaceConfig) ValidateBasic() error {
 	}
 	if c.Services.Defaults.RestartDelayMs < 0 {
 		return fmt.Errorf("services.defaults.restartDelayMs must be >= 0")
+	}
+
+	for _, p := range c.Doctor.RequiredHostPorts {
+		if p <= 0 || p > 65535 {
+			return fmt.Errorf("doctor.requiredHostPorts values must be in range 1-65535")
+		}
+	}
+	for _, probe := range c.Doctor.Probes {
+		if probe.Name == "" {
+			return fmt.Errorf("doctor.probes[].name cannot be empty")
+		}
+		if probe.Command == "" {
+			return fmt.Errorf("doctor.probes[].command cannot be empty")
+		}
+		if probe.TimeoutMs < 0 {
+			return fmt.Errorf("doctor.probes[].timeoutMs must be >= 0")
+		}
+		if probe.Retries < 0 {
+			return fmt.Errorf("doctor.probes[].retries must be >= 0")
+		}
+	}
+
+	for _, allowed := range c.Runtime.Required {
+		if allowed != "dind" && allowed != "lxc" {
+			return fmt.Errorf("runtime.required values must be one of: dind, lxc")
+		}
+	}
+	if c.Runtime.Selection != "" && c.Runtime.Selection != "prefer-first" {
+		return fmt.Errorf("runtime.selection must be prefer-first when set")
+	}
+
+	for _, test := range c.Doctor.Tests {
+		if test.Name == "" {
+			return fmt.Errorf("doctor.tests[].name cannot be empty")
+		}
+		if test.Command == "" {
+			return fmt.Errorf("doctor.tests[].command cannot be empty")
+		}
+		if test.TimeoutMs < 0 {
+			return fmt.Errorf("doctor.tests[].timeoutMs must be >= 0")
+		}
+		if test.Retries < 0 {
+			return fmt.Errorf("doctor.tests[].retries must be >= 0")
+		}
 	}
 
 	return nil

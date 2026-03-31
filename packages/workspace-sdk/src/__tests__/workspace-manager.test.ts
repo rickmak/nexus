@@ -78,7 +78,9 @@ describe('WorkspaceManager', () => {
               ref: 'main',
               workspaceName: 'alpha',
               agentProfile: 'default',
-              state: 'setup',
+              backend: 'dind',
+              authBinding: { github: 'newman' },
+              state: 'created',
               rootPath: '/remote/ws-1',
               createdAt: new Date().toISOString(),
               updatedAt: new Date().toISOString(),
@@ -230,5 +232,102 @@ describe('WorkspaceManager', () => {
     const profileRes = await profilePromise;
     expect(profileRes.profile).toBe('default-services');
     expect(profileRes.ready).toBe(true);
+  });
+
+  it('stops workspace and returns boolean', async () => {
+    await connectClient();
+
+    const promise = client.workspace.stop('ws-1');
+
+    const sentData = mockWsInstance.send.mock.calls[0][0] as string;
+    const request = JSON.parse(sentData);
+    expect(request.method).toBe('workspace.stop');
+    expect(request.params).toEqual({ id: 'ws-1' });
+
+    emitEvent(
+      'message',
+      Buffer.from(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: request.id,
+          result: { stopped: true },
+        })
+      )
+    );
+
+    const result = await promise;
+    expect(result).toBe(true);
+  });
+
+  it('restores workspace and returns handle', async () => {
+    await connectClient();
+
+    const promise = client.workspace.restore('ws-1');
+
+    const sentData = mockWsInstance.send.mock.calls[0][0] as string;
+    const request = JSON.parse(sentData);
+    expect(request.method).toBe('workspace.restore');
+    expect(request.params).toEqual({ id: 'ws-1' });
+
+    emitEvent(
+      'message',
+      Buffer.from(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: request.id,
+          result: {
+            restored: true,
+            workspace: {
+              id: 'ws-1',
+              repo: '<internal-repo-url>',
+              ref: 'main',
+              workspaceName: 'alpha',
+              agentProfile: 'default',
+              backend: 'dind',
+              state: 'restored',
+              rootPath: '/remote/ws-1',
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+          },
+        })
+      )
+    );
+
+    const ws = await promise;
+    expect(ws.id).toBe('ws-1');
+    expect(ws.state).toBe('restored');
+  });
+
+  it('lists capabilities', async () => {
+    await connectClient();
+
+    const promise = client.workspace.capabilities();
+
+    const sentData = mockWsInstance.send.mock.calls[0][0] as string;
+    const request = JSON.parse(sentData);
+    expect(request.method).toBe('capabilities.list');
+    expect(request.params).toEqual({});
+
+    emitEvent(
+      'message',
+      Buffer.from(
+        JSON.stringify({
+          jsonrpc: '2.0',
+          id: request.id,
+          result: {
+            capabilities: [
+              { name: 'runtime.dind', available: true },
+              { name: 'runtime.lxc', available: false },
+            ],
+          },
+        })
+      )
+    );
+
+    const caps = await promise;
+    expect(caps).toHaveLength(2);
+    expect(caps[0]).toEqual({ name: 'runtime.dind', available: true });
+    expect(caps[1]).toEqual({ name: 'runtime.lxc', available: false });
   });
 });

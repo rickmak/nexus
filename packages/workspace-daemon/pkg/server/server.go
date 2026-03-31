@@ -15,6 +15,7 @@ import (
 	"github.com/nexus/nexus/packages/workspace-daemon/pkg/handlers"
 	"github.com/nexus/nexus/packages/workspace-daemon/pkg/lifecycle"
 	rpckit "github.com/nexus/nexus/packages/workspace-daemon/pkg/rpcerrors"
+	"github.com/nexus/nexus/packages/workspace-daemon/pkg/runtime"
 	"github.com/nexus/nexus/packages/workspace-daemon/pkg/services"
 	"github.com/nexus/nexus/packages/workspace-daemon/pkg/spotlight"
 	"github.com/nexus/nexus/packages/workspace-daemon/pkg/workspace"
@@ -32,6 +33,7 @@ type Server struct {
 	serviceMgr          *services.Manager
 	spotlightMgr        *spotlight.Manager
 	lifecycle           *lifecycle.Manager
+	runtimeFactory      *runtime.Factory
 	autoComposeForwards map[string]bool
 	mu                  sync.RWMutex
 	shutdownCh          chan struct{}
@@ -296,13 +298,19 @@ func (s *Server) processRPC(msg *RPCMessage) *RPCResponse {
 	case "workspace.info":
 		result = s.handleWorkspaceInfo(msg.Params)
 	case "workspace.create":
-		result, err = handlers.HandleWorkspaceCreate(ctx, msg.Params, s.workspaceMgr)
+		result, err = handlers.HandleWorkspaceCreate(ctx, msg.Params, s.workspaceMgr, s.runtimeFactory)
 	case "workspace.open":
 		result, err = handlers.HandleWorkspaceOpen(ctx, msg.Params, s.workspaceMgr)
 	case "workspace.list":
 		result, err = handlers.HandleWorkspaceList(ctx, msg.Params, s.workspaceMgr)
 	case "workspace.remove":
 		result, err = handlers.HandleWorkspaceRemove(ctx, msg.Params, s.workspaceMgr)
+	case "workspace.stop":
+		result, err = handlers.HandleWorkspaceStop(ctx, msg.Params, s.workspaceMgr)
+	case "workspace.restore":
+		result, err = handlers.HandleWorkspaceRestore(ctx, msg.Params, s.workspaceMgr, s.runtimeFactory)
+	case "capabilities.list":
+		result, err = handlers.HandleCapabilitiesList(ctx, msg.Params, s.runtimeFactory)
 	case "workspace.ready":
 		workspaceID := extractWorkspaceID(msg.Params)
 		if workspaceID == "" {
@@ -431,6 +439,10 @@ func (s *Server) ensureComposeForwards(ctx context.Context, workspaceID, rootPat
 		s.autoComposeForwards[workspaceID] = false
 		s.mu.Unlock()
 	}
+}
+
+func (s *Server) SetRuntimeFactory(factory *runtime.Factory) {
+	s.runtimeFactory = factory
 }
 
 func (s *Server) handleWorkspaceInfo(params json.RawMessage) map[string]interface{} {

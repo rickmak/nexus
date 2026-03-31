@@ -9,12 +9,15 @@ The workspace daemon is a Go-based server that provides remote file system and e
 │ SDK Client  │ ◄────────────────► │  Workspace      │
 │             │                    │  Daemon (Go)    │
 └─────────────┘                    └────────┬────────┘
-                                            │
-                                     ┌──────▼──────┐
-                                     │ File System │
-                                     │ & Execution │
-                                     └─────────────┘
+                                             │
+                                      ┌──────▼──────┐
+                                      │ Isolated    │
+                                      │ Workspace   │
+                                      │ (dind/lxc)  │
+                                      └─────────────┘
 ```
+
+The daemon manages isolated workspace containers (dind or lxc backends). All ingress to the workspace is via Spotlight port forwards — there is no direct host port exposure.
 
 ## Installation
 
@@ -70,9 +73,12 @@ workspace-daemon \
 | `workspace.create` | Create isolated remote workspace |
 | `workspace.open` | Open workspace by id |
 | `workspace.list` | List workspace records |
+| `workspace.stop` | Stop compute, persist workspace state |
+| `workspace.restore` | Restore persisted workspace to running state |
 | `workspace.remove` | Remove workspace by id |
 | `workspace.ready` | Poll readiness checks until success/timeout |
-| `spotlight.expose` | Expose remote service port locally |
+| `capabilities.list` | List available runtime and toolchain capabilities |
+| `spotlight.expose` | Expose remote service port locally (Spotlight-only ingress) |
 | `spotlight.list` | List active Spotlight forwards |
 | `spotlight.close` | Close Spotlight forward |
 | `spotlight.applyDefaults` | Apply project spotlight defaults from `.nexus/workspace.json` |
@@ -130,6 +136,52 @@ Project config source:
 - `workspace.ready` profile lookups resolve from project config first, then built-ins
 
 See `docs/reference/workspace-config.md` for full schema and examples.
+
+### `workspace.stop`
+
+Stop compute for a workspace and persist its state to disk. The workspace record transitions to `stopped`. State is preserved so the workspace can be restored later.
+
+Params:
+
+- `id` — workspace ID
+
+Response:
+
+- `stopped` — `true` if stopped successfully
+
+### `workspace.restore`
+
+Restore a previously stopped workspace to running state. The workspace record transitions to `running`.
+
+Params:
+
+- `id` — workspace ID
+
+Response:
+
+- `restored` — `true` if restored successfully
+
+### `capabilities.list`
+
+List all available runtime backends and toolchain capabilities the daemon can provide.
+
+Params: none
+
+Response:
+
+- `capabilities` — array of `{ name: string, available: boolean }` objects
+
+Example response:
+
+```json
+{
+  "capabilities": [
+    { "name": "runtime.dind", "available": true },
+    { "name": "runtime.lxc", "available": true },
+    { "name": "spotlight.tunnel", "available": true }
+  ]
+}
+```
 
 ## Docker
 

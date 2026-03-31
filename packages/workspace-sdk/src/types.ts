@@ -173,7 +173,7 @@ export interface ExecResultData {
 
 export type RequestHandler = (params?: Record<string, unknown>) => Promise<unknown>;
 
-export type WorkspaceState = 'setup' | 'start' | 'ready' | 'active' | 'teardown';
+export type WorkspaceState = 'created' | 'running' | 'stopped' | 'restored' | 'removed';
 
 export type GitCredentialMode = 'host-helper' | 'ephemeral-helper' | 'none';
 
@@ -199,6 +199,8 @@ export interface WorkspaceRecord {
   ref: string;
   workspaceName: string;
   agentProfile: string;
+  backend: string;
+  authBinding?: Record<string, string>;
   policy?: WorkspacePolicy;
   state: WorkspaceState;
   rootPath: string;
@@ -279,4 +281,23 @@ export interface WorkspaceReadyResult {
   elapsedMs: number;
   attempts: number;
   lastResults: Record<string, number>;
+}
+
+export interface Capability {
+  name: string;
+  available: boolean;
+  metadata?: Record<string, unknown>;
+}
+
+export interface CapabilitiesListResult {
+  capabilities: Capability[];
+}
+
+export interface WorkspaceStopResult {
+  stopped: boolean;
+}
+
+export interface WorkspaceRestoreResult {
+  restored: boolean;
+  workspace: WorkspaceRecord;
 }

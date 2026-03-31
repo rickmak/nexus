@@ -1,9 +1,13 @@
 import {
+  CapabilitiesListResult,
+  Capability,
   WorkspaceCreateResult,
   WorkspaceCreateSpec,
   WorkspaceListResult,
   WorkspaceOpenResult,
   WorkspaceRemoveResult,
+  WorkspaceRestoreResult,
+  WorkspaceStopResult,
 } from './types';
 import { WorkspaceHandle, type RPCClient } from './workspace-handle';
 
@@ -32,5 +36,20 @@ export class WorkspaceManager {
   async remove(id: string): Promise<boolean> {
     const result = await this.client.request<WorkspaceRemoveResult>('workspace.remove', { id });
     return result.removed;
+  }
+
+  async stop(id: string): Promise<boolean> {
+    const result = await this.client.request<WorkspaceStopResult>('workspace.stop', { id });
+    return result.stopped;
+  }
+
+  async restore(id: string): Promise<WorkspaceHandle> {
+    const result = await this.client.request<WorkspaceRestoreResult>('workspace.restore', { id });
+    return new WorkspaceHandle(this.client, result.workspace);
+  }
+
+  async capabilities(): Promise<Capability[]> {
+    const result = await this.client.request<CapabilitiesListResult>('capabilities.list', {});
+    return result.capabilities;
   }
 }

@@ -3,10 +3,12 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/nexus/nexus/packages/workspace-daemon/pkg/config"
 
 	rpckit "github.com/nexus/nexus/packages/workspace-daemon/pkg/rpcerrors"
+	"github.com/nexus/nexus/packages/workspace-daemon/pkg/runtime"
 	"github.com/nexus/nexus/packages/workspace-daemon/pkg/workspacemgr"
 )
 
@@ -26,6 +28,14 @@ type WorkspaceRemoveParams struct {
 	ID string `json:"id"`
 }
 
+type WorkspaceStopParams struct {
+	ID string `json:"id"`
+}
+
+type WorkspaceRestoreParams struct {
+	ID string `json:"id"`
+}
+
 type WorkspaceCreateResult struct {
 	Workspace *workspacemgr.Workspace `json:"workspace"`
 }
@@ -42,13 +52,43 @@ type WorkspaceRemoveResult struct {
 	Removed bool `json:"removed"`
 }
 
-func HandleWorkspaceCreate(ctx context.Context, params json.RawMessage, mgr *workspacemgr.Manager) (*WorkspaceCreateResult, *rpckit.RPCError) {
+type WorkspaceStopResult struct {
+	Stopped bool `json:"stopped"`
+}
+
+type WorkspaceRestoreResult struct {
+	Restored  bool                    `json:"restored"`
+	Workspace *workspacemgr.Workspace `json:"workspace,omitempty"`
+}
+
+func HandleWorkspaceCreate(ctx context.Context, params json.RawMessage, mgr *workspacemgr.Manager, factory *runtime.Factory) (*WorkspaceCreateResult, *rpckit.RPCError) {
 	var p WorkspaceCreateParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, rpckit.ErrInvalidParams
 	}
 
-	ws, err := mgr.Create(ctx, p.Spec)
+	spec := p.Spec
+
+	if factory != nil {
+		cfg, _, _ := config.LoadWorkspaceConfig(mgr.Root())
+		requiredBackends := cfg.Runtime.Required
+		if len(requiredBackends) == 0 {
+			requiredBackends = []string{"dind", "lxc"}
+		}
+		selection := cfg.Runtime.Selection
+		if selection == "" {
+			selection = "prefer-first"
+		}
+		requiredCaps := cfg.Capabilities.Required
+
+		driver, err := factory.SelectDriver(requiredBackends, selection, requiredCaps)
+		if err != nil {
+			return &WorkspaceCreateResult{}, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
+		}
+		spec.Backend = driver.Backend()
+	}
+
+	ws, err := mgr.Create(ctx, spec)
 	if err != nil {
 		return nil, rpckit.ErrInvalidParams
 	}
@@ -111,4 +151,87 @@ func HandleWorkspaceRemove(_ context.Context, params json.RawMessage, mgr *works
 	}
 
 	return &WorkspaceRemoveResult{Removed: true}, nil
+}
+
+func HandleWorkspaceStop(_ context.Context, params json.RawMessage, mgr *workspacemgr.Manager) (*WorkspaceStopResult, *rpckit.RPCError) {
+	var p WorkspaceStopParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, rpckit.ErrInvalidParams
+	}
+
+	if err := mgr.Stop(p.ID); err != nil {
+		return nil, rpckit.ErrWorkspaceNotFound
+	}
+
+	return &WorkspaceStopResult{Stopped: true}, nil
+}
+
+func HandleWorkspaceRestore(ctx context.Context, params json.RawMessage, mgr *workspacemgr.Manager, factory *runtime.Factory) (*WorkspaceRestoreResult, *rpckit.RPCError) {
+	var p WorkspaceRestoreParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, rpckit.ErrInvalidParams
+	}
+
+	ws, ok := mgr.Get(p.ID)
+	if !ok {
+		return nil, rpckit.ErrWorkspaceNotFound
+	}
+
+	var selectedDriver runtime.Driver
+	var requiredBackends []string
+
+	if factory != nil {
+		cfg, _, _ := config.LoadWorkspaceConfig(mgr.Root())
+		requiredBackends = cfg.Runtime.Required
+		if len(requiredBackends) == 0 {
+			requiredBackends = []string{"dind", "lxc"}
+		}
+		selection := cfg.Runtime.Selection
+		if selection == "" {
+			selection = "prefer-first"
+		}
+		requiredCaps := cfg.Capabilities.Required
+
+		driver, err := factory.SelectDriver(requiredBackends, selection, requiredCaps)
+		if err != nil {
+			return &WorkspaceRestoreResult{}, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
+		}
+		selectedDriver = driver
+	}
+
+	ws, ok = mgr.Restore(p.ID)
+	if !ok {
+		return nil, rpckit.ErrWorkspaceNotFound
+	}
+
+	resolvedBackend := ws.Backend
+	if selectedDriver != nil {
+		if resolvedBackend != "" {
+			allowed := false
+			for _, b := range requiredBackends {
+				if b == resolvedBackend {
+					allowed = true
+					break
+				}
+			}
+			if !allowed {
+				resolvedBackend = selectedDriver.Backend()
+			}
+		} else {
+			resolvedBackend = selectedDriver.Backend()
+		}
+	}
+
+	if resolvedBackend != ws.Backend {
+		if err := mgr.SetBackend(p.ID, resolvedBackend); err != nil {
+			return &WorkspaceRestoreResult{}, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend persist failed: %v", err)}
+		}
+		updated, ok := mgr.Get(p.ID)
+		if !ok {
+			return nil, rpckit.ErrWorkspaceNotFound
+		}
+		ws = updated
+	}
+
+	return &WorkspaceRestoreResult{Restored: true, Workspace: ws}, nil
 }

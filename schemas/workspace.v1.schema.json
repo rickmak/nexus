@@ -95,6 +95,66 @@
         "onStart": { "type": "array", "items": { "type": "string" } },
         "onTeardown": { "type": "array", "items": { "type": "string" } }
       }
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": {
+          "type": "array",
+          "items": { "type": "string", "enum": ["dind", "lxc"] }
+        },
+        "selection": { "type": "string", "enum": ["prefer-first"] }
+      }
+    },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "required": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "doctor": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "requiredHostPorts": {
+          "type": "array",
+          "items": { "type": "integer", "minimum": 1, "maximum": 65535 }
+        },
+        "probes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "command"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "command": { "type": "string", "minLength": 1 },
+              "args": { "type": "array", "items": { "type": "string" } },
+              "timeoutMs": { "type": "integer", "minimum": 0 },
+              "retries": { "type": "integer", "minimum": 0 },
+              "required": { "type": "boolean" }
+            }
+          }
+        },
+        "tests": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["name", "command"],
+            "properties": {
+              "name": { "type": "string", "minLength": 1 },
+              "command": { "type": "string", "minLength": 1 },
+              "args": { "type": "array", "items": { "type": "string" } },
+              "timeoutMs": { "type": "integer", "minimum": 0 },
+              "retries": { "type": "integer", "minimum": 0 },
+              "required": { "type": "boolean" }
+            }
+          }
+        }
+      }
     }
   }
 }

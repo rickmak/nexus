@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -18,7 +19,9 @@ func LoadWorkspaceConfig(root string) (WorkspaceConfig, []string, error) {
 
 	if wsErr == nil {
 		var cfg WorkspaceConfig
-		if err := json.Unmarshal(workspaceData, &cfg); err != nil {
+		dec := json.NewDecoder(bytes.NewReader(workspaceData))
+		dec.DisallowUnknownFields()
+		if err := dec.Decode(&cfg); err != nil {
 			return WorkspaceConfig{}, warnings, fmt.Errorf("failed to parse %s: %w", workspacePath, err)
 		}
 		if err := cfg.ValidateBasic(); err != nil {
