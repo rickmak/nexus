@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -174,24 +176,19 @@ func run(opts options) error {
 	var allResults []checkResult
 	allResults = append(allResults, probeResults...)
 
-	if probeErr != nil {
-		testResults := markChecksNotRun(workspaceConfig.Doctor.Tests, "probes_failed")
-		allResults = append(allResults, testResults...)
-		if err := writeReport(opts.reportJSON, allResults); err != nil {
-			return err
-		}
-		return probeErr
-	}
-
 	testResults, testErr := runConfiguredTests(opts, workspaceConfig.Doctor.Tests)
 	allResults = append(allResults, testResults...)
+
+	builtinResult, builtinErr := runBuiltInOpencodeSessionCheck(opts.projectRoot)
+	allResults = append(allResults, builtinResult)
 
 	if err := writeReport(opts.reportJSON, allResults); err != nil {
 		return err
 	}
 
-	if testErr != nil {
-		return testErr
+	err = combineCheckErrors(probeErr, testErr)
+	if err = combineCheckErrors(err, builtinErr); err != nil {
+		return err
 	}
 
 	fmt.Printf("doctor suite passed: %s (discovered %d compose ports)\n", opts.suite, len(publishedPorts))
@@ -231,10 +228,7 @@ func runConfiguredProbes(opts options, probes []config.DoctorCommandProbe) ([]ch
 
 		for attempt := 1; attempt <= attempts; attempt++ {
 			probeCtx, cancel := context.WithTimeout(context.Background(), timeout)
-			cmd := exec.CommandContext(probeCtx, probe.Command, probe.Args...)
-			cmd.Dir = opts.projectRoot
-			cmd.Env = os.Environ()
-			out, err := cmd.CombinedOutput()
+			out, err := runCheckCommand(probeCtx, opts.projectRoot, "probe", probe.Name, attempt, attempts, timeout, probe.Command, probe.Args)
 			cancel()
 
 			if err == nil {
@@ -306,10 +300,7 @@ func runConfiguredTests(opts options, tests []config.DoctorCommandCheck) ([]chec
 
 		for attempt := 1; attempt <= attempts; attempt++ {
 			testCtx, cancel := context.WithTimeout(context.Background(), timeout)
-			cmd := exec.CommandContext(testCtx, test.Command, test.Args...)
-			cmd.Dir = opts.projectRoot
-			cmd.Env = os.Environ()
-			out, err := cmd.CombinedOutput()
+			out, err := runCheckCommand(testCtx, opts.projectRoot, "test", test.Name, attempt, attempts, timeout, test.Command, test.Args)
 			cancel()
 
 			if err == nil {
@@ -366,6 +357,77 @@ func runConfiguredTests(opts options, tests []config.DoctorCommandCheck) ([]chec
 	return results, nil
 }
 
+func runBuiltInOpencodeSessionCheck(projectRoot string) (checkResult, error) {
+	const checkName = "tooling-opencode-session"
+	start := time.Now()
+
+	result := checkResult{
+		Name:     checkName,
+		Phase:    "test",
+		Attempts: 1,
+	}
+
+	if _, err := exec.LookPath("opencode"); err != nil {
+		result.Status = "not_run"
+		result.Required = false
+		result.Attempts = 0
+		result.DurationMs = time.Since(start).Milliseconds()
+		result.SkipReason = "opencode_not_installed"
+		fmt.Printf("built-in test skipped: %s: %s\n", checkName, result.SkipReason)
+		return result, nil
+	}
+
+	model := strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_OPENCODE_MODEL"))
+	if model == "" {
+		result.Status = "not_run"
+		result.Required = false
+		result.Attempts = 0
+		result.DurationMs = time.Since(start).Milliseconds()
+		result.SkipReason = "model_not_configured"
+		fmt.Printf("built-in test skipped: %s: %s\n", checkName, result.SkipReason)
+		return result, nil
+	}
+
+	prompt := strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_OPENCODE_PROMPT"))
+	if prompt == "" {
+		prompt = "Respond with exactly: NEXUS_DOCTOR_OK"
+	}
+
+	expectedMarker := strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_OPENCODE_EXPECTED_MARKER"))
+	if expectedMarker == "" {
+		expectedMarker = "NEXUS_DOCTOR_OK"
+	}
+
+	timeout := 3 * time.Minute
+	if rawTimeout := strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_OPENCODE_TIMEOUT_MS")); rawTimeout != "" {
+		if ms, err := strconv.Atoi(rawTimeout); err == nil && ms > 0 {
+			timeout = time.Duration(ms) * time.Millisecond
+		}
+	}
+
+	opencodeCtx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	out, err := runCheckCommand(opencodeCtx, projectRoot, "test", checkName, 1, 1, timeout, "opencode", []string{"run", "--model", model, prompt})
+
+	result.Required = true
+	result.DurationMs = time.Since(start).Milliseconds()
+	if err != nil {
+		result.Status = "failed_required"
+		result.Error = out
+		return result, fmt.Errorf("required tests failed: %s", checkName)
+	}
+
+	if !strings.Contains(out, expectedMarker) {
+		result.Status = "failed_required"
+		result.Error = fmt.Sprintf("expected marker %q not found in opencode output", expectedMarker)
+		return result, fmt.Errorf("required tests failed: %s", checkName)
+	}
+
+	result.Status = "passed"
+	fmt.Printf("test passed: %s (attempt 1/1)\n", checkName)
+	return result, nil
+}
+
 func markChecksNotRun(tests []config.DoctorCommandCheck, skipReason string) []checkResult {
 	results := make([]checkResult, 0, len(tests))
 	for _, test := range tests {
@@ -380,6 +442,56 @@ func markChecksNotRun(tests []config.DoctorCommandCheck, skipReason string) []ch
 		})
 	}
 	return results
+}
+
+func runCheckCommand(ctx context.Context, projectRoot, phase, name string, attempt, attempts int, timeout time.Duration, command string, args []string) (string, error) {
+	fmt.Printf("%s exec: %s (attempt %d/%d, timeout=%s): %s\n", phase, name, attempt, attempts, timeout, formatCommand(command, args))
+
+	cmd := exec.CommandContext(ctx, command, args...)
+	cmd.Dir = projectRoot
+	cmd.Env = os.Environ()
+
+	var output bytes.Buffer
+	writer := io.MultiWriter(os.Stdout, &output)
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+
+	err := cmd.Run()
+	out := strings.TrimSpace(output.String())
+	if out == "" && err != nil {
+		out = err.Error()
+	}
+
+	return out, err
+}
+
+func combineCheckErrors(probeErr, testErr error) error {
+	if probeErr == nil {
+		return testErr
+	}
+	if testErr == nil {
+		return probeErr
+	}
+	return fmt.Errorf("%w; %v", probeErr, testErr)
+}
+
+func formatCommand(command string, args []string) string {
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, shellQuote(command))
+	for _, arg := range args {
+		parts = append(parts, shellQuote(arg))
+	}
+	return strings.Join(parts, " ")
+}
+
+func shellQuote(value string) string {
+	if value == "" {
+		return "''"
+	}
+	if strings.ContainsAny(value, " \t\n\r\"'`$\\") {
+		return strconv.Quote(value)
+	}
+	return value
 }
 
 func writeReport(reportPath string, results []checkResult) error {

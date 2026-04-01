@@ -1,11 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"time"
 
 	"github.com/nexus/nexus/packages/workspace-daemon/pkg/compose"
 	"github.com/nexus/nexus/packages/workspace-daemon/pkg/config"
@@ -166,13 +170,14 @@ func setupDoctorTestWorkspace(t *testing.T, doctorConfig config.DoctorConfig) st
 	return root
 }
 
-func TestDoctor_SkipsTestsWhenRequiredProbeFails(t *testing.T) {
+func TestDoctor_StillRunsTestsWhenRequiredProbeFails(t *testing.T) {
 	workspaceRoot := setupDoctorTestWorkspace(t, config.DoctorConfig{
 		Probes: []config.DoctorCommandProbe{
 			{Name: "failing-probe", Command: "bash", Args: []string{"-lc", "exit 1"}, Required: true},
 		},
 		Tests: []config.DoctorCommandCheck{
-			{Name: "should-not-run", Command: "bash", Args: []string{"-lc", "exit 0"}, Required: true},
+			{Name: "still-runs-and-fails", Command: "bash", Args: []string{"-lc", "exit 1"}, Required: true},
+			{Name: "session-built-in-placeholder", Command: "bash", Args: []string{"-lc", "exit 0"}, Required: false},
 		},
 	})
 
@@ -186,6 +191,12 @@ func TestDoctor_SkipsTestsWhenRequiredProbeFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error due to required probe failure")
 	}
+	if !strings.Contains(err.Error(), "required probes failed") {
+		t.Fatalf("expected combined error to include required probe failure, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), "required tests failed") {
+		t.Fatalf("expected combined error to include required test failure, got %q", err.Error())
+	}
 
 	data, err := os.ReadFile(reportPath)
 	if err != nil {
@@ -196,27 +207,43 @@ func TestDoctor_SkipsTestsWhenRequiredProbeFails(t *testing.T) {
 		t.Fatalf("invalid report JSON: %v", err)
 	}
 
-	if len(results) != 2 {
-		t.Fatalf("expected 2 results (1 probe + 1 test), got %d", len(results))
+	if len(results) != 4 {
+		t.Fatalf("expected 4 results (1 probe + 2 config tests + 1 built-in test), got %d", len(results))
 	}
 
-	var probeResult, testResult checkResult
+	var probeResult, requiredTestResult checkResult
 	for _, r := range results {
 		if r.Phase == "probe" {
 			probeResult = r
-		} else if r.Phase == "test" {
-			testResult = r
+		} else if r.Phase == "test" && r.Name == "still-runs-and-fails" {
+			requiredTestResult = r
 		}
 	}
 
 	if probeResult.Status != "failed_required" {
 		t.Fatalf("expected probe status 'failed_required', got %q", probeResult.Status)
 	}
-	if testResult.Status != "not_run" {
-		t.Fatalf("expected test status 'not_run', got %q", testResult.Status)
+	if requiredTestResult.Status != "failed_required" {
+		t.Fatalf("expected test status 'failed_required', got %q", requiredTestResult.Status)
 	}
-	if testResult.SkipReason != "probes_failed" {
-		t.Fatalf("expected test skipReason 'probes_failed', got %q", testResult.SkipReason)
+	if requiredTestResult.SkipReason != "" {
+		t.Fatalf("expected test skipReason to be empty, got %q", requiredTestResult.SkipReason)
+	}
+
+	foundBuiltInSkip := false
+	for _, r := range results {
+		if r.Name == "tooling-opencode-session" {
+			if r.Status != "not_run" {
+				t.Fatalf("expected built-in session check to be not_run when model missing, got %q", r.Status)
+			}
+			if r.SkipReason != "model_not_configured" {
+				t.Fatalf("expected built-in session check skipReason model_not_configured, got %q", r.SkipReason)
+			}
+			foundBuiltInSkip = true
+		}
+	}
+	if !foundBuiltInSkip {
+		t.Fatal("expected built-in tooling-opencode-session check result")
 	}
 }
 
@@ -227,6 +254,7 @@ func TestDoctor_ProbesPassThenTestsRun(t *testing.T) {
 		},
 		Tests: []config.DoctorCommandCheck{
 			{Name: "passing-test", Command: "bash", Args: []string{"-lc", "exit 0"}, Required: true},
+			{Name: "second-passing-test", Command: "bash", Args: []string{"-lc", "exit 0"}, Required: false},
 		},
 	})
 
@@ -250,11 +278,17 @@ func TestDoctor_ProbesPassThenTestsRun(t *testing.T) {
 		t.Fatalf("invalid report JSON: %v", err)
 	}
 
-	if len(results) != 2 {
-		t.Fatalf("expected 2 results (1 probe + 1 test), got %d", len(results))
+	if len(results) != 4 {
+		t.Fatalf("expected 4 results (1 probe + 2 config tests + 1 built-in test), got %d", len(results))
 	}
 
 	for _, r := range results {
+		if r.Name == "tooling-opencode-session" {
+			if r.Status != "not_run" {
+				t.Fatalf("expected built-in session check to be not_run when model missing, got %q", r.Status)
+			}
+			continue
+		}
 		if r.Status != "passed" {
 			t.Fatalf("expected status 'passed', got %q for %s", r.Status, r.Name)
 		}
@@ -271,6 +305,7 @@ func TestDoctor_RequiredTestFailureReturnsError(t *testing.T) {
 		},
 		Tests: []config.DoctorCommandCheck{
 			{Name: "failing-test", Command: "bash", Args: []string{"-lc", "exit 1"}, Required: true},
+			{Name: "passing-test", Command: "bash", Args: []string{"-lc", "exit 0"}, Required: false},
 		},
 	})
 
@@ -294,18 +329,68 @@ func TestDoctor_RequiredTestFailureReturnsError(t *testing.T) {
 		t.Fatalf("invalid report JSON: %v", err)
 	}
 
-	if len(results) != 2 {
-		t.Fatalf("expected 2 results (1 probe + 1 test), got %d", len(results))
+	if len(results) != 4 {
+		t.Fatalf("expected 4 results (1 probe + 2 config tests + 1 built-in test), got %d", len(results))
 	}
 
-	var testResult checkResult
+	var requiredTestResult checkResult
 	for _, r := range results {
-		if r.Phase == "test" {
-			testResult = r
+		if r.Phase == "test" && r.Name == "failing-test" {
+			requiredTestResult = r
 		}
 	}
 
-	if testResult.Status != "failed_required" {
-		t.Fatalf("expected test status 'failed_required', got %q", testResult.Status)
+	if requiredTestResult.Status != "failed_required" {
+		t.Fatalf("expected test status 'failed_required', got %q", requiredTestResult.Status)
+	}
+}
+
+func TestCombineCheckErrors(t *testing.T) {
+	probeErr := errors.New("required probes failed: startup")
+	testErr := errors.New("required tests failed: auth")
+	err := combineCheckErrors(probeErr, testErr)
+	if err == nil {
+		t.Fatal("expected combined error")
+	}
+	if !strings.Contains(err.Error(), probeErr.Error()) {
+		t.Fatalf("expected probe error in combined error, got %q", err.Error())
+	}
+	if !strings.Contains(err.Error(), testErr.Error()) {
+		t.Fatalf("expected test error in combined error, got %q", err.Error())
+	}
+}
+
+func TestFormatCommand(t *testing.T) {
+	actual := formatCommand("bash", []string{"-lc", "echo hi"})
+	expected := "bash -lc \"echo hi\""
+	if actual != expected {
+		t.Fatalf("expected %q, got %q", expected, actual)
+	}
+}
+
+func TestRunCheckCommandCapturesOutput(t *testing.T) {
+	output, err := runCheckCommand(context.Background(), t.TempDir(), "probe", "example", 1, 1, 30*time.Second, "bash", []string{"-lc", "printf 'hello world'"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if output != "hello world" {
+		t.Fatalf("expected captured output, got %q", output)
+	}
+}
+
+func TestBuiltInOpencodeSessionCheckSkipsWhenModelMissing(t *testing.T) {
+	t.Setenv("NEXUS_DOCTOR_OPENCODE_MODEL", "")
+	result, err := runBuiltInOpencodeSessionCheck(t.TempDir())
+	if err != nil {
+		t.Fatalf("expected no error for skip, got %v", err)
+	}
+	if result.Name != "tooling-opencode-session" {
+		t.Fatalf("unexpected check name: %q", result.Name)
+	}
+	if result.Status != "not_run" {
+		t.Fatalf("expected status not_run, got %q", result.Status)
+	}
+	if result.SkipReason != "model_not_configured" {
+		t.Fatalf("expected skip reason model_not_configured, got %q", result.SkipReason)
 	}
 }
