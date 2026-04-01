@@ -276,3 +276,57 @@ func TestDriver_Destroy_UnknownWorkspace(t *testing.T) {
 func TestDriver_ImplementsDriver(t *testing.T) {
 	var _ runtime.Driver = (*Driver)(nil)
 }
+
+func TestDriver_DogfoodingParallelWorkspaceOperations(t *testing.T) {
+	d := NewDriver()
+	ctx := context.Background()
+
+	err := d.Create(ctx, runtime.CreateRequest{WorkspaceID: "ws-a", ProjectRoot: "/projects/a"})
+	if err != nil {
+		t.Fatalf("create ws-a failed: %v", err)
+	}
+	err = d.Create(ctx, runtime.CreateRequest{WorkspaceID: "ws-b", ProjectRoot: "/projects/b"})
+	if err != nil {
+		t.Fatalf("create ws-b failed: %v", err)
+	}
+
+	err = d.Start(ctx, "ws-a")
+	if err != nil {
+		t.Fatalf("start ws-a failed: %v", err)
+	}
+	err = d.Start(ctx, "ws-b")
+	if err != nil {
+		t.Fatalf("start ws-b failed: %v", err)
+	}
+
+	err = d.Pause(ctx, "ws-a")
+	if err != nil {
+		t.Fatalf("pause ws-a failed: %v", err)
+	}
+	err = d.Resume(ctx, "ws-a")
+	if err != nil {
+		t.Fatalf("resume ws-a failed: %v", err)
+	}
+
+	err = d.Fork(ctx, "ws-a", "ws-a-child")
+	if err != nil {
+		t.Fatalf("fork ws-a failed: %v", err)
+	}
+
+	childProjectID, ok := d.GetProjectID("ws-a-child")
+	if !ok {
+		t.Fatal("expected child workspace to exist")
+	}
+	if childProjectID != "/projects/a" {
+		t.Fatalf("expected child project id '/projects/a', got %q", childProjectID)
+	}
+
+	stateA, _ := d.GetState("ws-a")
+	stateB, _ := d.GetState("ws-b")
+	if stateA != "running" {
+		t.Fatalf("expected ws-a state 'running', got %q", stateA)
+	}
+	if stateB != "running" {
+		t.Fatalf("expected ws-b state 'running', got %q", stateB)
+	}
+}

@@ -428,3 +428,55 @@ func TestManager_ForkPersistsParentWorkspaceID(t *testing.T) {
 		t.Fatalf("expected persisted parent %q, got %q", parent.ID, restored.ParentWorkspaceID)
 	}
 }
+
+func TestManager_ForkParallelWorkspacesRemainIndependent(t *testing.T) {
+	m := newTestManager(t)
+	parentA, err := m.Create(context.Background(), CreateSpec{
+		Repo:          "git@example/repo-a.git",
+		WorkspaceName: "alpha",
+		AgentProfile:  "default",
+		Backend:       "local",
+	})
+	if err != nil {
+		t.Fatalf("create parentA returned error: %v", err)
+	}
+	parentB, err := m.Create(context.Background(), CreateSpec{
+		Repo:          "git@example/repo-b.git",
+		WorkspaceName: "beta",
+		AgentProfile:  "default",
+		Backend:       "local",
+	})
+	if err != nil {
+		t.Fatalf("create parentB returned error: %v", err)
+	}
+
+	if err := m.Start(parentA.ID); err != nil {
+		t.Fatalf("start parentA returned error: %v", err)
+	}
+	if err := m.Start(parentB.ID); err != nil {
+		t.Fatalf("start parentB returned error: %v", err)
+	}
+
+	childA, err := m.Fork(parentA.ID, "alpha-child")
+	if err != nil {
+		t.Fatalf("fork parentA returned error: %v", err)
+	}
+
+	if childA.ParentWorkspaceID != parentA.ID {
+		t.Fatalf("expected child parent %q, got %q", parentA.ID, childA.ParentWorkspaceID)
+	}
+	if childA.Repo != parentA.Repo {
+		t.Fatalf("expected child repo %q, got %q", parentA.Repo, childA.Repo)
+	}
+
+	gotB, ok := m.Get(parentB.ID)
+	if !ok {
+		t.Fatal("expected parentB to exist")
+	}
+	if gotB.ParentWorkspaceID != "" {
+		t.Fatalf("expected parentB ParentWorkspaceID empty, got %q", gotB.ParentWorkspaceID)
+	}
+	if gotB.State != StateRunning {
+		t.Fatalf("expected parentB state %q, got %q", StateRunning, gotB.State)
+	}
+}

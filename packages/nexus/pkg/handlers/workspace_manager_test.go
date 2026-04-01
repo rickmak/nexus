@@ -569,3 +569,49 @@ func TestHandleWorkspaceFork(t *testing.T) {
 		t.Fatalf("expected child parent %q, got %q", created.Workspace.ID, result.Workspace.ParentWorkspaceID)
 	}
 }
+
+func TestHandleWorkspaceFork_WithFactoryLocalBackend(t *testing.T) {
+	mgrRoot := t.TempDir()
+	mgr := workspacemgr.NewManager(mgrRoot)
+
+	if err := os.MkdirAll(filepath.Join(mgrRoot, ".nexus"), 0o755); err != nil {
+		t.Fatalf("create .nexus dir: %v", err)
+	}
+	configData := []byte(`{"version":1,"runtime":{"required":["local"],"selection":"prefer-first"}}`)
+	if err := os.WriteFile(filepath.Join(mgrRoot, ".nexus", "workspace.json"), configData, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	factory := runtime.NewFactory([]runtime.Capability{
+		{Name: "runtime.local", Available: true},
+	}, map[string]runtime.Driver{
+		"local": &mockDriver{backend: "local"},
+	})
+
+	createParams, _ := json.Marshal(WorkspaceCreateParams{
+		Spec: workspacemgr.CreateSpec{
+			Repo:          "git@example/repo.git",
+			WorkspaceName: "alpha",
+			AgentProfile:  "default",
+		},
+	})
+	created, rpcErr := HandleWorkspaceCreate(context.Background(), createParams, mgr, factory)
+	if rpcErr != nil {
+		t.Fatalf("create failed: %+v", rpcErr)
+	}
+
+	forkParams, _ := json.Marshal(WorkspaceForkParams{ID: created.Workspace.ID, ChildWorkspaceName: "alpha-child"})
+	result, rpcErr := HandleWorkspaceFork(context.Background(), forkParams, mgr, factory)
+	if rpcErr != nil {
+		t.Fatalf("fork failed: %+v", rpcErr)
+	}
+	if result == nil || result.Workspace == nil {
+		t.Fatalf("expected forked workspace, got %#v", result)
+	}
+	if result.Workspace.Backend != "local" {
+		t.Fatalf("expected child backend 'local', got %q", result.Workspace.Backend)
+	}
+	if result.Workspace.ParentWorkspaceID != created.Workspace.ID {
+		t.Fatalf("expected parent id %q, got %q", created.Workspace.ID, result.Workspace.ParentWorkspaceID)
+	}
+}
