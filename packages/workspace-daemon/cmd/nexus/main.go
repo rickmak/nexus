@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -133,6 +134,14 @@ func run(opts options) error {
 		return fmt.Errorf("invalid workspace config: %w", err)
 	}
 
+	probesToRun, testsToRun, warnings, err := resolveDoctorChecks(opts.projectRoot, workspaceConfig.Doctor.Probes, workspaceConfig.Doctor.Tests)
+	if err != nil {
+		return err
+	}
+	for _, warning := range warnings {
+		fmt.Printf("doctor warning: %s\n", warning)
+	}
+
 	if err := bootstrapDoctorExecContext(opts.projectRoot); err != nil {
 		return err
 	}
@@ -163,7 +172,7 @@ func run(opts options) error {
 		return fmt.Errorf("stat compose file %s: %w", composePath, err)
 	}
 
-	probeResults, probeErr := runConfiguredProbes(opts, workspaceConfig.Doctor.Probes)
+	probeResults, probeErr := runConfiguredProbes(opts, probesToRun)
 
 	var allResults []checkResult
 
@@ -175,7 +184,7 @@ func run(opts options) error {
 
 	allResults = append(allResults, probeResults...)
 
-	testResults, testErr := runConfiguredTests(opts, workspaceConfig.Doctor.Tests)
+	testResults, testErr := runConfiguredTests(opts, testsToRun)
 	allResults = append(allResults, testResults...)
 
 	if os.Getenv("NEXUS_DOCTOR_DISABLE_BUILTIN_CHECKS") != "1" {
@@ -630,7 +639,18 @@ func loadDoctorExecContext() doctorExecContext {
 
 func resolveCheckCommand(projectRoot, command string, args []string, execCtx doctorExecContext) (string, []string, []string, string) {
 	if execCtx.backend == "lxc" && execCtx.lxcName != "" {
+		envPrefix := []string{
+			"export", "NEXUS_RUNTIME_BACKEND=" + shellQuote(execCtx.backend),
+			"NEXUS_DOCTOR_LXC_INSTANCE=" + shellQuote(execCtx.lxcName),
+			"NEXUS_DOCTOR_LXC_EXEC_MODE=" + shellQuote(execCtx.lxcExec),
+		}
+		if execCtx.dockerHost != "" {
+			envPrefix = append(envPrefix, "NEXUS_DOCTOR_DIND_DOCKER_HOST="+shellQuote(execCtx.dockerHost))
+		}
+		envPrefix = append(envPrefix, ";")
+
 		innerParts := make([]string, 0, len(args)+2)
+		innerParts = append(innerParts, envPrefix...)
 		innerParts = append(innerParts, "cd", shellQuote(projectRoot), "&&", shellQuote(command))
 		for _, arg := range args {
 			innerParts = append(innerParts, shellQuote(arg))
@@ -773,6 +793,149 @@ func validateLifecycleEntrypoints(projectRoot string) error {
 	}
 
 	return nil
+}
+
+func resolveDoctorChecks(projectRoot string, cfgProbes []config.DoctorCommandProbe, cfgTests []config.DoctorCommandCheck) ([]config.DoctorCommandProbe, []config.DoctorCommandCheck, []string, error) {
+	probes, tests, warnings, err := discoverDoctorScripts(projectRoot)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	if len(probes) > 0 || len(tests) > 0 {
+		return probes, tests, warnings, nil
+	}
+
+	fallbackWarnings := append([]string{}, warnings...)
+	fallbackWarnings = append(fallbackWarnings, "no discovery scripts found under .nexus/probe or .nexus/check; falling back to workspace.json doctor.probes/tests")
+
+	return cfgProbes, cfgTests, fallbackWarnings, nil
+}
+
+func discoverDoctorScripts(projectRoot string) ([]config.DoctorCommandProbe, []config.DoctorCommandCheck, []string, error) {
+	probeDir := filepath.Join(projectRoot, ".nexus", "probe")
+	checkDir := filepath.Join(projectRoot, ".nexus", "check")
+
+	probeFiles, probeWarnings, err := collectDiscoveryScripts(probeDir)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	checkFiles, checkWarnings, err := collectDiscoveryScripts(checkDir)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+
+	warnings := append(probeWarnings, checkWarnings...)
+
+	probes := make([]config.DoctorCommandProbe, 0, len(probeFiles))
+	for _, file := range probeFiles {
+		probes = append(probes, config.DoctorCommandProbe{
+			Name:     discoveryScriptName(file),
+			Command:  "bash",
+			Args:     []string{filepath.ToSlash(filepath.Join(".nexus", "probe", file))},
+			Required: true,
+		})
+	}
+
+	tests := make([]config.DoctorCommandCheck, 0, len(checkFiles))
+	for _, file := range checkFiles {
+		tests = append(tests, config.DoctorCommandCheck{
+			Name:     discoveryScriptName(file),
+			Command:  "bash",
+			Args:     []string{filepath.ToSlash(filepath.Join(".nexus", "check", file))},
+			Required: true,
+		})
+	}
+
+	return probes, tests, warnings, nil
+}
+
+func collectDiscoveryScripts(dir string) ([]string, []string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, []string{fmt.Sprintf("discovery directory not found (optional): %s", dir)}, nil
+		}
+		return nil, nil, fmt.Errorf("read discovery dir %s: %w", dir, err)
+	}
+
+	files := make([]string, 0)
+	nonPrefixed := make([]string, 0)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		name := entry.Name()
+		if !strings.HasSuffix(name, ".sh") {
+			continue
+		}
+		fullPath := filepath.Join(dir, name)
+		execOK, execErr := isExecutableFile(fullPath)
+		if execErr != nil {
+			return nil, nil, execErr
+		}
+		if !execOK {
+			continue
+		}
+		if !hasNumericPrefix(name) {
+			nonPrefixed = append(nonPrefixed, name)
+		}
+		files = append(files, name)
+	}
+
+	sortDiscoveryScripts(files)
+
+	warnings := make([]string, 0, len(nonPrefixed))
+	for _, file := range nonPrefixed {
+		warnings = append(warnings, fmt.Sprintf("discovery script without numeric prefix: %s", filepath.Join(dir, file)))
+	}
+
+	return files, warnings, nil
+}
+
+func hasNumericPrefix(name string) bool {
+	base := strings.TrimSuffix(name, filepath.Ext(name))
+	return regexp.MustCompile(`^\d+-`).MatchString(base)
+}
+
+func sortDiscoveryScripts(files []string) {
+	sort.Slice(files, func(i, j int) bool {
+		aPrefix, aNum := discoveryPrefix(files[i])
+		bPrefix, bNum := discoveryPrefix(files[j])
+
+		if aPrefix && bPrefix {
+			if aNum != bNum {
+				return aNum < bNum
+			}
+			return files[i] < files[j]
+		}
+		if aPrefix != bPrefix {
+			return aPrefix
+		}
+		return files[i] < files[j]
+	})
+}
+
+func discoveryPrefix(name string) (bool, int) {
+	base := strings.TrimSuffix(name, filepath.Ext(name))
+	parts := strings.SplitN(base, "-", 2)
+	if len(parts) < 2 {
+		return false, 0
+	}
+	n, err := strconv.Atoi(parts[0])
+	if err != nil {
+		return false, 0
+	}
+	return true, n
+}
+
+func discoveryScriptName(file string) string {
+	base := strings.TrimSuffix(filepath.Base(file), filepath.Ext(file))
+	if prefixed, _ := discoveryPrefix(base); prefixed {
+		parts := strings.SplitN(base, "-", 2)
+		if len(parts) == 2 {
+			return parts[1]
+		}
+	}
+	return base
 }
 
 func isExecutableFile(path string) (bool, error) {

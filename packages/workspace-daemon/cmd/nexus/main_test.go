@@ -190,6 +190,82 @@ func TestValidateLifecycleEntrypointsAllowsMissingTeardownAndSetup(t *testing.T)
 	}
 }
 
+func TestDiscoverDoctorScriptsOrdersNumericThenLexical(t *testing.T) {
+	root := t.TempDir()
+	mustMkdirAll(t, filepath.Join(root, ".nexus", "probe"))
+	mustMkdirAll(t, filepath.Join(root, ".nexus", "check"))
+
+	mustWriteExec(t, filepath.Join(root, ".nexus", "probe", "10-z.sh"), "#!/usr/bin/env bash\nexit 0\n")
+	mustWriteExec(t, filepath.Join(root, ".nexus", "probe", "01-a.sh"), "#!/usr/bin/env bash\nexit 0\n")
+	mustWriteExec(t, filepath.Join(root, ".nexus", "probe", "misc.sh"), "#!/usr/bin/env bash\nexit 0\n")
+
+	probes, checks, warnings, err := discoverDoctorScripts(root)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(checks) != 0 {
+		t.Fatalf("expected 0 checks, got %d", len(checks))
+	}
+	if len(probes) != 3 {
+		t.Fatalf("expected 3 probes, got %d", len(probes))
+	}
+
+	got := []string{probes[0].Name, probes[1].Name, probes[2].Name}
+	want := []string{"a", "z", "misc"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("unexpected probe order: got %v want %v", got, want)
+	}
+
+	if len(warnings) == 0 {
+		t.Fatal("expected warning for non-prefixed discovery script")
+	}
+}
+
+func TestResolveDoctorChecksFallsBackToWorkspaceConfigWhenNoDiscoveredScripts(t *testing.T) {
+	root := t.TempDir()
+
+	cfgProbes := []config.DoctorCommandProbe{{
+		Name:     "cfg-probe",
+		Command:  "bash",
+		Args:     []string{"-lc", "exit 0"},
+		Required: true,
+	}}
+	cfgTests := []config.DoctorCommandCheck{{
+		Name:     "cfg-test",
+		Command:  "bash",
+		Args:     []string{"-lc", "exit 0"},
+		Required: true,
+	}}
+
+	probes, tests, warnings, err := resolveDoctorChecks(root, cfgProbes, cfgTests)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(warnings) == 0 {
+		t.Fatal("expected warnings when discovery folders are absent")
+	}
+	if len(probes) != 1 || probes[0].Name != "cfg-probe" {
+		t.Fatalf("unexpected probes: %+v", probes)
+	}
+	if len(tests) != 1 || tests[0].Name != "cfg-test" {
+		t.Fatalf("unexpected tests: %+v", tests)
+	}
+}
+
+func mustMkdirAll(t *testing.T, path string) {
+	t.Helper()
+	if err := os.MkdirAll(path, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", path, err)
+	}
+}
+
+func mustWriteExec(t *testing.T, path, content string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(content), 0o755); err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+}
+
 func setupDoctorTestWorkspace(t *testing.T, doctorConfig config.DoctorConfig) string {
 	root := t.TempDir()
 	nexusDir := filepath.Join(root, ".nexus")
