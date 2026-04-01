@@ -27,7 +27,10 @@ func TestWorkspaceConfig_ReadinessCheckNameRequired(t *testing.T) {
 }
 
 func TestWorkspaceConfig_ValidMinimal(t *testing.T) {
-	cfg := WorkspaceConfig{Version: 1}
+	cfg := WorkspaceConfig{
+		Version: 1,
+		Runtime: RuntimeConfig{Required: []string{"local"}},
+	}
 	err := cfg.ValidateBasic()
 	if err != nil {
 		t.Fatalf("expected valid config, got %v", err)

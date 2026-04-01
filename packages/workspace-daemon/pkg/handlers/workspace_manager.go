@@ -99,7 +99,7 @@ func HandleWorkspaceCreate(ctx context.Context, params json.RawMessage, mgr *wor
 		cfg, _, _ := config.LoadWorkspaceConfig(mgr.Root())
 		requiredBackends := cfg.Runtime.Required
 		if len(requiredBackends) == 0 {
-			requiredBackends = []string{"firecracker"}
+			return nil, &rpckit.RPCError{Code: rpckit.ErrInvalidParams.Code, Message: "runtime.required must be present and non-empty in workspace config"}
 		}
 		selection := cfg.Runtime.Selection
 		if selection == "" {
@@ -210,7 +210,7 @@ func HandleWorkspaceRestore(ctx context.Context, params json.RawMessage, mgr *wo
 		cfg, _, _ := config.LoadWorkspaceConfig(mgr.Root())
 		requiredBackends = cfg.Runtime.Required
 		if len(requiredBackends) == 0 {
-			requiredBackends = []string{"firecracker"}
+			return nil, &rpckit.RPCError{Code: rpckit.ErrInvalidParams.Code, Message: "runtime.required must be present and non-empty in workspace config"}
 		}
 		selection := cfg.Runtime.Selection
 		if selection == "" {

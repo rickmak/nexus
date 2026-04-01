@@ -146,9 +146,12 @@ func (c WorkspaceConfig) ValidateBasic() error {
 	}
 
 	for _, allowed := range c.Runtime.Required {
-		if allowed != "firecracker" {
-			return fmt.Errorf("runtime.required values must be: firecracker")
+		if allowed != "firecracker" && allowed != "local" {
+			return fmt.Errorf("runtime.required values must be: firecracker or local")
 		}
+	}
+	if len(c.Runtime.Required) == 0 {
+		return fmt.Errorf("runtime.required must be present and non-empty")
 	}
 	if c.Runtime.Selection != "" && c.Runtime.Selection != "prefer-first" {
 		return fmt.Errorf("runtime.selection must be prefer-first when set")

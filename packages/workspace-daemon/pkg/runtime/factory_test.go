@@ -76,16 +76,63 @@ func TestSelectDriver_RequiredCapabilityMissing(t *testing.T) {
 	}
 }
 
-func TestSelectDriver_CapabilityAvailable(t *testing.T) {
+func TestSelectDriver_SelectsLocalWhenFirecrackerUnavailable(t *testing.T) {
 	f := NewFactory(
-		[]Capability{{Name: "runtime.firecracker", Available: true}, {Name: "spotlight.tunnel", Available: true}},
+		[]Capability{
+			{Name: "runtime.firecracker", Available: false},
+			{Name: "runtime.local", Available: true},
+		},
+		map[string]Driver{
+			"firecracker": &mockDriver{backend: "firecracker"},
+			"local":       &mockDriver{backend: "local"},
+		},
+	)
+	driver, err := f.SelectDriver([]string{"firecracker", "local"}, "prefer-first", nil)
+	if err != nil {
+		t.Fatalf("expected local selection when firecracker unavailable, got %v", err)
+	}
+	if driver.Backend() != "local" {
+		t.Fatalf("expected backend local, got %s", driver.Backend())
+	}
+}
+
+func TestSelectDriver_LocalOnly(t *testing.T) {
+	f := NewFactory(
+		[]Capability{{Name: "runtime.local", Available: true}},
+		map[string]Driver{"local": &mockDriver{backend: "local"}},
+	)
+	driver, err := f.SelectDriver([]string{"local"}, "prefer-first", nil)
+	if err != nil {
+		t.Fatalf("expected local selection, got %v", err)
+	}
+	if driver.Backend() != "local" {
+		t.Fatalf("expected backend local, got %s", driver.Backend())
+	}
+}
+
+func TestSelectDriver_LocalCapabilityUnavailable(t *testing.T) {
+	f := NewFactory(
+		[]Capability{{Name: "runtime.local", Available: false}},
+		map[string]Driver{"local": &mockDriver{backend: "local"}},
+	)
+	_, err := f.SelectDriver([]string{"local"}, "prefer-first", nil)
+	if err == nil {
+		t.Fatal("expected error when local capability unavailable")
+	}
+}
+
+func TestSelectDriver_RejectsLegacyBackends(t *testing.T) {
+	f := NewFactory(
+		[]Capability{{Name: "runtime.firecracker", Available: true}},
 		map[string]Driver{"firecracker": &mockDriver{backend: "firecracker"}},
 	)
-	driver, err := f.SelectDriver([]string{"firecracker"}, "prefer-first", []string{"runtime.firecracker", "spotlight.tunnel"})
-	if err != nil {
-		t.Fatalf("expected selection to succeed, got %v", err)
+	_, err := f.SelectDriver([]string{"dind"}, "prefer-first", nil)
+	if err == nil {
+		t.Fatal("expected error for legacy dind backend")
 	}
-	if driver.Backend() != "firecracker" {
-		t.Fatalf("expected backend firecracker, got %s", driver.Backend())
+
+	_, err = f.SelectDriver([]string{"lxc"}, "prefer-first", nil)
+	if err == nil {
+		t.Fatal("expected error for legacy lxc backend")
 	}
 }

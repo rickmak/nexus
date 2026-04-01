@@ -11,7 +11,7 @@ func TestLoader_LoadsWorkspaceJSON(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".nexus"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	data := []byte(`{"version":1,"readiness":{"profiles":{"default-services":[{"name":"api","type":"service","serviceName":"api"}]}}}`)
+	data := []byte(`{"version":1,"runtime":{"required":["local"]},"readiness":{"profiles":{"default-services":[{"name":"api","type":"service","serviceName":"api"}]}}}`)
 	if err := os.WriteFile(filepath.Join(root, ".nexus", "workspace.json"), data, 0o644); err != nil {
 		t.Fatal(err)
 	}

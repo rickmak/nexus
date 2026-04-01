@@ -13,6 +13,7 @@ import (
 
 	"github.com/nexus/nexus/packages/workspace-daemon/pkg/runtime"
 	"github.com/nexus/nexus/packages/workspace-daemon/pkg/runtime/firecracker"
+	"github.com/nexus/nexus/packages/workspace-daemon/pkg/runtime/local"
 	"github.com/nexus/nexus/packages/workspace-daemon/pkg/server"
 )
 
@@ -47,6 +48,7 @@ func runServer(port int, workspaceDir string, token string) error {
 
 	runner := &CommandRunner{}
 	firecrackerDriver := firecracker.NewDriver(runner)
+	localDriver := local.NewDriver()
 
 	firecrackerAvailable := probeVMTooling()
 
@@ -58,6 +60,7 @@ func runServer(port int, workspaceDir string, token string) error {
 
 	capabilities := []runtime.Capability{
 		{Name: "runtime.firecracker", Available: firecrackerAvailable},
+		{Name: "runtime.local", Available: true},
 		{Name: "spotlight.tunnel", Available: true},
 		{Name: "auth.profile.git", Available: true},
 		{Name: "auth.profile.codex", Available: codexAvailable},
@@ -66,6 +69,7 @@ func runServer(port int, workspaceDir string, token string) error {
 
 	drivers := map[string]runtime.Driver{
 		"firecracker": firecrackerDriver,
+		"local":       localDriver,
 	}
 
 	factory := runtime.NewFactory(capabilities, drivers)
