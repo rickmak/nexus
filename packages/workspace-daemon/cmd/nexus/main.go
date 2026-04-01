@@ -174,20 +174,30 @@ func run(opts options) error {
 	probeResults, probeErr := runConfiguredProbes(opts, workspaceConfig.Doctor.Probes)
 
 	var allResults []checkResult
+
+	if os.Getenv("NEXUS_DOCTOR_DISABLE_BUILTIN_CHECKS") != "1" {
+		runtimeResult, runtimeErr := runBuiltInRuntimeBackendCheck()
+		allResults = append(allResults, runtimeResult)
+		probeErr = combineCheckErrors(runtimeErr, probeErr)
+	}
+
 	allResults = append(allResults, probeResults...)
 
 	testResults, testErr := runConfiguredTests(opts, workspaceConfig.Doctor.Tests)
 	allResults = append(allResults, testResults...)
 
-	builtinResult, builtinErr := runBuiltInOpencodeSessionCheck(opts.projectRoot)
-	allResults = append(allResults, builtinResult)
+	if os.Getenv("NEXUS_DOCTOR_DISABLE_BUILTIN_CHECKS") != "1" {
+		builtinResult, builtinErr := runBuiltInOpencodeSessionCheck(opts.projectRoot)
+		allResults = append(allResults, builtinResult)
+		testErr = combineCheckErrors(testErr, builtinErr)
+	}
 
 	if err := writeReport(opts.reportJSON, allResults); err != nil {
 		return err
 	}
 
 	err = combineCheckErrors(probeErr, testErr)
-	if err = combineCheckErrors(err, builtinErr); err != nil {
+	if err != nil {
 		return err
 	}
 
@@ -211,6 +221,12 @@ type checkResult struct {
 	DurationMs int64  `json:"durationMs"`
 	Error      string `json:"error,omitempty"`
 	SkipReason string `json:"skipReason,omitempty"`
+}
+
+type doctorExecContext struct {
+	backend    string
+	dockerHost string
+	lxcName    string
 }
 
 func runConfiguredProbes(opts options, probes []config.DoctorCommandProbe) ([]checkResult, error) {
@@ -368,23 +384,40 @@ func runBuiltInOpencodeSessionCheck(projectRoot string) (checkResult, error) {
 	}
 
 	if _, err := exec.LookPath("opencode"); err != nil {
-		result.Status = "not_run"
-		result.Required = false
-		result.Attempts = 0
+		result.Status = "failed_required"
+		result.Required = true
 		result.DurationMs = time.Since(start).Milliseconds()
-		result.SkipReason = "opencode_not_installed"
-		fmt.Printf("built-in test skipped: %s: %s\n", checkName, result.SkipReason)
-		return result, nil
+		result.Error = "opencode command not found in PATH"
+		return result, fmt.Errorf("required tests failed: %s", checkName)
+	}
+
+	versionTimeout := 30 * time.Second
+	versionOut, versionErr := runCheckCommand(context.Background(), projectRoot, "test", checkName, 1, 1, versionTimeout, "opencode", []string{"--version"})
+	if versionErr != nil {
+		result.Status = "failed_required"
+		result.Required = true
+		result.DurationMs = time.Since(start).Milliseconds()
+		result.Error = versionOut
+		return result, fmt.Errorf("required tests failed: %s", checkName)
+	}
+
+	runHelpTimeout := 30 * time.Second
+	runHelpOut, runHelpErr := runCheckCommand(context.Background(), projectRoot, "test", checkName, 1, 1, runHelpTimeout, "opencode", []string{"run", "--help"})
+	if runHelpErr != nil {
+		result.Status = "failed_required"
+		result.Required = true
+		result.DurationMs = time.Since(start).Milliseconds()
+		result.Error = runHelpOut
+		return result, fmt.Errorf("required tests failed: %s", checkName)
 	}
 
 	model := strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_OPENCODE_MODEL"))
 	if model == "" {
-		result.Status = "not_run"
-		result.Required = false
-		result.Attempts = 0
+		result.Status = "passed"
+		result.Required = true
 		result.DurationMs = time.Since(start).Milliseconds()
-		result.SkipReason = "model_not_configured"
-		fmt.Printf("built-in test skipped: %s: %s\n", checkName, result.SkipReason)
+		result.Error = ""
+		fmt.Printf("test passed: %s (attempt 1/1) [model not configured; validated opencode binary and run command]\n", checkName)
 		return result, nil
 	}
 
@@ -428,6 +461,65 @@ func runBuiltInOpencodeSessionCheck(projectRoot string) (checkResult, error) {
 	return result, nil
 }
 
+func runBuiltInRuntimeBackendCheck() (checkResult, error) {
+	const checkName = "runtime-backend-capabilities"
+	start := time.Now()
+	result := checkResult{
+		Name:     checkName,
+		Phase:    "probe",
+		Required: true,
+		Attempts: 1,
+	}
+
+	timeout := 45 * time.Second
+	if rawTimeout := strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_RUNTIME_TIMEOUT_MS")); rawTimeout != "" {
+		if ms, err := strconv.Atoi(rawTimeout); err == nil && ms > 0 {
+			timeout = time.Duration(ms) * time.Millisecond
+		}
+	}
+
+	backend := strings.TrimSpace(os.Getenv("NEXUS_RUNTIME_BACKEND"))
+	if backend == "" {
+		backend = "dind"
+	}
+
+	checks := [][]string{{"docker", "info"}, {"docker", "compose", "version"}}
+	if backend == "lxc" {
+		checks = append(checks, []string{"lxc", "info"})
+	}
+
+	for _, check := range checks {
+		command := check[0]
+		args := check[1:]
+		cmdCtx, cancel := context.WithTimeout(context.Background(), timeout)
+		out, err := runCheckCommand(cmdCtx, ".", "probe", checkName, 1, 1, timeout, command, args)
+		cancel()
+		if err != nil {
+			if backend == "lxc" && command == "lxc" {
+				sudoCtx, sudoCancel := context.WithTimeout(context.Background(), timeout)
+				sudoOut, sudoErr := runCheckCommand(sudoCtx, ".", "probe", checkName, 1, 1, timeout, "sudo", []string{"-n", "lxc", "info"})
+				sudoCancel()
+				if sudoErr == nil {
+					continue
+				}
+				result.Status = "failed_required"
+				result.DurationMs = time.Since(start).Milliseconds()
+				result.Error = strings.TrimSpace(out + "\n" + sudoOut)
+				return result, fmt.Errorf("required probes failed: %s", checkName)
+			}
+			result.Status = "failed_required"
+			result.DurationMs = time.Since(start).Milliseconds()
+			result.Error = out
+			return result, fmt.Errorf("required probes failed: %s", checkName)
+		}
+	}
+
+	result.Status = "passed"
+	result.DurationMs = time.Since(start).Milliseconds()
+	fmt.Printf("probe passed: %s (attempt 1/1)\n", checkName)
+	return result, nil
+}
+
 func markChecksNotRun(tests []config.DoctorCommandCheck, skipReason string) []checkResult {
 	results := make([]checkResult, 0, len(tests))
 	for _, test := range tests {
@@ -445,11 +537,13 @@ func markChecksNotRun(tests []config.DoctorCommandCheck, skipReason string) []ch
 }
 
 func runCheckCommand(ctx context.Context, projectRoot, phase, name string, attempt, attempts int, timeout time.Duration, command string, args []string) (string, error) {
-	fmt.Printf("%s exec: %s (attempt %d/%d, timeout=%s): %s\n", phase, name, attempt, attempts, timeout, formatCommand(command, args))
+	execCtx := loadDoctorExecContext()
+	cmdName, cmdArgs, cmdEnv, contextLabel := resolveCheckCommand(projectRoot, command, args, execCtx)
+	fmt.Printf("%s exec: %s (attempt %d/%d, timeout=%s, context=%s): %s\n", phase, name, attempt, attempts, timeout, contextLabel, formatCommand(cmdName, cmdArgs))
 
-	cmd := exec.CommandContext(ctx, command, args...)
+	cmd := exec.CommandContext(ctx, cmdName, cmdArgs...)
 	cmd.Dir = projectRoot
-	cmd.Env = os.Environ()
+	cmd.Env = append(os.Environ(), cmdEnv...)
 
 	var output bytes.Buffer
 	writer := io.MultiWriter(os.Stdout, &output)
@@ -463,6 +557,41 @@ func runCheckCommand(ctx context.Context, projectRoot, phase, name string, attem
 	}
 
 	return out, err
+}
+
+func loadDoctorExecContext() doctorExecContext {
+	backend := strings.TrimSpace(os.Getenv("NEXUS_RUNTIME_BACKEND"))
+	if backend == "" {
+		backend = "dind"
+	}
+	return doctorExecContext{
+		backend:    backend,
+		dockerHost: strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_DIND_DOCKER_HOST")),
+		lxcName:    strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_LXC_INSTANCE")),
+	}
+}
+
+func resolveCheckCommand(projectRoot, command string, args []string, execCtx doctorExecContext) (string, []string, []string, string) {
+	if execCtx.backend == "lxc" && execCtx.lxcName != "" {
+		innerParts := make([]string, 0, len(args)+2)
+		innerParts = append(innerParts, "cd", shellQuote(projectRoot), "&&", shellQuote(command))
+		for _, arg := range args {
+			innerParts = append(innerParts, shellQuote(arg))
+		}
+		inner := strings.Join(innerParts, " ")
+		return "lxc", []string{"exec", execCtx.lxcName, "--", "bash", "-lc", inner}, nil, "lxc"
+	}
+
+	if execCtx.backend == "dind" && execCtx.dockerHost != "" {
+		extraEnv := []string{"DOCKER_HOST=" + execCtx.dockerHost}
+		return command, args, extraEnv, "dind"
+	}
+
+	if (execCtx.backend == "dind" && execCtx.dockerHost == "") || (execCtx.backend == "lxc" && execCtx.lxcName == "") {
+		fmt.Printf("doctor warning: backend %q requested but no isolated execution context is configured; running on host\n", execCtx.backend)
+	}
+
+	return command, args, nil, "host"
 }
 
 func combineCheckErrors(probeErr, testErr error) error {

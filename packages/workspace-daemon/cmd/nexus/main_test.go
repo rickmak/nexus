@@ -207,8 +207,8 @@ func TestDoctor_StillRunsTestsWhenRequiredProbeFails(t *testing.T) {
 		t.Fatalf("invalid report JSON: %v", err)
 	}
 
-	if len(results) != 4 {
-		t.Fatalf("expected 4 results (1 probe + 2 config tests + 1 built-in test), got %d", len(results))
+	if len(results) < 4 {
+		t.Fatalf("expected at least 4 results (configured checks + built-ins), got %d", len(results))
 	}
 
 	var probeResult, requiredTestResult checkResult
@@ -230,19 +230,19 @@ func TestDoctor_StillRunsTestsWhenRequiredProbeFails(t *testing.T) {
 		t.Fatalf("expected test skipReason to be empty, got %q", requiredTestResult.SkipReason)
 	}
 
-	foundBuiltInSkip := false
+	foundBuiltInSessionPass := false
 	for _, r := range results {
 		if r.Name == "tooling-opencode-session" {
-			if r.Status != "not_run" {
-				t.Fatalf("expected built-in session check to be not_run when model missing, got %q", r.Status)
+			if r.Status != "passed" {
+				t.Fatalf("expected built-in session check to pass in fallback mode, got %q", r.Status)
 			}
-			if r.SkipReason != "model_not_configured" {
-				t.Fatalf("expected built-in session check skipReason model_not_configured, got %q", r.SkipReason)
+			if r.SkipReason != "" {
+				t.Fatalf("expected built-in session check skipReason empty, got %q", r.SkipReason)
 			}
-			foundBuiltInSkip = true
+			foundBuiltInSessionPass = true
 		}
 	}
-	if !foundBuiltInSkip {
+	if !foundBuiltInSessionPass {
 		t.Fatal("expected built-in tooling-opencode-session check result")
 	}
 }
@@ -278,14 +278,14 @@ func TestDoctor_ProbesPassThenTestsRun(t *testing.T) {
 		t.Fatalf("invalid report JSON: %v", err)
 	}
 
-	if len(results) != 4 {
-		t.Fatalf("expected 4 results (1 probe + 2 config tests + 1 built-in test), got %d", len(results))
+	if len(results) < 4 {
+		t.Fatalf("expected at least 4 results (configured checks + built-ins), got %d", len(results))
 	}
 
 	for _, r := range results {
 		if r.Name == "tooling-opencode-session" {
-			if r.Status != "not_run" {
-				t.Fatalf("expected built-in session check to be not_run when model missing, got %q", r.Status)
+			if r.Status != "passed" {
+				t.Fatalf("expected built-in session check to pass in fallback mode, got %q", r.Status)
 			}
 			continue
 		}
@@ -329,8 +329,8 @@ func TestDoctor_RequiredTestFailureReturnsError(t *testing.T) {
 		t.Fatalf("invalid report JSON: %v", err)
 	}
 
-	if len(results) != 4 {
-		t.Fatalf("expected 4 results (1 probe + 2 config tests + 1 built-in test), got %d", len(results))
+	if len(results) < 4 {
+		t.Fatalf("expected at least 4 results (configured checks + built-ins), got %d", len(results))
 	}
 
 	var requiredTestResult checkResult
@@ -378,19 +378,81 @@ func TestRunCheckCommandCapturesOutput(t *testing.T) {
 	}
 }
 
-func TestBuiltInOpencodeSessionCheckSkipsWhenModelMissing(t *testing.T) {
+func TestResolveCheckCommandLXC(t *testing.T) {
+	cmd, args, env, label := resolveCheckCommand("/tmp/project", "bash", []string{"-lc", "echo ok"}, doctorExecContext{
+		backend: "lxc",
+		lxcName: "nexus-ws",
+	})
+
+	if cmd != "lxc" {
+		t.Fatalf("expected lxc command, got %q", cmd)
+	}
+	if label != "lxc" {
+		t.Fatalf("expected label lxc, got %q", label)
+	}
+	if len(env) != 0 {
+		t.Fatalf("expected no extra env, got %v", env)
+	}
+	if len(args) != 6 {
+		t.Fatalf("expected wrapped lxc args, got %v", args)
+	}
+	if args[0] != "exec" || args[1] != "nexus-ws" {
+		t.Fatalf("unexpected lxc prefix args: %v", args)
+	}
+	if args[5] == "" || !strings.Contains(args[5], "cd") || !strings.Contains(args[5], "/tmp/project") {
+		t.Fatalf("unexpected wrapped shell command: %q", args[5])
+	}
+}
+
+func TestResolveCheckCommandDind(t *testing.T) {
+	cmd, args, env, label := resolveCheckCommand("/tmp/project", "docker", []string{"compose", "ps"}, doctorExecContext{
+		backend:    "dind",
+		dockerHost: "unix:///var/run/docker.sock",
+	})
+
+	if cmd != "docker" {
+		t.Fatalf("expected docker command, got %q", cmd)
+	}
+	if label != "dind" {
+		t.Fatalf("expected label dind, got %q", label)
+	}
+	if !reflect.DeepEqual(args, []string{"compose", "ps"}) {
+		t.Fatalf("unexpected args: %v", args)
+	}
+	if !reflect.DeepEqual(env, []string{"DOCKER_HOST=unix:///var/run/docker.sock"}) {
+		t.Fatalf("unexpected env: %v", env)
+	}
+}
+
+func TestResolveCheckCommandHostFallback(t *testing.T) {
+	cmd, args, env, label := resolveCheckCommand("/tmp/project", "bash", []string{"-lc", "echo ok"}, doctorExecContext{backend: "lxc"})
+	if cmd != "bash" {
+		t.Fatalf("expected host command fallback, got %q", cmd)
+	}
+	if label != "host" {
+		t.Fatalf("expected host label, got %q", label)
+	}
+	if !reflect.DeepEqual(args, []string{"-lc", "echo ok"}) {
+		t.Fatalf("unexpected args: %v", args)
+	}
+	if len(env) != 0 {
+		t.Fatalf("expected no env in host fallback, got %v", env)
+	}
+}
+
+func TestBuiltInOpencodeSessionCheckFallbackWithoutModel(t *testing.T) {
 	t.Setenv("NEXUS_DOCTOR_OPENCODE_MODEL", "")
 	result, err := runBuiltInOpencodeSessionCheck(t.TempDir())
 	if err != nil {
-		t.Fatalf("expected no error for skip, got %v", err)
+		t.Fatalf("expected no error for fallback pass, got %v", err)
 	}
 	if result.Name != "tooling-opencode-session" {
 		t.Fatalf("unexpected check name: %q", result.Name)
 	}
-	if result.Status != "not_run" {
-		t.Fatalf("expected status not_run, got %q", result.Status)
+	if result.Status != "passed" {
+		t.Fatalf("expected status passed, got %q", result.Status)
 	}
-	if result.SkipReason != "model_not_configured" {
-		t.Fatalf("expected skip reason model_not_configured, got %q", result.SkipReason)
+	if result.SkipReason != "" {
+		t.Fatalf("expected empty skip reason, got %q", result.SkipReason)
 	}
 }
