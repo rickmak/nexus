@@ -490,6 +490,25 @@ func TestResolveCheckCommandDind(t *testing.T) {
 	}
 }
 
+func TestResolveCheckCommandDindWithoutDockerHost(t *testing.T) {
+	cmd, args, env, label := resolveCheckCommand("/tmp/project", "docker", []string{"compose", "ps"}, doctorExecContext{
+		backend: "dind",
+	})
+
+	if cmd != "docker" {
+		t.Fatalf("expected docker command, got %q", cmd)
+	}
+	if label != "dind" {
+		t.Fatalf("expected label dind, got %q", label)
+	}
+	if !reflect.DeepEqual(args, []string{"compose", "ps"}) {
+		t.Fatalf("unexpected args: %v", args)
+	}
+	if len(env) != 0 {
+		t.Fatalf("expected empty env, got %v", env)
+	}
+}
+
 func TestResolveCheckCommandHostFallback(t *testing.T) {
 	cmd, args, env, label := resolveCheckCommand("/tmp/project", "bash", []string{"-lc", "echo ok"}, doctorExecContext{backend: "lxc"})
 	if cmd != "bash" {

@@ -600,7 +600,11 @@ func resolveCheckCommand(projectRoot, command string, args []string, execCtx doc
 		return command, args, extraEnv, "dind"
 	}
 
-	if (execCtx.backend == "dind" && execCtx.dockerHost == "") || (execCtx.backend == "lxc" && execCtx.lxcName == "") {
+	if execCtx.backend == "dind" {
+		return command, args, nil, "dind"
+	}
+
+	if execCtx.backend == "lxc" && execCtx.lxcName == "" {
 		fmt.Printf("doctor warning: backend %q requested but no isolated execution context is configured; running on host\n", execCtx.backend)
 	}
 
