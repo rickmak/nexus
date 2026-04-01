@@ -36,6 +36,19 @@ type WorkspaceRestoreParams struct {
 	ID string `json:"id"`
 }
 
+type WorkspacePauseParams struct {
+	ID string `json:"id"`
+}
+
+type WorkspaceResumeParams struct {
+	ID string `json:"id"`
+}
+
+type WorkspaceForkParams struct {
+	ID                 string `json:"id"`
+	ChildWorkspaceName string `json:"childWorkspaceName,omitempty"`
+}
+
 type WorkspaceCreateResult struct {
 	Workspace *workspacemgr.Workspace `json:"workspace"`
 }
@@ -61,6 +74,19 @@ type WorkspaceRestoreResult struct {
 	Workspace *workspacemgr.Workspace `json:"workspace,omitempty"`
 }
 
+type WorkspacePauseResult struct {
+	Paused bool `json:"paused"`
+}
+
+type WorkspaceResumeResult struct {
+	Resumed bool `json:"resumed"`
+}
+
+type WorkspaceForkResult struct {
+	Forked    bool                    `json:"forked"`
+	Workspace *workspacemgr.Workspace `json:"workspace,omitempty"`
+}
+
 func HandleWorkspaceCreate(ctx context.Context, params json.RawMessage, mgr *workspacemgr.Manager, factory *runtime.Factory) (*WorkspaceCreateResult, *rpckit.RPCError) {
 	var p WorkspaceCreateParams
 	if err := json.Unmarshal(params, &p); err != nil {
@@ -73,7 +99,7 @@ func HandleWorkspaceCreate(ctx context.Context, params json.RawMessage, mgr *wor
 		cfg, _, _ := config.LoadWorkspaceConfig(mgr.Root())
 		requiredBackends := cfg.Runtime.Required
 		if len(requiredBackends) == 0 {
-			requiredBackends = []string{"dind", "lxc"}
+			requiredBackends = []string{"firecracker"}
 		}
 		selection := cfg.Runtime.Selection
 		if selection == "" {
@@ -184,7 +210,7 @@ func HandleWorkspaceRestore(ctx context.Context, params json.RawMessage, mgr *wo
 		cfg, _, _ := config.LoadWorkspaceConfig(mgr.Root())
 		requiredBackends = cfg.Runtime.Required
 		if len(requiredBackends) == 0 {
-			requiredBackends = []string{"dind", "lxc"}
+			requiredBackends = []string{"firecracker"}
 		}
 		selection := cfg.Runtime.Selection
 		if selection == "" {
@@ -234,4 +260,91 @@ func HandleWorkspaceRestore(ctx context.Context, params json.RawMessage, mgr *wo
 	}
 
 	return &WorkspaceRestoreResult{Restored: true, Workspace: ws}, nil
+}
+
+func HandleWorkspacePause(ctx context.Context, params json.RawMessage, mgr *workspacemgr.Manager, factory *runtime.Factory) (*WorkspacePauseResult, *rpckit.RPCError) {
+	_ = ctx
+	var p WorkspacePauseParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, rpckit.ErrInvalidParams
+	}
+
+	ws, ok := mgr.Get(p.ID)
+	if !ok {
+		return nil, rpckit.ErrWorkspaceNotFound
+	}
+
+	if factory != nil {
+		driver, err := factory.SelectDriver([]string{ws.Backend}, "prefer-first", nil)
+		if err != nil {
+			return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
+		}
+		if err := driver.Pause(context.Background(), ws.ID); err != nil {
+			return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("runtime pause failed: %v", err)}
+		}
+	}
+
+	if err := mgr.Pause(p.ID); err != nil {
+		return nil, rpckit.ErrWorkspaceNotFound
+	}
+
+	return &WorkspacePauseResult{Paused: true}, nil
+}
+
+func HandleWorkspaceResume(ctx context.Context, params json.RawMessage, mgr *workspacemgr.Manager, factory *runtime.Factory) (*WorkspaceResumeResult, *rpckit.RPCError) {
+	_ = ctx
+	var p WorkspaceResumeParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, rpckit.ErrInvalidParams
+	}
+
+	ws, ok := mgr.Get(p.ID)
+	if !ok {
+		return nil, rpckit.ErrWorkspaceNotFound
+	}
+
+	if factory != nil {
+		driver, err := factory.SelectDriver([]string{ws.Backend}, "prefer-first", nil)
+		if err != nil {
+			return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
+		}
+		if err := driver.Resume(context.Background(), ws.ID); err != nil {
+			return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("runtime resume failed: %v", err)}
+		}
+	}
+
+	if err := mgr.Resume(p.ID); err != nil {
+		return nil, rpckit.ErrWorkspaceNotFound
+	}
+
+	return &WorkspaceResumeResult{Resumed: true}, nil
+}
+
+func HandleWorkspaceFork(ctx context.Context, params json.RawMessage, mgr *workspacemgr.Manager, factory *runtime.Factory) (*WorkspaceForkResult, *rpckit.RPCError) {
+	_ = ctx
+	var p WorkspaceForkParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, rpckit.ErrInvalidParams
+	}
+
+	child, err := mgr.Fork(p.ID, p.ChildWorkspaceName)
+	if err != nil {
+		return nil, rpckit.ErrWorkspaceNotFound
+	}
+
+	if factory != nil {
+		parent, ok := mgr.Get(p.ID)
+		if !ok {
+			return nil, rpckit.ErrWorkspaceNotFound
+		}
+		driver, selErr := factory.SelectDriver([]string{parent.Backend}, "prefer-first", nil)
+		if selErr != nil {
+			return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", selErr)}
+		}
+		if forkErr := driver.Fork(context.Background(), parent.ID, child.ID); forkErr != nil {
+			return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("runtime fork failed: %v", forkErr)}
+		}
+	}
+
+	return &WorkspaceForkResult{Forked: true, Workspace: child}, nil
 }

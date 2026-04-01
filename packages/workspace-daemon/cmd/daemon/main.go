@@ -8,11 +8,11 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	goRuntime "runtime"
 	"syscall"
 
 	"github.com/nexus/nexus/packages/workspace-daemon/pkg/runtime"
-	"github.com/nexus/nexus/packages/workspace-daemon/pkg/runtime/dind"
-	"github.com/nexus/nexus/packages/workspace-daemon/pkg/runtime/lxc"
+	"github.com/nexus/nexus/packages/workspace-daemon/pkg/runtime/firecracker"
 	"github.com/nexus/nexus/packages/workspace-daemon/pkg/server"
 )
 
@@ -46,14 +46,9 @@ func runServer(port int, workspaceDir string, token string) error {
 	}
 
 	runner := &CommandRunner{}
-	dindDriver := dind.NewDriver(runner)
-	lxcDriver := lxc.NewDriver(runner)
+	firecrackerDriver := firecracker.NewDriver(runner)
 
-	_, dockerErr := exec.LookPath("docker")
-	dindAvailable := dockerErr == nil
-
-	_, lxcErr := exec.LookPath("lxc")
-	lxcAvailable := lxcErr == nil
+	firecrackerAvailable := probeVMTooling()
 
 	_, codexErr := exec.LookPath("codex")
 	codexAvailable := codexErr == nil
@@ -62,8 +57,7 @@ func runServer(port int, workspaceDir string, token string) error {
 	opencodeAvailable := opencodeErr == nil
 
 	capabilities := []runtime.Capability{
-		{Name: "runtime.dind", Available: dindAvailable},
-		{Name: "runtime.lxc", Available: lxcAvailable},
+		{Name: "runtime.firecracker", Available: firecrackerAvailable},
 		{Name: "spotlight.tunnel", Available: true},
 		{Name: "auth.profile.git", Available: true},
 		{Name: "auth.profile.codex", Available: codexAvailable},
@@ -71,8 +65,7 @@ func runServer(port int, workspaceDir string, token string) error {
 	}
 
 	drivers := map[string]runtime.Driver{
-		"dind": dindDriver,
-		"lxc":  lxcDriver,
+		"firecracker": firecrackerDriver,
 	}
 
 	factory := runtime.NewFactory(capabilities, drivers)
@@ -87,4 +80,20 @@ func runServer(port int, workspaceDir string, token string) error {
 
 	log.Printf("Workspace daemon started on port %d", port)
 	return srv.Start()
+}
+
+func probeVMTooling() bool {
+	if goRuntime.GOOS == "darwin" {
+		if _, err := exec.LookPath("limactl"); err != nil {
+			return false
+		}
+		limaCmd := exec.Command("limactl", "shell", "nexus-firecracker", "vmctl-firecracker", "--version")
+		if err := limaCmd.Run(); err != nil {
+			return false
+		}
+		return true
+	}
+
+	_, firecrackerErr := exec.LookPath("vmctl-firecracker")
+	return firecrackerErr == nil
 }

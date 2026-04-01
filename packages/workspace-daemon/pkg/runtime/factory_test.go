@@ -16,40 +16,45 @@ func (m *mockDriver) Create(ctx context.Context, req CreateRequest) error {
 func (m *mockDriver) Start(ctx context.Context, workspaceID string) error   { return nil }
 func (m *mockDriver) Stop(ctx context.Context, workspaceID string) error    { return nil }
 func (m *mockDriver) Restore(ctx context.Context, workspaceID string) error { return nil }
+func (m *mockDriver) Pause(ctx context.Context, workspaceID string) error   { return nil }
+func (m *mockDriver) Resume(ctx context.Context, workspaceID string) error  { return nil }
+func (m *mockDriver) Fork(ctx context.Context, workspaceID, childWorkspaceID string) error {
+	return nil
+}
 func (m *mockDriver) Destroy(ctx context.Context, workspaceID string) error { return nil }
 
 func TestSelectDriver_PreferFirst(t *testing.T) {
 	f := NewFactory(
-		[]Capability{{Name: "runtime.dind", Available: true}},
-		map[string]Driver{"dind": &mockDriver{backend: "dind"}, "lxc": &mockDriver{backend: "lxc"}},
+		[]Capability{{Name: "runtime.firecracker", Available: true}},
+		map[string]Driver{"firecracker": &mockDriver{backend: "firecracker"}},
 	)
-	driver, err := f.SelectDriver([]string{"dind", "lxc"}, "prefer-first", nil)
+	driver, err := f.SelectDriver([]string{"firecracker"}, "prefer-first", nil)
 	if err != nil {
-		t.Fatalf("expected dind selection, got %v", err)
+		t.Fatalf("expected firecracker selection, got %v", err)
 	}
-	if driver.Backend() != "dind" {
-		t.Fatalf("expected backend dind, got %s", driver.Backend())
+	if driver.Backend() != "firecracker" {
+		t.Fatalf("expected backend firecracker, got %s", driver.Backend())
 	}
 }
 
 func TestSelectDriver_PreferFirst_FallsToSecond(t *testing.T) {
 	f := NewFactory(
-		[]Capability{{Name: "runtime.lxc", Available: true}},
-		map[string]Driver{"dind": &mockDriver{backend: "dind"}, "lxc": &mockDriver{backend: "lxc"}},
+		[]Capability{{Name: "runtime.firecracker", Available: true}},
+		map[string]Driver{"firecracker": &mockDriver{backend: "firecracker"}},
 	)
-	driver, err := f.SelectDriver([]string{"dind", "lxc"}, "prefer-first", nil)
+	driver, err := f.SelectDriver([]string{"dind", "firecracker"}, "prefer-first", nil)
 	if err != nil {
-		t.Fatalf("expected lxc selection (dind not registered), got %v", err)
+		t.Fatalf("expected firecracker selection (dind not registered), got %v", err)
 	}
-	if driver.Backend() != "lxc" {
-		t.Fatalf("expected backend lxc, got %s", driver.Backend())
+	if driver.Backend() != "firecracker" {
+		t.Fatalf("expected backend firecracker, got %s", driver.Backend())
 	}
 }
 
 func TestSelectDriver_NoRequiredBackendAvailable(t *testing.T) {
 	f := NewFactory(
-		[]Capability{{Name: "runtime.dind", Available: true}},
-		map[string]Driver{"lxc": &mockDriver{backend: "lxc"}},
+		[]Capability{{Name: "runtime.firecracker", Available: true}},
+		map[string]Driver{"firecracker": &mockDriver{backend: "firecracker"}},
 	)
 	_, err := f.SelectDriver([]string{"dind"}, "prefer-first", nil)
 	if err == nil {
@@ -59,28 +64,28 @@ func TestSelectDriver_NoRequiredBackendAvailable(t *testing.T) {
 
 func TestSelectDriver_RequiredCapabilityMissing(t *testing.T) {
 	f := NewFactory(
-		[]Capability{{Name: "runtime.dind", Available: false}},
-		map[string]Driver{"dind": &mockDriver{backend: "dind"}},
+		[]Capability{{Name: "runtime.firecracker", Available: false}},
+		map[string]Driver{"firecracker": &mockDriver{backend: "firecracker"}},
 	)
-	_, err := f.SelectDriver([]string{"dind"}, "prefer-first", []string{"runtime.dind"})
+	_, err := f.SelectDriver([]string{"firecracker"}, "prefer-first", []string{"runtime.firecracker"})
 	if err == nil {
 		t.Fatal("expected error when required capability missing")
 	}
-	if err.Error() != `required capability "runtime.dind" is not available` {
+	if err.Error() != `required capability "runtime.firecracker" is not available` {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
 func TestSelectDriver_CapabilityAvailable(t *testing.T) {
 	f := NewFactory(
-		[]Capability{{Name: "runtime.dind", Available: true}, {Name: "spotlight.tunnel", Available: true}},
-		map[string]Driver{"dind": &mockDriver{backend: "dind"}},
+		[]Capability{{Name: "runtime.firecracker", Available: true}, {Name: "spotlight.tunnel", Available: true}},
+		map[string]Driver{"firecracker": &mockDriver{backend: "firecracker"}},
 	)
-	driver, err := f.SelectDriver([]string{"dind"}, "prefer-first", []string{"runtime.dind", "spotlight.tunnel"})
+	driver, err := f.SelectDriver([]string{"firecracker"}, "prefer-first", []string{"runtime.firecracker", "spotlight.tunnel"})
 	if err != nil {
 		t.Fatalf("expected selection to succeed, got %v", err)
 	}
-	if driver.Backend() != "dind" {
-		t.Fatalf("expected backend dind, got %s", driver.Backend())
+	if driver.Backend() != "firecracker" {
+		t.Fatalf("expected backend firecracker, got %s", driver.Backend())
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 )
@@ -251,6 +252,100 @@ func (m *Manager) Start(id string) error {
 		return fmt.Errorf("persist start: %w", err)
 	}
 	return nil
+}
+
+func (m *Manager) Pause(id string) error {
+	m.mu.Lock()
+	ws, ok := m.workspaces[id]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("workspace not found: %s", id)
+	}
+	if ws.State == StateRemoved {
+		m.mu.Unlock()
+		return fmt.Errorf("cannot pause removed workspace: %s", id)
+	}
+	ws.State = StatePaused
+	ws.UpdatedAt = time.Now().UTC()
+	m.mu.Unlock()
+
+	if err := m.persistWorkspace(ws); err != nil {
+		return fmt.Errorf("persist pause: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) Resume(id string) error {
+	m.mu.Lock()
+	ws, ok := m.workspaces[id]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("workspace not found: %s", id)
+	}
+	if ws.State == StateRemoved {
+		m.mu.Unlock()
+		return fmt.Errorf("cannot resume removed workspace: %s", id)
+	}
+	ws.State = StateRunning
+	ws.UpdatedAt = time.Now().UTC()
+	m.mu.Unlock()
+
+	if err := m.persistWorkspace(ws); err != nil {
+		return fmt.Errorf("persist resume: %w", err)
+	}
+	return nil
+}
+
+func (m *Manager) Fork(parentID string, childWorkspaceName string) (*Workspace, error) {
+	m.mu.RLock()
+	parent, ok := m.workspaces[parentID]
+	m.mu.RUnlock()
+	if !ok {
+		return nil, fmt.Errorf("workspace not found: %s", parentID)
+	}
+	if parent.State == StateRemoved {
+		return nil, fmt.Errorf("cannot fork removed workspace: %s", parentID)
+	}
+
+	if strings.TrimSpace(childWorkspaceName) == "" {
+		childWorkspaceName = parent.WorkspaceName + "-fork"
+	}
+
+	now := time.Now().UTC()
+	childID := fmt.Sprintf("ws-%d", now.UnixNano())
+	childRootPath := filepath.Join(m.root, "instances", childID)
+	if err := os.MkdirAll(childRootPath, 0o755); err != nil {
+		return nil, fmt.Errorf("create child workspace root: %w", err)
+	}
+
+	child := &Workspace{
+		ID:                childID,
+		Repo:              parent.Repo,
+		Ref:               parent.Ref,
+		WorkspaceName:     childWorkspaceName,
+		AgentProfile:      parent.AgentProfile,
+		Policy:            parent.Policy,
+		State:             StateCreated,
+		RootPath:          childRootPath,
+		ParentWorkspaceID: parent.ID,
+		Backend:           parent.Backend,
+		AuthBinding:       make(map[string]string, len(parent.AuthBinding)),
+		CreatedAt:         now,
+		UpdatedAt:         now,
+	}
+	for k, v := range parent.AuthBinding {
+		child.AuthBinding[k] = v
+	}
+
+	m.mu.Lock()
+	m.workspaces[childID] = child
+	m.mu.Unlock()
+
+	if err := m.persistWorkspace(child); err != nil {
+		return nil, fmt.Errorf("persist child workspace: %w", err)
+	}
+
+	return cloneWorkspace(child), nil
 }
 
 func (m *Manager) Root() string {

@@ -10,6 +10,9 @@ type Driver interface {
 	Start(ctx context.Context, workspaceID string) error
 	Stop(ctx context.Context, workspaceID string) error
 	Restore(ctx context.Context, workspaceID string) error
+	Pause(ctx context.Context, workspaceID string) error
+	Resume(ctx context.Context, workspaceID string) error
+	Fork(ctx context.Context, workspaceID, childWorkspaceID string) error
 	Destroy(ctx context.Context, workspaceID string) error
 }
 
