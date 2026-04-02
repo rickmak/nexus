@@ -416,14 +416,7 @@ func seedFirecrackerOpencodeTooling(projectRoot string, execCtx doctorExecContex
 		return fmt.Errorf("seed firecracker opencode module failed: %s", strings.TrimSpace(moduleOut))
 	}
 
-	wrapperScript := strings.Join([]string{
-		"cat > /usr/local/bin/opencode <<'EOF'",
-		"#!/usr/bin/env sh",
-		"exec /opt/nexus-node/bin/node /usr/local/lib/node_modules/opencode-ai/bin/opencode \"$@\"",
-		"EOF",
-		"chmod +x /usr/local/bin/opencode",
-		"ln -sf /opt/nexus-node/bin/node /usr/local/bin/node",
-	}, "\n")
+	wrapperScript := "printf '%s\\n' '#!/usr/bin/env sh' 'exec /opt/nexus-node/bin/node /usr/local/lib/node_modules/opencode-ai/bin/opencode \"$@\"' > /usr/local/bin/opencode && chmod +x /usr/local/bin/opencode && ln -sf /opt/nexus-node/bin/node /usr/local/bin/node"
 
 	wrapCtx, wrapCancel := context.WithTimeout(context.Background(), 45*time.Second)
 	wrapOut, wrapErr := doctorCheckCommandRunner(wrapCtx, projectRoot, "probe", "firecracker-opencode-tooling", 1, 1, 45*time.Second, "bash", []string{"-lc", wrapperScript}, execCtx)
