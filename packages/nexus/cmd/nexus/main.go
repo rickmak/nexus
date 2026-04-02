@@ -365,7 +365,7 @@ func seedFirecrackerDockerTooling(projectRoot string, execCtx doctorExecContext)
 		}
 
 		wrapperCtx, wrapperCancel := context.WithTimeout(context.Background(), 45*time.Second)
-		wrapperCmd := "printf '%s\\n' '#!/usr/bin/env sh' 'if [ -z \"${DOCKER_HOST:-}\" ] && [ -S /tmp/nexus-host-docker.sock ]; then' '  if /usr/bin/docker --host unix:///tmp/nexus-host-docker.sock info >/dev/null 2>&1; then' '    export DOCKER_HOST=unix:///tmp/nexus-host-docker.sock' '  fi' 'fi' 'exec /usr/bin/docker \"$@\"' > /usr/local/bin/docker && chmod +x /usr/local/bin/docker"
+		wrapperCmd := "printf '%s\\n' '#!/usr/bin/env sh' 'if [ -z \"\\${DOCKER_HOST:-}\" ] && [ -S /tmp/nexus-host-docker.sock ]; then' '  if /usr/bin/docker --host unix:///tmp/nexus-host-docker.sock info >/dev/null 2>&1; then' '    export DOCKER_HOST=unix:///tmp/nexus-host-docker.sock' '  fi' 'fi' 'exec /usr/bin/docker \"\\$@\"' > /usr/local/bin/docker && chmod +x /usr/local/bin/docker"
 		wrapperOut, wrapperErr := doctorCheckCommandRunner(wrapperCtx, projectRoot, "probe", "runtime-backend-capabilities", 1, 1, 45*time.Second, "bash", []string{"-lc", wrapperCmd}, execCtx)
 		wrapperCancel()
 		if wrapperErr != nil {
@@ -416,7 +416,7 @@ func seedFirecrackerOpencodeTooling(projectRoot string, execCtx doctorExecContex
 		return fmt.Errorf("seed firecracker opencode module failed: %s", strings.TrimSpace(moduleOut))
 	}
 
-	wrapperScript := "printf '%s\\n' '#!/usr/bin/env sh' 'exec /opt/nexus-node/bin/node /usr/local/lib/node_modules/opencode-ai/bin/opencode \"$@\"' > /usr/local/bin/opencode && chmod +x /usr/local/bin/opencode && ln -sf /opt/nexus-node/bin/node /usr/local/bin/node"
+	wrapperScript := "printf '%s\\n' '#!/usr/bin/env sh' 'exec /opt/nexus-node/bin/node /usr/local/lib/node_modules/opencode-ai/bin/opencode \"\\$@\"' > /usr/local/bin/opencode && chmod +x /usr/local/bin/opencode && ln -sf /opt/nexus-node/bin/node /usr/local/bin/node"
 
 	wrapCtx, wrapCancel := context.WithTimeout(context.Background(), 45*time.Second)
 	wrapOut, wrapErr := doctorCheckCommandRunner(wrapCtx, projectRoot, "probe", "firecracker-opencode-tooling", 1, 1, 45*time.Second, "bash", []string{"-lc", wrapperScript}, execCtx)
