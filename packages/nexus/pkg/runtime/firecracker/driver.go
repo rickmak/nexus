@@ -10,6 +10,8 @@ import (
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
 )
 
+var _ runtime.Driver = (*Driver)(nil)
+
 type CommandRunner interface {
 	Run(ctx context.Context, dir string, cmd string, args ...string) error
 }
@@ -74,10 +76,6 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 		return errors.New("project root is required")
 	}
 	
-	d.mu.Lock()
-	d.projectRoots[req.WorkspaceID] = req.ProjectRoot
-	d.mu.Unlock()
-	
 	if d.manager != nil {
 		memMiB := 1024
 		if req.Options != nil {
@@ -93,8 +91,13 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 			MemoryMiB:   memMiB,
 			VCPUs:       1,
 		}
-		_, err := d.manager.Spawn(ctx, spec)
-		return err
+		if _, err := d.manager.Spawn(ctx, spec); err != nil {
+			return err
+		}
+		d.mu.Lock()
+		d.projectRoots[req.WorkspaceID] = req.ProjectRoot
+		d.mu.Unlock()
+		return nil
 	}
 	
 	args := []string{"create", "--id", req.WorkspaceID}
@@ -104,7 +107,13 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 		}
 	}
 	args = append(args, "--balloon", "off")
-	return d.runVMCommand(ctx, req.ProjectRoot, args...)
+	if err := d.runVMCommand(ctx, req.ProjectRoot, args...); err != nil {
+		return err
+	}
+	d.mu.Lock()
+	d.projectRoots[req.WorkspaceID] = req.ProjectRoot
+	d.mu.Unlock()
+	return nil
 }
 
 func (d *Driver) Start(ctx context.Context, workspaceID string) error {
