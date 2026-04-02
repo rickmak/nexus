@@ -3,46 +3,85 @@ package firecracker
 import (
 	"context"
 	"errors"
-	"reflect"
 	"testing"
 
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
 )
 
-type fakeRunner struct {
-	calls []call
-	err   error
+// fakeManager is a test double for the Manager
+type fakeManager struct {
+	spawnCalled bool
+	spawnSpec   SpawnSpec
+	stopCalled  bool
+	stopID      string
+	instance    *Instance
+	err         error
 }
 
-type call struct {
-	dir  string
-	cmd  string
-	args []string
+func (f *fakeManager) Spawn(ctx context.Context, spec SpawnSpec) (*Instance, error) {
+	f.spawnCalled = true
+	f.spawnSpec = spec
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.instance, nil
 }
 
-func (f *fakeRunner) Run(ctx context.Context, dir string, cmd string, args ...string) error {
-	f.calls = append(f.calls, call{dir: dir, cmd: cmd, args: append([]string(nil), args...)})
+func (f *fakeManager) Stop(ctx context.Context, workspaceID string) error {
+	f.stopCalled = true
+	f.stopID = workspaceID
 	return f.err
 }
 
+func (f *fakeManager) Get(workspaceID string) (*Instance, error) {
+	if f.instance != nil && f.instance.WorkspaceID == workspaceID {
+		return f.instance, nil
+	}
+	return nil, errors.New("not found")
+}
+
 func TestFirecrackerDriver_Backend(t *testing.T) {
-	d := NewDriver(&fakeRunner{})
+	fakeMgr := &fakeManager{}
+	d := NewDriver(nil, WithManager(fakeMgr))
 	if d.Backend() != "firecracker" {
 		t.Fatalf("expected backend firecracker, got %q", d.Backend())
 	}
 }
 
 func TestFirecrackerDriver_CreateRequiresProjectRoot(t *testing.T) {
-	d := NewDriver(&fakeRunner{})
+	fakeMgr := &fakeManager{}
+	d := NewDriver(nil, WithManager(fakeMgr))
 	err := d.Create(context.Background(), runtime.CreateRequest{WorkspaceID: "ws-1"})
 	if err == nil {
 		t.Fatal("expected error when project root is empty")
 	}
 }
 
-func TestFirecrackerDriver_CreateStartPauseResumeForkDestroy(t *testing.T) {
-	r := &fakeRunner{}
-	d := NewDriver(r)
+func TestFirecrackerDriver_CreateRequiresManager(t *testing.T) {
+	d := NewDriver(nil)
+	err := d.Create(context.Background(), runtime.CreateRequest{
+		WorkspaceID: "ws-1",
+		ProjectRoot: "/projects/ws-1",
+	})
+	if err == nil {
+		t.Fatal("expected error when manager is nil")
+	}
+}
+
+// TestDriverCreateUsesNativeManagerNotVMCTL proves the driver create path
+// does not invoke vmctl/lima shell wrapper when using native manager
+func TestDriverCreateUsesNativeManagerNotVMCTL(t *testing.T) {
+	fakeMgr := &fakeManager{
+		instance: &Instance{
+			WorkspaceID: "ws-1",
+			WorkDir:     "/tmp/ws-1",
+			APISocket:   "/tmp/ws-1/firecracker.sock",
+			VSockPath:   "/tmp/ws-1/vsock.sock",
+			CID:         1000,
+		},
+	}
+
+	d := NewDriver(nil, WithManager(fakeMgr))
 
 	err := d.Create(context.Background(), runtime.CreateRequest{
 		WorkspaceID: "ws-1",
@@ -51,107 +90,197 @@ func TestFirecrackerDriver_CreateStartPauseResumeForkDestroy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create failed: %v", err)
 	}
-	if err := d.Start(context.Background(), "ws-1"); err != nil {
-		t.Fatalf("start failed: %v", err)
+
+	// Verify manager was used
+	if !fakeMgr.spawnCalled {
+		t.Fatal("expected manager.Spawn to be called")
 	}
-	if err := d.Pause(context.Background(), "ws-1"); err != nil {
-		t.Fatalf("pause failed: %v", err)
+	if fakeMgr.spawnSpec.WorkspaceID != "ws-1" {
+		t.Fatalf("expected workspace ID ws-1, got %s", fakeMgr.spawnSpec.WorkspaceID)
 	}
-	if err := d.Resume(context.Background(), "ws-1"); err != nil {
-		t.Fatalf("resume failed: %v", err)
+	if fakeMgr.spawnSpec.ProjectRoot != "/projects/ws-1" {
+		t.Fatalf("expected project root /projects/ws-1, got %s", fakeMgr.spawnSpec.ProjectRoot)
 	}
-	if err := d.Fork(context.Background(), "ws-1", "ws-2"); err != nil {
-		t.Fatalf("fork failed: %v", err)
+}
+
+// TestDriverCreateWithMemMiBOption verifies memory configuration is passed to manager
+func TestDriverCreateWithMemMiBOption(t *testing.T) {
+	fakeMgr := &fakeManager{
+		instance: &Instance{
+			WorkspaceID: "ws-1",
+			WorkDir:     "/tmp/ws-1",
+			APISocket:   "/tmp/ws-1/firecracker.sock",
+			VSockPath:   "/tmp/ws-1/vsock.sock",
+			CID:         1000,
+		},
 	}
-	if err := d.Destroy(context.Background(), "ws-1"); err != nil {
+
+	d := NewDriver(nil, WithManager(fakeMgr))
+
+	err := d.Create(context.Background(), runtime.CreateRequest{
+		WorkspaceID: "ws-1",
+		ProjectRoot: "/projects/ws-1",
+		Options:     map[string]string{"mem_mib": "2048"},
+	})
+	if err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	if fakeMgr.spawnSpec.MemoryMiB != 2048 {
+		t.Fatalf("expected MemoryMiB 2048, got %d", fakeMgr.spawnSpec.MemoryMiB)
+	}
+}
+
+// TestDriverCreatePassesSpawnError verifies errors from manager are propagated
+func TestDriverCreatePassesSpawnError(t *testing.T) {
+	fakeMgr := &fakeManager{
+		err: errors.New("spawn failed"),
+	}
+
+	d := NewDriver(nil, WithManager(fakeMgr))
+
+	err := d.Create(context.Background(), runtime.CreateRequest{
+		WorkspaceID: "ws-1",
+		ProjectRoot: "/projects/ws-1",
+	})
+	if err == nil {
+		t.Fatal("expected error from manager spawn")
+	}
+	if err.Error() != "spawn failed" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// TestDriverStopUsesNativeManager verifies Stop delegates to manager
+func TestDriverStopUsesNativeManager(t *testing.T) {
+	fakeMgr := &fakeManager{}
+
+	d := NewDriver(nil, WithManager(fakeMgr))
+
+	// First create a workspace entry
+	d.mu.Lock()
+	d.projectRoots["ws-1"] = "/projects/ws-1"
+	d.mu.Unlock()
+
+	err := d.Stop(context.Background(), "ws-1")
+	if err != nil {
+		t.Fatalf("stop failed: %v", err)
+	}
+
+	// Verify manager was used
+	if !fakeMgr.stopCalled {
+		t.Fatal("expected manager.Stop to be called")
+	}
+	if fakeMgr.stopID != "ws-1" {
+		t.Fatalf("expected workspace ID ws-1, got %s", fakeMgr.stopID)
+	}
+}
+
+func TestFirecrackerDriver_StopRequiresManager(t *testing.T) {
+	d := NewDriver(nil)
+
+	d.mu.Lock()
+	d.projectRoots["ws-1"] = "/projects/ws-1"
+	d.mu.Unlock()
+
+	err := d.Stop(context.Background(), "ws-1")
+	if err == nil {
+		t.Fatal("expected error when manager is nil")
+	}
+}
+
+func TestFirecrackerDriver_StartIsNoOp(t *testing.T) {
+	fakeMgr := &fakeManager{}
+	d := NewDriver(nil, WithManager(fakeMgr))
+
+	err := d.Start(context.Background(), "ws-1")
+	if err != nil {
+		t.Fatalf("start should be no-op, got error: %v", err)
+	}
+}
+
+func TestFirecrackerDriver_PauseNotSupported(t *testing.T) {
+	fakeMgr := &fakeManager{}
+	d := NewDriver(nil, WithManager(fakeMgr))
+
+	err := d.Pause(context.Background(), "ws-1")
+	if err == nil {
+		t.Fatal("expected error - pause not supported")
+	}
+}
+
+func TestFirecrackerDriver_ResumeNotSupported(t *testing.T) {
+	fakeMgr := &fakeManager{}
+	d := NewDriver(nil, WithManager(fakeMgr))
+
+	err := d.Resume(context.Background(), "ws-1")
+	if err == nil {
+		t.Fatal("expected error - resume not supported")
+	}
+}
+
+func TestFirecrackerDriver_ForkNotSupported(t *testing.T) {
+	fakeMgr := &fakeManager{}
+	d := NewDriver(nil, WithManager(fakeMgr))
+
+	err := d.Fork(context.Background(), "ws-1", "ws-2")
+	if err == nil {
+		t.Fatal("expected error - fork not supported")
+	}
+}
+
+func TestFirecrackerDriver_RestoreNotSupported(t *testing.T) {
+	fakeMgr := &fakeManager{}
+	d := NewDriver(nil, WithManager(fakeMgr))
+
+	err := d.Restore(context.Background(), "ws-1")
+	if err == nil {
+		t.Fatal("expected error - restore not supported")
+	}
+}
+
+func TestFirecrackerDriver_Destroy(t *testing.T) {
+	fakeMgr := &fakeManager{}
+	d := NewDriver(nil, WithManager(fakeMgr))
+
+	// Setup workspace
+	d.mu.Lock()
+	d.projectRoots["ws-1"] = "/projects/ws-1"
+	d.mu.Unlock()
+
+	err := d.Destroy(context.Background(), "ws-1")
+	if err != nil {
 		t.Fatalf("destroy failed: %v", err)
 	}
 
-	if len(r.calls) != 6 {
-		t.Fatalf("expected 6 calls, got %d", len(r.calls))
-	}
-
-	assertCall := func(i int, dir string, cmd string, args []string) {
-		t.Helper()
-		c := r.calls[i]
-		if c.dir != dir || c.cmd != cmd || !reflect.DeepEqual(c.args, args) {
-			t.Fatalf("call %d mismatch: got dir=%q cmd=%q args=%v; want dir=%q cmd=%q args=%v", i, c.dir, c.cmd, c.args, dir, cmd, args)
-		}
-	}
-
-	assertCall(0, "/projects/ws-1", "vmctl-firecracker", []string{"create", "--id", "ws-1", "--balloon", "off"})
-	assertCall(1, "/projects/ws-1", "vmctl-firecracker", []string{"start", "--id", "ws-1"})
-	assertCall(2, "/projects/ws-1", "vmctl-firecracker", []string{"pause", "--id", "ws-1"})
-	assertCall(3, "/projects/ws-1", "vmctl-firecracker", []string{"resume", "--id", "ws-1"})
-	assertCall(4, "/projects/ws-1", "vmctl-firecracker", []string{"fork", "--id", "ws-1", "--child-id", "ws-2"})
-	assertCall(5, "/projects/ws-1", "vmctl-firecracker", []string{"destroy", "--id", "ws-1"})
-}
-
-func TestFirecrackerDriver_CreateWrapsCommandOnDarwin(t *testing.T) {
-	r := &fakeRunner{}
-	d := NewDriver(r, WithHostOS("darwin"), WithLimaInstance("nexus-firecracker"))
-
-	err := d.Create(context.Background(), runtime.CreateRequest{
-		WorkspaceID: "ws-1",
-		ProjectRoot: "/projects/ws-1",
-	})
-	if err != nil {
-		t.Fatalf("create failed: %v", err)
-	}
-
-	if len(r.calls) != 1 {
-		t.Fatalf("expected 1 call, got %d", len(r.calls))
-	}
-
-	c := r.calls[0]
-	if c.cmd != "limactl" {
-		t.Fatalf("expected limactl, got %q", c.cmd)
-	}
-	want := []string{"shell", "nexus-firecracker", "vmctl-firecracker", "create", "--id", "ws-1", "--balloon", "off"}
-	if !reflect.DeepEqual(c.args, want) {
-		t.Fatalf("unexpected args: got %v want %v", c.args, want)
-	}
-}
-
-func TestFirecrackerDriver_CreateAddsMemMiBWhenProvided(t *testing.T) {
-	r := &fakeRunner{}
-	d := NewDriver(r)
-
-	err := d.Create(context.Background(), runtime.CreateRequest{
-		WorkspaceID: "ws-1",
-		ProjectRoot: "/projects/ws-1",
-		Options:     map[string]string{"mem_mib": "1024"},
-	})
-	if err != nil {
-		t.Fatalf("create failed: %v", err)
-	}
-
-	if len(r.calls) != 1 {
-		t.Fatalf("expected 1 call, got %d", len(r.calls))
-	}
-	want := []string{"create", "--id", "ws-1", "--mem-mib", "1024", "--balloon", "off"}
-	if !reflect.DeepEqual(r.calls[0].args, want) {
-		t.Fatalf("unexpected args: got %v want %v", r.calls[0].args, want)
-	}
-}
-
-func TestFirecrackerDriver_ErrorsPropagate(t *testing.T) {
-	r := &fakeRunner{err: errors.New("boom")}
-	d := NewDriver(r)
-	_ = d.Create(context.Background(), runtime.CreateRequest{WorkspaceID: "ws-1", ProjectRoot: "/projects/ws-1"})
-	err := d.Start(context.Background(), "ws-1")
-	if err == nil {
-		t.Fatal("expected error from runner")
+	// Verify workspace was removed
+	d.mu.RLock()
+	_, exists := d.projectRoots["ws-1"]
+	d.mu.RUnlock()
+	if exists {
+		t.Fatal("expected workspace to be removed from projectRoots")
 	}
 }
 
 func TestFirecrackerDriver_DestroyUnknownWorkspaceNoOp(t *testing.T) {
-	r := &fakeRunner{}
-	d := NewDriver(r)
+	fakeMgr := &fakeManager{}
+	d := NewDriver(nil, WithManager(fakeMgr))
 	if err := d.Destroy(context.Background(), "missing"); err != nil {
 		t.Fatalf("destroy unknown should be no-op, got %v", err)
 	}
-	if len(r.calls) != 0 {
-		t.Fatalf("expected no runner calls, got %d", len(r.calls))
+}
+
+func TestFirecrackerDriver_DestroyWithoutManager(t *testing.T) {
+	d := NewDriver(nil)
+
+	// Setup workspace
+	d.mu.Lock()
+	d.projectRoots["ws-1"] = "/projects/ws-1"
+	d.mu.Unlock()
+
+	// Should not panic or error even without manager
+	err := d.Destroy(context.Background(), "ws-1")
+	if err != nil {
+		t.Fatalf("destroy should work without manager: %v", err)
 	}
 }

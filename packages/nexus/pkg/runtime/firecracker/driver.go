@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"strconv"
-	goRuntime "runtime"
 	"sync"
 
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
@@ -16,30 +15,24 @@ type CommandRunner interface {
 	Run(ctx context.Context, dir string, cmd string, args ...string) error
 }
 
+// ManagerInterface defines the interface for VM lifecycle management
+type ManagerInterface interface {
+	Spawn(ctx context.Context, spec SpawnSpec) (*Instance, error)
+	Stop(ctx context.Context, workspaceID string) error
+	Get(workspaceID string) (*Instance, error)
+}
+
 type Driver struct {
 	runner       CommandRunner
-	manager      *Manager
+	manager      ManagerInterface
 	projectRoots map[string]string
-	hostOS       string
-	bridge       *LimaBridge
+	agents       map[string]*AgentClient
 	mu           sync.RWMutex
 }
 
 type Option func(*Driver)
 
-func WithHostOS(hostOS string) Option {
-	return func(d *Driver) {
-		d.hostOS = hostOS
-	}
-}
-
-func WithLimaInstance(instance string) Option {
-	return func(d *Driver) {
-		d.bridge = NewLimaBridge(instance)
-	}
-}
-
-func WithManager(manager *Manager) Option {
+func WithManager(manager ManagerInterface) Option {
 	return func(d *Driver) {
 		d.manager = manager
 	}
@@ -49,8 +42,7 @@ func NewDriver(runner CommandRunner, opts ...Option) *Driver {
 	d := &Driver{
 		runner:       runner,
 		projectRoots: make(map[string]string),
-		hostOS:       goRuntime.GOOS,
-		bridge:       NewLimaBridge("nexus-firecracker"),
+		agents:       make(map[string]*AgentClient),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -75,109 +67,91 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 	if req.ProjectRoot == "" {
 		return errors.New("project root is required")
 	}
-	
-	if d.manager != nil {
-		memMiB := 1024
-		if req.Options != nil {
-			if memStr, ok := req.Options["mem_mib"]; ok && memStr != "" {
-				if val, err := strconv.Atoi(memStr); err == nil {
-					memMiB = val
-				}
+
+	if d.manager == nil {
+		return errors.New("manager is required for firecracker driver")
+	}
+
+	memMiB := 1024
+	if req.Options != nil {
+		if memStr, ok := req.Options["mem_mib"]; ok && memStr != "" {
+			if val, err := strconv.Atoi(memStr); err == nil {
+				memMiB = val
 			}
 		}
-		spec := SpawnSpec{
-			WorkspaceID: req.WorkspaceID,
-			ProjectRoot: req.ProjectRoot,
-			MemoryMiB:   memMiB,
-			VCPUs:       1,
-		}
-		if _, err := d.manager.Spawn(ctx, spec); err != nil {
-			return err
-		}
-		d.mu.Lock()
-		d.projectRoots[req.WorkspaceID] = req.ProjectRoot
-		d.mu.Unlock()
-		return nil
 	}
-	
-	args := []string{"create", "--id", req.WorkspaceID}
-	if req.Options != nil {
-		if memMiB, ok := req.Options["mem_mib"]; ok && memMiB != "" {
-			args = append(args, "--mem-mib", memMiB)
-		}
+
+	spec := SpawnSpec{
+		WorkspaceID: req.WorkspaceID,
+		ProjectRoot: req.ProjectRoot,
+		MemoryMiB:   memMiB,
+		VCPUs:       1,
 	}
-	args = append(args, "--balloon", "off")
-	if err := d.runVMCommand(ctx, req.ProjectRoot, args...); err != nil {
+
+	inst, err := d.manager.Spawn(ctx, spec)
+	if err != nil {
 		return err
 	}
+
 	d.mu.Lock()
 	d.projectRoots[req.WorkspaceID] = req.ProjectRoot
 	d.mu.Unlock()
+
+	// TODO: Connect to agent via vsock when AgentClient dial is implemented
+	_ = inst
+
 	return nil
 }
 
 func (d *Driver) Start(ctx context.Context, workspaceID string) error {
-	return d.runWorkspaceCommand(ctx, workspaceID, "start")
+	// Native firecracker VMs start immediately after Spawn
+	// This is a no-op for the native implementation
+	return nil
 }
 
 func (d *Driver) Stop(ctx context.Context, workspaceID string) error {
-	if d.manager != nil {
-		return d.manager.Stop(ctx, workspaceID)
-	}
-	return d.runWorkspaceCommand(ctx, workspaceID, "stop")
-}
-
-func (d *Driver) Restore(ctx context.Context, workspaceID string) error {
-	return d.runWorkspaceCommand(ctx, workspaceID, "restore")
-}
-
-func (d *Driver) Pause(ctx context.Context, workspaceID string) error {
-	return d.runWorkspaceCommand(ctx, workspaceID, "pause")
-}
-
-func (d *Driver) Resume(ctx context.Context, workspaceID string) error {
-	return d.runWorkspaceCommand(ctx, workspaceID, "resume")
-}
-
-func (d *Driver) Fork(ctx context.Context, workspaceID, childWorkspaceID string) error {
-	dir := d.workspaceDir(workspaceID)
-	if dir == "" {
-		return errors.New("workspace not created or project root unknown")
+	if d.manager == nil {
+		return errors.New("manager is required for firecracker driver")
 	}
 
 	d.mu.Lock()
-	d.projectRoots[childWorkspaceID] = dir
+	delete(d.agents, workspaceID)
 	d.mu.Unlock()
 
-	return d.runVMCommand(ctx, dir, "fork", "--id", workspaceID, "--child-id", childWorkspaceID)
+	return d.manager.Stop(ctx, workspaceID)
+}
+
+func (d *Driver) Restore(ctx context.Context, workspaceID string) error {
+	// Native firecracker doesn't support restore in this cutover
+	return errors.New("restore not supported in native firecracker driver")
+}
+
+func (d *Driver) Pause(ctx context.Context, workspaceID string) error {
+	// Native firecracker doesn't support pause in this cutover
+	return errors.New("pause not supported in native firecracker driver")
+}
+
+func (d *Driver) Resume(ctx context.Context, workspaceID string) error {
+	// Native firecracker doesn't support resume in this cutover
+	return errors.New("resume not supported in native firecracker driver")
+}
+
+func (d *Driver) Fork(ctx context.Context, workspaceID, childWorkspaceID string) error {
+	// Native firecracker doesn't support fork in this cutover
+	return errors.New("fork not supported in native firecracker driver")
 }
 
 func (d *Driver) Destroy(ctx context.Context, workspaceID string) error {
 	d.mu.Lock()
-	dir, ok := d.projectRoots[workspaceID]
-	if ok {
-		delete(d.projectRoots, workspaceID)
-	}
+	delete(d.projectRoots, workspaceID)
+	delete(d.agents, workspaceID)
 	d.mu.Unlock()
-	if !ok {
-		return nil
-	}
-	return d.runVMCommand(ctx, dir, "destroy", "--id", workspaceID)
-}
 
-func (d *Driver) runWorkspaceCommand(ctx context.Context, workspaceID string, action string) error {
-	dir := d.workspaceDir(workspaceID)
-	if dir == "" {
-		return errors.New("workspace not created or project root unknown")
+	// Stop the VM if manager is available
+	if d.manager != nil {
+		// Ignore error - workspace may already be stopped
+		_ = d.manager.Stop(ctx, workspaceID)
 	}
-	return d.runVMCommand(ctx, dir, action, "--id", workspaceID)
-}
 
-func (d *Driver) runVMCommand(ctx context.Context, dir string, args ...string) error {
-	cmd := "vmctl-firecracker"
-	cmdArgs := args
-	if d.hostOS == "darwin" {
-		cmd, cmdArgs = d.bridge.Wrap(cmd, args...)
-	}
-	return d.runner.Run(ctx, dir, cmd, cmdArgs...)
+	return nil
 }
