@@ -652,12 +652,150 @@ func TestBootstrapDoctorExecContextFirecrackerRequiresExplicitMicroVMContext(t *
 }
 
 func TestBootstrapDoctorExecContextFirecrackerAcceptsExplicitMicroVMContext(t *testing.T) {
+	originalRunner := doctorCheckCommandRunner
+	originalHostRunner := firecrackerHostCommandRunner
+	originalInstallRunner := bootstrapInstallCommandRunner
+	t.Cleanup(func() {
+		doctorCheckCommandRunner = originalRunner
+		firecrackerHostCommandRunner = originalHostRunner
+		bootstrapInstallCommandRunner = originalInstallRunner
+		setDoctorExecContextCleanup(nil)
+	})
+
 	t.Setenv("NEXUS_RUNTIME_BACKEND", "firecracker")
 	t.Setenv("NEXUS_DOCTOR_FIRECRACKER_INSTANCE", "nexus-firecracker-ci")
 	t.Setenv("NEXUS_DOCTOR_FIRECRACKER_EXEC_MODE", "sudo-lxc")
 
+	firecrackerHostCommandRunner = func(ctx context.Context, execCtx doctorExecContext, args ...string) (string, error) {
+		if execCtx.backend != "firecracker" {
+			return "", fmt.Errorf("unexpected backend: %s", execCtx.backend)
+		}
+		if execCtx.fcName != "nexus-firecracker-ci" {
+			return "", fmt.Errorf("unexpected firecracker instance: %s", execCtx.fcName)
+		}
+		if len(args) == 0 {
+			return "", nil
+		}
+		switch args[0] {
+		case "info", "delete", "launch", "config", "exec":
+			return "ok", nil
+		default:
+			return "", fmt.Errorf("unexpected host command: %v", args)
+		}
+	}
+
+	doctorCheckCommandRunner = func(ctx context.Context, projectRoot, phase, name string, attempt, attempts int, timeout time.Duration, command string, args []string, execCtx doctorExecContext) (string, error) {
+		if execCtx.backend != "firecracker" {
+			return "", fmt.Errorf("unexpected exec context: %+v", execCtx)
+		}
+
+		if command == "docker" && reflect.DeepEqual(args, []string{"info"}) {
+			return "docker ok", nil
+		}
+		if command == "docker" && reflect.DeepEqual(args, []string{"compose", "version"}) {
+			return "compose ok", nil
+		}
+		if command == "bash" && len(args) == 2 && args[0] == "-lc" && strings.Contains(args[1], "registry-1.docker.io") {
+			return "401", nil
+		}
+		if command == "bash" && len(args) == 2 && args[0] == "-lc" && strings.Contains(args[1], "command -v opencode") {
+			return "opencode-ai 1.0.0", nil
+		}
+		if command == "bash" && len(args) == 2 && args[0] == "-lc" && strings.Contains(args[1], "cat > /etc/resolv.conf") {
+			return "dns configured", nil
+		}
+
+		return "ok", nil
+	}
+
 	err := bootstrapDoctorExecContext(t.TempDir())
 	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if err := runDoctorExecContextCleanup(); err != nil {
+		t.Fatalf("unexpected cleanup error: %v", err)
+	}
+}
+
+func TestBootstrapDoctorExecContextFirecrackerLaunchFailsWhenHostUnavailable(t *testing.T) {
+	originalHostRunner := firecrackerHostCommandRunner
+	t.Cleanup(func() {
+		firecrackerHostCommandRunner = originalHostRunner
+		setDoctorExecContextCleanup(nil)
+	})
+
+	t.Setenv("NEXUS_RUNTIME_BACKEND", "firecracker")
+	t.Setenv("NEXUS_DOCTOR_FIRECRACKER_INSTANCE", "nexus-firecracker-ci")
+	t.Setenv("NEXUS_DOCTOR_FIRECRACKER_EXEC_MODE", "sudo-lxc")
+
+	firecrackerHostCommandRunner = func(ctx context.Context, execCtx doctorExecContext, args ...string) (string, error) {
+		if len(args) > 0 && args[0] == "info" {
+			return "sudo: a password is required", errors.New("host unavailable")
+		}
+		return "", nil
+	}
+
+	err := bootstrapDoctorExecContext(t.TempDir())
+	if err == nil {
+		t.Fatal("expected error when firecracker host is unavailable")
+	}
+	if !strings.Contains(err.Error(), "firecracker host bootstrap failed") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBootstrapDoctorExecContextFirecrackerFailsOnRegistryReadiness(t *testing.T) {
+	originalRunner := doctorCheckCommandRunner
+	originalHostRunner := firecrackerHostCommandRunner
+	originalInstallRunner := bootstrapInstallCommandRunner
+	t.Cleanup(func() {
+		doctorCheckCommandRunner = originalRunner
+		firecrackerHostCommandRunner = originalHostRunner
+		bootstrapInstallCommandRunner = originalInstallRunner
+		setDoctorExecContextCleanup(nil)
+	})
+
+	t.Setenv("NEXUS_RUNTIME_BACKEND", "firecracker")
+	t.Setenv("NEXUS_DOCTOR_FIRECRACKER_INSTANCE", "nexus-firecracker-ci")
+	t.Setenv("NEXUS_DOCTOR_FIRECRACKER_EXEC_MODE", "sudo-lxc")
+
+	firecrackerHostCommandRunner = func(ctx context.Context, execCtx doctorExecContext, args ...string) (string, error) {
+		if len(args) == 0 {
+			return "", nil
+		}
+		switch args[0] {
+		case "info", "delete", "launch", "config", "exec":
+			return "ok", nil
+		default:
+			return "", fmt.Errorf("unexpected host command: %v", args)
+		}
+	}
+
+	doctorCheckCommandRunner = func(ctx context.Context, projectRoot, phase, name string, attempt, attempts int, timeout time.Duration, command string, args []string, execCtx doctorExecContext) (string, error) {
+		if command == "docker" && reflect.DeepEqual(args, []string{"info"}) {
+			return "docker ok", nil
+		}
+		if command == "docker" && reflect.DeepEqual(args, []string{"compose", "version"}) {
+			return "compose ok", nil
+		}
+		if command == "bash" && len(args) == 2 && args[0] == "-lc" && strings.Contains(args[1], "registry-1.docker.io") {
+			return "context deadline exceeded", errors.New("registry unavailable")
+		}
+		if command == "bash" && len(args) == 2 && args[0] == "-lc" && strings.Contains(args[1], "cat > /etc/resolv.conf") {
+			return "dns configured", nil
+		}
+		if command == "bash" && len(args) == 2 && args[0] == "-lc" && strings.Contains(args[1], "--- /etc/resolv.conf ---") {
+			return "--- /etc/resolv.conf ---\nnameserver 1.1.1.1", nil
+		}
+		return "ok", nil
+	}
+
+	err := bootstrapDoctorExecContext(t.TempDir())
+	if err == nil {
+		t.Fatal("expected firecracker registry readiness failure")
+	}
+	if !strings.Contains(err.Error(), "firecracker network readiness failed") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }

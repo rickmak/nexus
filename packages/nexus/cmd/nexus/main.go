@@ -142,6 +142,11 @@ func run(opts options) error {
 		fmt.Printf("doctor warning: %s\n", warning)
 	}
 
+	defer func() {
+		if cleanupErr := runDoctorExecContextCleanup(); cleanupErr != nil {
+			fmt.Printf("doctor warning: firecracker cleanup failed: %v\n", cleanupErr)
+		}
+	}()
 	if err := bootstrapDoctorExecContext(opts.projectRoot); err != nil {
 		return err
 	}
@@ -237,9 +242,303 @@ var doctorCheckCommandRunner = runCheckCommandWithExecContext
 
 var bootstrapInstallCommandRunner = runBootstrapInstallCommand
 
+var doctorExecCleanup func() error
+
+var firecrackerHostCommandRunner = runFirecrackerHostCommand
+
 func runBootstrapInstallCommand(ctx context.Context, projectRoot string, timeout time.Duration, execCtx doctorExecContext) (string, error) {
-	installCmd := "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose-v2 curl make python3 git || DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose-plugin curl make python3 git"
+	installCmd := "apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose-v2 curl make python3 git nodejs npm || DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose-plugin curl make python3 git nodejs npm"
 	return doctorCheckCommandRunner(ctx, projectRoot, "probe", "runtime-backend-capabilities", 1, 1, timeout, "bash", []string{"-lc", installCmd}, execCtx)
+}
+
+func setDoctorExecContextCleanup(cleanup func() error) {
+	doctorExecCleanup = cleanup
+}
+
+func runDoctorExecContextCleanup() error {
+	if doctorExecCleanup == nil {
+		return nil
+	}
+	cleanup := doctorExecCleanup
+	doctorExecCleanup = nil
+	return cleanup()
+}
+
+func runFirecrackerHostCommand(ctx context.Context, execCtx doctorExecContext, args ...string) (string, error) {
+	cmdName := "lxc"
+	cmdArgs := append([]string(nil), args...)
+	if execCtx.fcExec == "sudo-lxc" {
+		cmdName = "sudo"
+		cmdArgs = append([]string{"-n", "lxc"}, args...)
+	}
+
+	cmd := exec.CommandContext(ctx, cmdName, cmdArgs...)
+	var output bytes.Buffer
+	writer := io.MultiWriter(os.Stdout, &output)
+	cmd.Stdout = writer
+	cmd.Stderr = writer
+	err := cmd.Run()
+	return strings.TrimSpace(output.String()), err
+}
+
+func collectHostDNSServers() []string {
+	paths := []string{"/run/systemd/resolve/resolv.conf", "/etc/resolv.conf"}
+	servers := make([]string, 0)
+	seen := map[string]bool{}
+
+	for _, path := range paths {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(line)
+			if !strings.HasPrefix(line, "nameserver ") {
+				continue
+			}
+			parts := strings.Fields(line)
+			if len(parts) < 2 {
+				continue
+			}
+			host := strings.TrimSpace(parts[1])
+			if host == "" || host == "127.0.0.1" || host == "0.0.0.0" || host == "::1" {
+				continue
+			}
+			if !seen[host] {
+				seen[host] = true
+				servers = append(servers, host)
+			}
+		}
+	}
+
+	if len(servers) == 0 {
+		return []string{"1.1.1.1", "8.8.8.8"}
+	}
+	return servers
+}
+
+func configureFirecrackerDNS(projectRoot string, execCtx doctorExecContext) error {
+	dnsServers := collectHostDNSServers()
+	var content strings.Builder
+	for _, server := range dnsServers {
+		content.WriteString("nameserver ")
+		content.WriteString(server)
+		content.WriteString("\n")
+	}
+	content.WriteString("options timeout:2 attempts:5\n")
+
+	script := strings.Join([]string{
+		"if [ -L /etc/resolv.conf ]; then rm -f /etc/resolv.conf || true; fi",
+		"cat > /etc/resolv.conf <<'EOF'",
+		content.String(),
+		"EOF",
+	}, "\n")
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out, err := doctorCheckCommandRunner(ctx, projectRoot, "probe", "runtime-backend-capabilities", 1, 1, 30*time.Second, "bash", []string{"-lc", script}, execCtx)
+	if err != nil {
+		return fmt.Errorf("configure firecracker dns failed: %s", strings.TrimSpace(out))
+	}
+	return nil
+}
+
+func bootstrapContainerExecContext(projectRoot string, execCtx doctorExecContext, backendLabel string) error {
+	timeout := 5 * time.Minute
+	capabilityChecks := [][]string{{"docker", "info"}, {"docker", "compose", "version"}}
+	runCapabilityChecks := func() (bool, string) {
+		failures := make([]string, 0)
+		for _, check := range capabilityChecks {
+			checkCtx, checkCancel := context.WithTimeout(context.Background(), timeout)
+			out, err := doctorCheckCommandRunner(checkCtx, projectRoot, "probe", "runtime-backend-capabilities", 1, 1, timeout, check[0], check[1:], execCtx)
+			checkCancel()
+			if err != nil {
+				if strings.TrimSpace(out) != "" {
+					failures = append(failures, strings.TrimSpace(out))
+				} else {
+					failures = append(failures, fmt.Sprintf("%s failed", strings.Join(check, " ")))
+				}
+			}
+		}
+		if len(failures) == 0 {
+			return true, ""
+		}
+		return false, strings.Join(failures, "\n")
+	}
+
+	if ok, _ := runCapabilityChecks(); ok {
+		return nil
+	}
+
+	startDockerCmd := "if command -v systemctl >/dev/null 2>&1; then systemctl enable docker >/dev/null 2>&1 || true; systemctl start docker >/dev/null 2>&1 || true; fi; if ! docker info >/dev/null 2>&1; then nohup dockerd --host=unix:///var/run/docker.sock --storage-driver=vfs --iptables=false --bridge=none >/tmp/nexus-doctor-dockerd.log 2>&1 & sleep 5; fi"
+	startCtx, startCancel := context.WithTimeout(context.Background(), timeout)
+	startOut, startErr := doctorCheckCommandRunner(startCtx, projectRoot, "probe", "runtime-backend-capabilities", 1, 1, timeout, "bash", []string{"-lc", startDockerCmd}, execCtx)
+	startCancel()
+
+	if startErr == nil {
+		if ok, _ := runCapabilityChecks(); ok {
+			return nil
+		}
+	}
+
+	installCtx, installCancel := context.WithTimeout(context.Background(), timeout)
+	installOut, installErr := bootstrapInstallCommandRunner(installCtx, projectRoot, timeout, execCtx)
+	installCancel()
+	if installErr != nil {
+		trimmedOut := strings.TrimSpace(installOut)
+		if strings.Contains(trimmedOut, "Temporary failure resolving") ||
+			strings.Contains(trimmedOut, "Failed to fetch") ||
+			strings.Contains(trimmedOut, "Unable to locate package") ||
+			strings.Contains(trimmedOut, "has no installation candidate") {
+			fmt.Printf("bootstrap %s tooling: apt unavailable, continuing with existing runtime packages\n", backendLabel)
+		} else {
+			return fmt.Errorf("bootstrap %s tooling failed: %s", backendLabel, strings.TrimSpace(startOut+"\n"+installOut))
+		}
+	}
+
+	startCtx, startCancel = context.WithTimeout(context.Background(), timeout)
+	startOut, startErr = doctorCheckCommandRunner(startCtx, projectRoot, "probe", "runtime-backend-capabilities", 1, 1, timeout, "bash", []string{"-lc", startDockerCmd}, execCtx)
+	startCancel()
+	if startErr != nil {
+		return fmt.Errorf("bootstrap %s docker daemon startup failed: %s", backendLabel, strings.TrimSpace(startOut))
+	}
+
+	if ok, verifyOut := runCapabilityChecks(); !ok {
+		return fmt.Errorf("bootstrap %s tooling verification failed: %s", backendLabel, strings.TrimSpace(verifyOut))
+	}
+
+	return nil
+}
+
+func ensureFirecrackerRegistryReadiness(projectRoot string, execCtx doctorExecContext) error {
+	checkCmd := "set -euo pipefail; getent hosts registry-1.docker.io >/dev/null; status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://registry-1.docker.io/v2/); [ \"$status\" = \"200\" ] || [ \"$status\" = \"401\" ]"
+	var lastOut string
+	for attempt := 1; attempt <= 3; attempt++ {
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		out, err := doctorCheckCommandRunner(ctx, projectRoot, "probe", "firecracker-network-readiness", attempt, 3, 45*time.Second, "bash", []string{"-lc", checkCmd}, execCtx)
+		cancel()
+		if err == nil {
+			return nil
+		}
+		lastOut = strings.TrimSpace(out)
+		time.Sleep(time.Duration(attempt*2) * time.Second)
+	}
+
+	diagCmd := "set +e; echo '--- /etc/resolv.conf ---'; cat /etc/resolv.conf || true; echo '--- route ---'; ip route || true; echo '--- getent registry-1.docker.io ---'; getent hosts registry-1.docker.io || true"
+	diagCtx, diagCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	diagOut, _ := doctorCheckCommandRunner(diagCtx, projectRoot, "probe", "firecracker-network-readiness", 1, 1, 30*time.Second, "bash", []string{"-lc", diagCmd}, execCtx)
+	diagCancel()
+
+	combined := strings.TrimSpace(lastOut + "\n" + diagOut)
+	if combined == "" {
+		combined = "registry endpoint unreachable"
+	}
+	return fmt.Errorf("firecracker network readiness failed: %s", combined)
+}
+
+func ensureFirecrackerOpencodeTooling(projectRoot string, execCtx doctorExecContext) error {
+	checkTimeout := 30 * time.Second
+	checkCtx, checkCancel := context.WithTimeout(context.Background(), checkTimeout)
+	_, checkErr := doctorCheckCommandRunner(checkCtx, projectRoot, "probe", "firecracker-opencode-tooling", 1, 1, checkTimeout, "bash", []string{"-lc", "command -v opencode >/dev/null 2>&1 && opencode --version >/dev/null 2>&1"}, execCtx)
+	checkCancel()
+	if checkErr == nil {
+		return nil
+	}
+
+	installTimeout := 6 * time.Minute
+	installCmd := "set -euo pipefail; command -v npm >/dev/null 2>&1; npm i -g opencode-ai"
+	installCtx, installCancel := context.WithTimeout(context.Background(), installTimeout)
+	installOut, installErr := doctorCheckCommandRunner(installCtx, projectRoot, "probe", "firecracker-opencode-tooling", 1, 1, installTimeout, "bash", []string{"-lc", installCmd}, execCtx)
+	installCancel()
+	if installErr != nil {
+		return fmt.Errorf("firecracker opencode install failed: %s", strings.TrimSpace(installOut))
+	}
+
+	verifyCtx, verifyCancel := context.WithTimeout(context.Background(), checkTimeout)
+	verifyOut, verifyErr := doctorCheckCommandRunner(verifyCtx, projectRoot, "probe", "firecracker-opencode-tooling", 1, 1, checkTimeout, "bash", []string{"-lc", "command -v opencode >/dev/null 2>&1 && opencode --version"}, execCtx)
+	verifyCancel()
+	if verifyErr != nil {
+		return fmt.Errorf("firecracker opencode verification failed: %s", strings.TrimSpace(verifyOut))
+	}
+	return nil
+}
+
+func bootstrapFirecrackerExecContext(projectRoot string, execCtx doctorExecContext) error {
+	if execCtx.fcName == "" {
+		return fmt.Errorf("backend \"firecracker\" requires explicit microVM execution context (configure NEXUS_DOCTOR_FIRECRACKER_INSTANCE and NEXUS_DOCTOR_FIRECRACKER_EXEC_MODE)")
+	}
+	if execCtx.fcExec == "" {
+		execCtx.fcExec = "sudo-lxc"
+		_ = os.Setenv("NEXUS_DOCTOR_FIRECRACKER_EXEC_MODE", execCtx.fcExec)
+	}
+
+	hostCtx, hostCancel := context.WithTimeout(context.Background(), 45*time.Second)
+	_, hostErr := firecrackerHostCommandRunner(hostCtx, execCtx, "info")
+	hostCancel()
+	if hostErr != nil {
+		return fmt.Errorf("firecracker host bootstrap failed: lxc is not available (need %s command execution)", execCtx.fcExec)
+	}
+
+	deleteCtx, deleteCancel := context.WithTimeout(context.Background(), 45*time.Second)
+	_, _ = firecrackerHostCommandRunner(deleteCtx, execCtx, "delete", "--force", execCtx.fcName)
+	deleteCancel()
+
+	launchCtx, launchCancel := context.WithTimeout(context.Background(), 2*time.Minute)
+	launchOut, launchErr := firecrackerHostCommandRunner(launchCtx, execCtx, "launch", "ubuntu:24.04", execCtx.fcName)
+	launchCancel()
+	if launchErr != nil {
+		return fmt.Errorf("firecracker instance launch failed: %s", strings.TrimSpace(launchOut))
+	}
+
+	configCommands := [][]string{
+		{"config", "set", execCtx.fcName, "security.nesting", "true"},
+		{"config", "set", execCtx.fcName, "security.syscalls.intercept.mknod", "true"},
+		{"config", "set", execCtx.fcName, "security.syscalls.intercept.setxattr", "true"},
+		{"config", "device", "add", execCtx.fcName, "workspace", "disk", "source=" + projectRoot, "path=" + projectRoot},
+	}
+	for _, cmdArgs := range configCommands {
+		cfgCtx, cfgCancel := context.WithTimeout(context.Background(), 45*time.Second)
+		cfgOut, cfgErr := firecrackerHostCommandRunner(cfgCtx, execCtx, cmdArgs...)
+		cfgCancel()
+		if cfgErr != nil {
+			return fmt.Errorf("firecracker instance configure failed: %s", strings.TrimSpace(cfgOut))
+		}
+	}
+
+	setDoctorExecContextCleanup(func() error {
+		cleanupCtx, cleanupCancel := context.WithTimeout(context.Background(), 45*time.Second)
+		_, cleanupErr := firecrackerHostCommandRunner(cleanupCtx, execCtx, "delete", "--force", execCtx.fcName)
+		cleanupCancel()
+		if cleanupErr != nil {
+			return fmt.Errorf("lxc delete --force %s failed", execCtx.fcName)
+		}
+		return nil
+	})
+
+	waitCtx, waitCancel := context.WithTimeout(context.Background(), 30*time.Second)
+	waitOut, waitErr := firecrackerHostCommandRunner(waitCtx, execCtx, "exec", execCtx.fcName, "--", "bash", "-lc", "echo firecracker-microvm-ready")
+	waitCancel()
+	if waitErr != nil {
+		return fmt.Errorf("firecracker instance readiness failed: %s", strings.TrimSpace(waitOut))
+	}
+
+	if err := configureFirecrackerDNS(projectRoot, execCtx); err != nil {
+		fmt.Printf("doctor warning: %v\n", err)
+	}
+
+	if err := bootstrapContainerExecContext(projectRoot, execCtx, "firecracker"); err != nil {
+		return err
+	}
+
+	if err := ensureFirecrackerRegistryReadiness(projectRoot, execCtx); err != nil {
+		return err
+	}
+
+	if err := ensureFirecrackerOpencodeTooling(projectRoot, execCtx); err != nil {
+		return err
+	}
+
+	return nil
 }
 
 func runConfiguredProbes(opts options, probes []config.DoctorCommandProbe) ([]checkResult, error) {
@@ -547,13 +846,10 @@ func runBuiltInRuntimeBackendCheck() (checkResult, error) {
 }
 
 func bootstrapDoctorExecContext(projectRoot string) error {
+	setDoctorExecContextCleanup(nil)
 	execCtx := loadDoctorExecContext()
 	if execCtx.backend == "firecracker" {
-		_, _, _, label := resolveCheckCommand(projectRoot, "bash", []string{"-lc", "true"}, execCtx)
-		if label == "host" {
-			return fmt.Errorf("backend \"firecracker\" requires explicit microVM execution context (configure NEXUS_DOCTOR_FIRECRACKER_INSTANCE and NEXUS_DOCTOR_FIRECRACKER_EXEC_MODE)")
-		}
-		return nil
+		return bootstrapFirecrackerExecContext(projectRoot, execCtx)
 	}
 
 	if execCtx.backend != "lxc" {
@@ -566,70 +862,7 @@ func bootstrapDoctorExecContext(projectRoot string) error {
 		return fmt.Errorf("backend \"lxc\" requires explicit execution context (set NEXUS_DOCTOR_LXC_INSTANCE)")
 	}
 
-	timeout := 5 * time.Minute
-	capabilityChecks := [][]string{{"docker", "info"}, {"docker", "compose", "version"}}
-	runCapabilityChecks := func() (bool, string) {
-		failures := make([]string, 0)
-		for _, check := range capabilityChecks {
-			checkCtx, checkCancel := context.WithTimeout(context.Background(), timeout)
-			out, err := doctorCheckCommandRunner(checkCtx, projectRoot, "probe", "runtime-backend-capabilities", 1, 1, timeout, check[0], check[1:], execCtx)
-			checkCancel()
-			if err != nil {
-				if strings.TrimSpace(out) != "" {
-					failures = append(failures, strings.TrimSpace(out))
-				} else {
-					failures = append(failures, fmt.Sprintf("%s failed", strings.Join(check, " ")))
-				}
-			}
-		}
-		if len(failures) == 0 {
-			return true, ""
-		}
-		return false, strings.Join(failures, "\n")
-	}
-
-	if ok, _ := runCapabilityChecks(); ok {
-		return nil
-	}
-
-	startDockerCmd := "if command -v systemctl >/dev/null 2>&1; then systemctl enable docker >/dev/null 2>&1 || true; systemctl start docker >/dev/null 2>&1 || true; fi; if ! docker info >/dev/null 2>&1; then nohup dockerd --host=unix:///var/run/docker.sock --storage-driver=vfs --iptables=false --bridge=none >/tmp/nexus-doctor-dockerd.log 2>&1 & sleep 5; fi"
-	startCtx, startCancel := context.WithTimeout(context.Background(), timeout)
-	startOut, startErr := doctorCheckCommandRunner(startCtx, projectRoot, "probe", "runtime-backend-capabilities", 1, 1, timeout, "bash", []string{"-lc", startDockerCmd}, execCtx)
-	startCancel()
-
-	if startErr == nil {
-		if ok, _ := runCapabilityChecks(); ok {
-			return nil
-		}
-	}
-
-	installCtx, installCancel := context.WithTimeout(context.Background(), timeout)
-	installOut, installErr := bootstrapInstallCommandRunner(installCtx, projectRoot, timeout, execCtx)
-	installCancel()
-	if installErr != nil {
-		trimmedOut := strings.TrimSpace(installOut)
-		if strings.Contains(trimmedOut, "Temporary failure resolving") ||
-			strings.Contains(trimmedOut, "Failed to fetch") ||
-			strings.Contains(trimmedOut, "Unable to locate package") ||
-			strings.Contains(trimmedOut, "has no installation candidate") {
-			fmt.Printf("bootstrap lxc tooling: apt unavailable, continuing with existing runtime packages\n")
-		} else {
-			return fmt.Errorf("bootstrap lxc tooling failed: %s", strings.TrimSpace(startOut+"\n"+installOut))
-		}
-	}
-
-	startCtx, startCancel = context.WithTimeout(context.Background(), timeout)
-	startOut, startErr = doctorCheckCommandRunner(startCtx, projectRoot, "probe", "runtime-backend-capabilities", 1, 1, timeout, "bash", []string{"-lc", startDockerCmd}, execCtx)
-	startCancel()
-	if startErr != nil {
-		return fmt.Errorf("bootstrap lxc docker daemon startup failed: %s", strings.TrimSpace(startOut))
-	}
-
-	if ok, verifyOut := runCapabilityChecks(); !ok {
-		return fmt.Errorf("bootstrap lxc tooling verification failed: %s", strings.TrimSpace(verifyOut))
-	}
-
-	return nil
+	return bootstrapContainerExecContext(projectRoot, execCtx, "lxc")
 }
 
 func markChecksNotRun(tests []config.DoctorCommandCheck, skipReason string) []checkResult {
