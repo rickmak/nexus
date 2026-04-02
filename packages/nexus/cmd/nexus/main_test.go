@@ -595,6 +595,73 @@ func TestResolveCheckCommandDindWithoutDockerHost(t *testing.T) {
 	}
 }
 
+func TestRunCheckCommandWithExecContextFirecrackerRejectsHostContext(t *testing.T) {
+	_, err := runCheckCommandWithExecContext(
+		context.Background(),
+		t.TempDir(),
+		"probe",
+		"example",
+		1,
+		1,
+		30*time.Second,
+		"bash",
+		[]string{"-lc", "echo ok"},
+		doctorExecContext{backend: "firecracker"},
+	)
+	if err == nil {
+		t.Fatal("expected error when firecracker resolves to host context")
+	}
+	if !strings.Contains(err.Error(), "resolved to host execution context") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestResolveCheckCommandFirecrackerUsesMicroVMContext(t *testing.T) {
+	cmd, args, env, label := resolveCheckCommand("/tmp/project", "bash", []string{"-lc", "echo ok"}, doctorExecContext{
+		backend: "firecracker",
+		fcName:  "nexus-firecracker-ci",
+		fcExec:  "sudo-lxc",
+	})
+
+	if cmd != "sudo" {
+		t.Fatalf("expected sudo command, got %q", cmd)
+	}
+	if label != "firecracker-microvm" {
+		t.Fatalf("expected firecracker-microvm label, got %q", label)
+	}
+	if len(env) != 0 {
+		t.Fatalf("expected no extra env, got %v", env)
+	}
+	if len(args) < 8 {
+		t.Fatalf("expected wrapped sudo lxc args, got %v", args)
+	}
+}
+
+func TestBootstrapDoctorExecContextFirecrackerRequiresExplicitMicroVMContext(t *testing.T) {
+	t.Setenv("NEXUS_RUNTIME_BACKEND", "firecracker")
+	t.Setenv("NEXUS_DOCTOR_FIRECRACKER_INSTANCE", "")
+	t.Setenv("NEXUS_DOCTOR_FIRECRACKER_EXEC_MODE", "")
+
+	err := bootstrapDoctorExecContext(t.TempDir())
+	if err == nil {
+		t.Fatal("expected bootstrap error when firecracker microVM context is missing")
+	}
+	if !strings.Contains(err.Error(), "requires explicit microVM execution context") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestBootstrapDoctorExecContextFirecrackerAcceptsExplicitMicroVMContext(t *testing.T) {
+	t.Setenv("NEXUS_RUNTIME_BACKEND", "firecracker")
+	t.Setenv("NEXUS_DOCTOR_FIRECRACKER_INSTANCE", "nexus-firecracker-ci")
+	t.Setenv("NEXUS_DOCTOR_FIRECRACKER_EXEC_MODE", "sudo-lxc")
+
+	err := bootstrapDoctorExecContext(t.TempDir())
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestResolveCheckCommandHostFallback(t *testing.T) {
 	cmd, args, env, label := resolveCheckCommand("/tmp/project", "bash", []string{"-lc", "echo ok"}, doctorExecContext{backend: "lxc"})
 	if cmd != "bash" {

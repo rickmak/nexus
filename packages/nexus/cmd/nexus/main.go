@@ -229,6 +229,8 @@ type doctorExecContext struct {
 	dockerHost string
 	lxcName    string
 	lxcExec    string
+	fcName     string
+	fcExec     string
 }
 
 var doctorCheckCommandRunner = runCheckCommandWithExecContext
@@ -546,6 +548,14 @@ func runBuiltInRuntimeBackendCheck() (checkResult, error) {
 
 func bootstrapDoctorExecContext(projectRoot string) error {
 	execCtx := loadDoctorExecContext()
+	if execCtx.backend == "firecracker" {
+		_, _, _, label := resolveCheckCommand(projectRoot, "bash", []string{"-lc", "true"}, execCtx)
+		if label == "host" {
+			return fmt.Errorf("backend \"firecracker\" requires explicit microVM execution context (configure NEXUS_DOCTOR_FIRECRACKER_INSTANCE and NEXUS_DOCTOR_FIRECRACKER_EXEC_MODE)")
+		}
+		return nil
+	}
+
 	if execCtx.backend != "lxc" {
 		return nil
 	}
@@ -655,6 +665,11 @@ func runCheckCommandWithExecContext(ctx context.Context, projectRoot, phase, nam
 	}
 
 	cmdName, cmdArgs, cmdEnv, contextLabel := resolveCheckCommand(projectRoot, command, args, execCtx)
+	if execCtx.backend == "firecracker" && contextLabel == "host" {
+		msg := "backend \"firecracker\" resolved to host execution context; refusing to run doctor checks outside microVM"
+		return msg, errors.New(msg)
+	}
+
 	fmt.Printf("%s exec: %s (attempt %d/%d, timeout=%s, context=%s): %s\n", phase, name, attempt, attempts, timeout, contextLabel, formatCommand(cmdName, cmdArgs))
 
 	cmd := exec.CommandContext(ctx, cmdName, cmdArgs...)
@@ -685,10 +700,42 @@ func loadDoctorExecContext() doctorExecContext {
 		dockerHost: strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_DIND_DOCKER_HOST")),
 		lxcName:    strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_LXC_INSTANCE")),
 		lxcExec:    strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_LXC_EXEC_MODE")),
+		fcName:     strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_FIRECRACKER_INSTANCE")),
+		fcExec:     strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_FIRECRACKER_EXEC_MODE")),
 	}
 }
 
 func resolveCheckCommand(projectRoot, command string, args []string, execCtx doctorExecContext) (string, []string, []string, string) {
+	if execCtx.backend == "firecracker" && execCtx.fcName != "" {
+		execMode := execCtx.fcExec
+		if execMode == "" {
+			execMode = "lxc"
+		}
+
+		envPrefix := []string{
+			"export", "NEXUS_RUNTIME_BACKEND=" + shellQuote(execCtx.backend),
+			"NEXUS_DOCTOR_FIRECRACKER_INSTANCE=" + shellQuote(execCtx.fcName),
+			"NEXUS_DOCTOR_FIRECRACKER_EXEC_MODE=" + shellQuote(execMode),
+		}
+		if execCtx.dockerHost != "" {
+			envPrefix = append(envPrefix, "NEXUS_DOCTOR_DIND_DOCKER_HOST="+shellQuote(execCtx.dockerHost))
+		}
+		envPrefix = append(envPrefix, ";")
+
+		innerParts := make([]string, 0, len(args)+2)
+		innerParts = append(innerParts, envPrefix...)
+		innerParts = append(innerParts, "cd", shellQuote(projectRoot), "&&", shellQuote(command))
+		for _, arg := range args {
+			innerParts = append(innerParts, shellQuote(arg))
+		}
+		inner := strings.Join(innerParts, " ")
+
+		if execMode == "sudo-lxc" {
+			return "sudo", []string{"-n", "lxc", "exec", execCtx.fcName, "--", "bash", "-lc", inner}, nil, "firecracker-microvm"
+		}
+		return "lxc", []string{"exec", execCtx.fcName, "--", "bash", "-lc", inner}, nil, "firecracker-microvm"
+	}
+
 	if execCtx.backend == "lxc" && execCtx.lxcName != "" {
 		envPrefix := []string{
 			"export", "NEXUS_RUNTIME_BACKEND=" + shellQuote(execCtx.backend),
