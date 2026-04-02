@@ -627,7 +627,7 @@ func bootstrapContainerExecContext(projectRoot string, execCtx doctorExecContext
 }
 
 func ensureFirecrackerRegistryReadiness(projectRoot string, execCtx doctorExecContext) error {
-	checkCmd := "set -euo pipefail; getent hosts registry-1.docker.io >/dev/null; status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://registry-1.docker.io/v2/); [ \"$status\" = \"200\" ] || [ \"$status\" = \"401\" ]"
+	checkCmd := "set -euo pipefail; getent ahostsv4 registry-1.docker.io >/dev/null 2>&1 || getent hosts registry-1.docker.io >/dev/null; status=$(curl -4 -sS -o /dev/null -w '%{http_code}' --max-time 20 https://registry-1.docker.io/v2/ || true); if [ \"$status\" != \"200\" ] && [ \"$status\" != \"401\" ]; then status=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 20 https://registry-1.docker.io/v2/ || true); fi; [ \"$status\" = \"200\" ] || [ \"$status\" = \"401\" ]"
 	var lastOut string
 	for attempt := 1; attempt <= 3; attempt++ {
 		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)

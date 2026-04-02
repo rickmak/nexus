@@ -840,6 +840,41 @@ func TestBootstrapDoctorExecContextFirecrackerFailsOnRegistryReadiness(t *testin
 	}
 }
 
+func TestEnsureFirecrackerRegistryReadinessUsesIPv4CurlFallback(t *testing.T) {
+	originalRunner := doctorCheckCommandRunner
+	t.Cleanup(func() {
+		doctorCheckCommandRunner = originalRunner
+	})
+
+	var capturedCheckCmd string
+	doctorCheckCommandRunner = func(ctx context.Context, projectRoot, phase, name string, attempt, attempts int, timeout time.Duration, command string, args []string, execCtx doctorExecContext) (string, error) {
+		if name != "firecracker-network-readiness" {
+			return "ok", nil
+		}
+		if command != "bash" || len(args) != 2 || args[0] != "-lc" {
+			return "", fmt.Errorf("unexpected command: %s %v", command, args)
+		}
+
+		if strings.Contains(args[1], "curl") {
+			capturedCheckCmd = args[1]
+			return "401", nil
+		}
+
+		return "diagnostics", nil
+	}
+
+	err := ensureFirecrackerRegistryReadiness(t.TempDir(), doctorExecContext{backend: "firecracker", fcName: "nexus-firecracker-ci", fcExec: "sudo-lxc"})
+	if err != nil {
+		t.Fatalf("expected readiness check to pass, got %v", err)
+	}
+	if capturedCheckCmd == "" {
+		t.Fatal("expected to capture readiness check command")
+	}
+	if !strings.Contains(capturedCheckCmd, "curl -4") {
+		t.Fatalf("expected readiness check to include IPv4 curl fallback, got %q", capturedCheckCmd)
+	}
+}
+
 func TestResolveCheckCommandHostFallback(t *testing.T) {
 	cmd, args, env, label := resolveCheckCommand("/tmp/project", "bash", []string{"-lc", "echo ok"}, doctorExecContext{backend: "lxc"})
 	if cmd != "bash" {
