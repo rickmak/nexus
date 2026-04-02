@@ -107,28 +107,37 @@ When no `runtime` block is present, Nexus selects a backend automatically.
 
 ### Firecracker Host Setup
 
+Native Firecracker requires kernel and rootfs images, plus the Firecracker binary.
+
 Linux host prerequisites:
 
 ```bash
 sudo apt-get update
 sudo apt-get install -y firecracker
-vmctl-firecracker --version
+# Download or build kernel and rootfs images
+export NEXUS_FIRECRACKER_KERNEL=/var/lib/nexus/vmlinux.bin
+export NEXUS_FIRECRACKER_ROOTFS=/var/lib/nexus/rootfs.ext4
 ```
 
-macOS host prerequisites (Lima path):
+Required environment variables when using firecracker backend:
 
-```bash
-brew install lima qemu
-limactl start --name=nexus-firecracker
-limactl shell nexus-firecracker -- sudo apt-get update
-limactl shell nexus-firecracker -- sudo apt-get install -y firecracker
-limactl shell nexus-firecracker -- vmctl-firecracker --version
-```
+| Variable | Description |
+|----------|-------------|
+| `NEXUS_FIRECRACKER_KERNEL` | Path to Firecracker kernel image (required) |
+| `NEXUS_FIRECRACKER_ROOTFS` | Path to Firecracker rootfs image (required) |
+
+Removed environment variables (no longer supported):
+
+| Variable | Status |
+|----------|--------|
+| `NEXUS_DOCTOR_FIRECRACKER_EXEC_MODE` | Removed in native firecracker cutover |
+| `NEXUS_DOCTOR_FIRECRACKER_INSTANCE` | Removed in native firecracker cutover |
+| `NEXUS_DOCTOR_FIRECRACKER_DOCKER_MODE` | Removed in native firecracker cutover |
 
 Operational guardrails:
 
-- keep ballooning disabled by default (`--balloon off`)
-- enforce memory ceilings through `vmctl-firecracker` options
+- keep ballooning disabled by default
+- enforce memory ceilings through Firecracker machine configuration
 - run lifecycle canary regularly: create -> pause -> fork -> resume -> destroy
 
 ## Capability Requirements
