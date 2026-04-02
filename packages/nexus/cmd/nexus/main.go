@@ -557,14 +557,20 @@ func bootstrapContainerExecContext(projectRoot string, execCtx doctorExecContext
 	}
 
 	if hostProxyMode {
-		for attempt := 1; attempt <= 3; attempt++ {
-			if ok, _ := runCapabilityChecks(); ok {
+		var verifyOut string
+		for attempt := 1; attempt <= 6; attempt++ {
+			if ok, out := runCapabilityChecks(); ok {
 				return nil
+			} else {
+				verifyOut = out
 			}
 			time.Sleep(time.Duration(attempt*2) * time.Second)
 		}
-		fmt.Printf("bootstrap %s: host-proxy docker mode unavailable, falling back to in-guest dockerd startup\n", backendLabel)
-		_ = os.Setenv("NEXUS_DOCTOR_FIRECRACKER_DOCKER_MODE", "")
+		diagnostics := collectDockerDiagnostics()
+		if diagnostics != "" {
+			return fmt.Errorf("bootstrap %s host-proxy docker mode unavailable: %s\n%s", backendLabel, strings.TrimSpace(verifyOut), diagnostics)
+		}
+		return fmt.Errorf("bootstrap %s host-proxy docker mode unavailable: %s", backendLabel, strings.TrimSpace(verifyOut))
 	}
 
 	startDockerCmd := "if command -v systemctl >/dev/null 2>&1; then systemctl enable docker >/dev/null 2>&1 || true; systemctl start docker >/dev/null 2>&1 || true; fi; if ! docker info >/dev/null 2>&1; then nohup dockerd --host=unix:///var/run/docker.sock --storage-driver=vfs --iptables=false --bridge=none --userland-proxy=false >/tmp/nexus-doctor-dockerd.log 2>&1 & sleep 5; fi"

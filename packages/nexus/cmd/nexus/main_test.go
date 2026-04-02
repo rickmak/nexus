@@ -1102,6 +1102,54 @@ func TestBootstrapDoctorExecContextLXCStartsDockerWhenInfoFails(t *testing.T) {
 	}
 }
 
+func TestBootstrapContainerExecContextFirecrackerHostProxyDoesNotFallbackToGuestDockerd(t *testing.T) {
+	originalRunner := doctorCheckCommandRunner
+	t.Cleanup(func() {
+		doctorCheckCommandRunner = originalRunner
+	})
+
+	t.Setenv("NEXUS_DOCTOR_FIRECRACKER_DOCKER_MODE", "host-proxy")
+
+	startCalls := 0
+	hostProxyChecks := 0
+
+	doctorCheckCommandRunner = func(ctx context.Context, projectRoot, phase, name string, attempt, attempts int, timeout time.Duration, command string, args []string, execCtx doctorExecContext) (string, error) {
+		if execCtx.backend != "firecracker" {
+			return "", fmt.Errorf("unexpected backend: %s", execCtx.backend)
+		}
+
+		if command == "bash" && len(args) == 2 && args[0] == "-lc" && strings.Contains(args[1], "systemctl enable docker") {
+			startCalls++
+			return "guest start attempted", nil
+		}
+
+		if command == "docker" && reflect.DeepEqual(args, []string{"info"}) {
+			hostProxyChecks++
+			return "ERROR: error during connect", errors.New("proxy unavailable")
+		}
+
+		if command == "docker" && reflect.DeepEqual(args, []string{"compose", "version"}) {
+			return "compose ok", nil
+		}
+
+		return "ok", nil
+	}
+
+	err := bootstrapContainerExecContext(t.TempDir(), doctorExecContext{backend: "firecracker", fcName: "nexus-firecracker-ci", fcExec: "sudo-lxc"}, "firecracker", false)
+	if err == nil {
+		t.Fatal("expected host-proxy bootstrap failure when docker info stays unavailable")
+	}
+	if !strings.Contains(err.Error(), "host-proxy docker mode unavailable") {
+		t.Fatalf("expected host-proxy unavailable error, got %v", err)
+	}
+	if hostProxyChecks == 0 {
+		t.Fatal("expected host-proxy checks to run")
+	}
+	if startCalls != 0 {
+		t.Fatalf("expected no guest dockerd startup attempts, got %d", startCalls)
+	}
+}
+
 func TestBootstrapDoctorExecContextLXCInstallsWhenStartDoesNotRecover(t *testing.T) {
 	originalRunner := doctorCheckCommandRunner
 	originalInstallRunner := bootstrapInstallCommandRunner
