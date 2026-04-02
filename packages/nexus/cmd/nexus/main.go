@@ -370,6 +370,7 @@ func seedFirecrackerDockerTooling(projectRoot string, execCtx doctorExecContext)
 
 	hostSocket := detectHostDockerSocket()
 	if hostSocket != "" {
+		_ = os.Setenv("NEXUS_DOCTOR_FIRECRACKER_DOCKER_MODE", "host-proxy")
 		rmCtx, rmCancel := context.WithTimeout(context.Background(), 45*time.Second)
 		_, _ = firecrackerHostCommandRunner(rmCtx, execCtx, "config", "device", "remove", execCtx.fcName, "docker-sock")
 		rmCancel()
@@ -392,15 +393,16 @@ func seedFirecrackerDockerTooling(projectRoot string, execCtx doctorExecContext)
 		dockerWrapper := strings.Join([]string{
 			"#!/usr/bin/env sh",
 			"if [ -z \"${DOCKER_HOST:-}\" ] && [ -S /tmp/nexus-host-docker.sock ]; then",
-			"  if /usr/bin/docker --host unix:///tmp/nexus-host-docker.sock info >/dev/null 2>&1; then",
-			"    export DOCKER_HOST=unix:///tmp/nexus-host-docker.sock",
-			"  fi",
+			"  export DOCKER_HOST=unix:///tmp/nexus-host-docker.sock",
 			"fi",
 			"exec /usr/bin/docker \"$@\"",
 		}, "\n") + "\n"
 		if err := writeExecutableScriptInExecContext(projectRoot, execCtx, "runtime-backend-capabilities", "/usr/local/bin/docker", dockerWrapper); err != nil {
 			return fmt.Errorf("configure firecracker docker wrapper failed: %w", err)
 		}
+	}
+	if hostSocket == "" {
+		_ = os.Setenv("NEXUS_DOCTOR_FIRECRACKER_DOCKER_MODE", "")
 	}
 
 	return nil
@@ -521,6 +523,7 @@ func configureFirecrackerDNS(projectRoot string, execCtx doctorExecContext) erro
 
 func bootstrapContainerExecContext(projectRoot string, execCtx doctorExecContext, backendLabel string, allowInstall bool) error {
 	timeout := 5 * time.Minute
+	hostProxyMode := execCtx.backend == "firecracker" && strings.EqualFold(strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_FIRECRACKER_DOCKER_MODE")), "host-proxy")
 	collectDockerDiagnostics := func() string {
 		diagCmd := "set +e; echo '--- docker binary ---'; command -v docker || true; echo '--- docker version ---'; docker version || true; echo '--- docker info ---'; docker info || true; echo '--- dockerd ps ---'; ps -ef | grep '[d]ockerd' || true; echo '--- dockerd log ---'; cat /tmp/nexus-doctor-dockerd.log || true; if command -v systemctl >/dev/null 2>&1; then echo '--- systemctl status docker ---'; systemctl status docker --no-pager || true; fi"
 		diagCtx, diagCancel := context.WithTimeout(context.Background(), 45*time.Second)
@@ -551,6 +554,20 @@ func bootstrapContainerExecContext(projectRoot string, execCtx doctorExecContext
 
 	if ok, _ := runCapabilityChecks(); ok {
 		return nil
+	}
+
+	if hostProxyMode {
+		for attempt := 1; attempt <= 3; attempt++ {
+			if ok, _ := runCapabilityChecks(); ok {
+				return nil
+			}
+			time.Sleep(time.Duration(attempt*2) * time.Second)
+		}
+		diagnostics := collectDockerDiagnostics()
+		if diagnostics != "" {
+			return fmt.Errorf("bootstrap %s tooling verification failed in host-proxy mode\n%s", backendLabel, diagnostics)
+		}
+		return fmt.Errorf("bootstrap %s tooling verification failed in host-proxy mode", backendLabel)
 	}
 
 	startDockerCmd := "if command -v systemctl >/dev/null 2>&1; then systemctl enable docker >/dev/null 2>&1 || true; systemctl start docker >/dev/null 2>&1 || true; fi; if ! docker info >/dev/null 2>&1; then nohup dockerd --host=unix:///var/run/docker.sock --storage-driver=vfs --iptables=false --bridge=none >/tmp/nexus-doctor-dockerd.log 2>&1 & sleep 5; fi"
