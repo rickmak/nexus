@@ -1066,6 +1066,10 @@ func TestRunInitRuntimeBootstrapReturnsFastErrorInNonInteractiveNoSudoNonRoot(t 
 }
 
 func TestRunInitRuntimeBootstrapIgnoresKVMRefreshNeededWhenPrivileged(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("kvm refresh bootstrap behavior is Linux-specific")
+	}
+
 	origIsRoot := initRuntimeBootstrapIsRootFn
 	origSudoOK := initRuntimeBootstrapSudoOKFn
 	origIsTTY := initRuntimeBootstrapIsTTYFn
