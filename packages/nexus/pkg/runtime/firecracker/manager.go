@@ -2,7 +2,6 @@ package firecracker
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -401,14 +400,6 @@ func (m *Manager) Get(workspaceID string) (*Instance, error) {
 func createWorkspaceImage(projectRoot, imagePath string) error {
 	if strings.TrimSpace(projectRoot) == "" {
 		return fmt.Errorf("project root is required for workspace image")
-	}
-
-	requiredPath := filepath.Join(projectRoot, ".nexus", "lifecycles", "start.sh")
-	if _, statErr := os.Stat(requiredPath); statErr != nil {
-		if errors.Is(statErr, os.ErrNotExist) {
-			return fmt.Errorf("workspace image source missing required lifecycle script: %s", requiredPath)
-		}
-		return fmt.Errorf("stat required lifecycle script for workspace image: %w", statErr)
 	}
 
 	projectSizeBytes, err := directorySizeBytes(projectRoot)
