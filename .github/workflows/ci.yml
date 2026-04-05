@@ -70,7 +70,7 @@ jobs:
         working-directory: packages/nexus
         run: |
           if [[ "${{ matrix.os }}" == "macos-latest" ]]; then
-            go test ./cmd/nexus -count=1 -run 'TestRunInit'
+            go test ./cmd/nexus -count=1 -run 'TestRunInit|TestDarwinBootstrap|TestEnsurePersistentLimaInstance'
           else
             go test ./cmd/nexus -count=1 -run 'TestRunInit|TestRunExec'
           fi
