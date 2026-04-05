@@ -1361,8 +1361,8 @@ func runDoctorLifecycleStart(projectRoot string, execCtx doctorExecContext) erro
 		args = []string{".nexus/lifecycles/start.sh"}
 		contextLabel = "lifecycle-start-script"
 	} else if hasComposeTarget(projectRoot) {
-		command = "docker"
-		args = []string{"compose", "up", "-d", "--build"}
+		command = "sh"
+		args = []string{"-lc", "if [ -f Makefile ] && command -v make >/dev/null 2>&1; then if grep -q '^secret:' Makefile; then make secret; fi; fi; export BUILDKIT_PROGRESS=plain; docker compose build --progress=plain; docker compose up -d --no-build"}
 		contextLabel = "lifecycle-start-compose"
 	} else if hasMakeTarget(projectRoot, "start") {
 		command = "make"

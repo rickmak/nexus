@@ -254,12 +254,14 @@ func TestRunDoctorLifecycleStartFallsBackToCompose(t *testing.T) {
 	called := false
 	doctorCheckCommandRunner = func(ctx context.Context, projectRoot, phase, name string, attempt, attempts int, timeout time.Duration, command string, args []string, execCtx doctorExecContext) (string, error) {
 		called = true
-		if command != "docker" {
-			t.Fatalf("expected docker command, got %q", command)
+		if command != "sh" {
+			t.Fatalf("expected shell command, got %q", command)
 		}
-		expected := []string{"compose", "up", "-d", "--build"}
-		if !reflect.DeepEqual(args, expected) {
+		if len(args) != 2 || args[0] != "-lc" {
 			t.Fatalf("unexpected args: %v", args)
+		}
+		if !strings.Contains(args[1], "docker compose build --progress=plain") || !strings.Contains(args[1], "docker compose up -d --no-build") {
+			t.Fatalf("expected compose build+up commands in shell script, got %q", args[1])
 		}
 		return "ok", nil
 	}
