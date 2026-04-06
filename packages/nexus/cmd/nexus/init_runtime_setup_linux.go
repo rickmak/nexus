@@ -24,16 +24,16 @@ func runInitRuntimeBootstrapLinux(projectRoot, runtimeName string) error {
 		return nil
 	}
 
-	if initRuntimeBootstrapManualSetupRequired() {
-		return initRuntimeBootstrapManualError(projectRoot)
-	}
-
 	if initRuntimeBootstrapSkipFastFailFn != nil && initRuntimeBootstrapSkipFastFailFn() {
 		err := runSetupFirecracker(io.Discard)
 		if errors.Is(err, errKVMGroupRefreshNeeded) && (initRuntimeBootstrapIsRootFn() || initRuntimeBootstrapSudoOKFn()) {
 			return nil
 		}
 		return err
+	}
+
+	if initRuntimeBootstrapManualSetupRequired() {
+		return initRuntimeBootstrapManualError(projectRoot)
 	}
 
 	if err := runSetupFirecracker(io.Discard); err != nil {
