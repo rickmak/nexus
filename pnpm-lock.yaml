@@ -20,6 +20,9 @@ importers:
       '@types/node':
         specifier: ^20.0.0
         version: 20.19.33
+      conventional-changelog-conventionalcommits:
+        specifier: ^8.0.0
+        version: 8.0.0
       semantic-release:
         specifier: ^24.2.3
         version: 24.2.9(typescript@5.9.3)
@@ -681,6 +684,10 @@ packages:
 
   conventional-changelog-angular@8.3.1:
     resolution: {integrity: sha512-6gfI3otXK5Ph5DfCOI1dblr+kN3FAm5a97hYoQkqNZxOaYa5WKfXH+AnpsmS+iUH2mgVC2Cg2Qw9m5OKcmNrIg==}
+    engines: {node: '>=18'}
+
+  conventional-changelog-conventionalcommits@8.0.0:
+    resolution: {integrity: sha512-eOvlTO6OcySPyyyk8pKz2dP4jjElYunj9hn9/s0OB+gapTO8zwS9UQWrZ1pmF2hFs3vw1xhonOLGcGjy/zgsuA==}
     engines: {node: '>=18'}
 
   conventional-changelog-writer@8.4.0:
@@ -2948,6 +2955,10 @@ snapshots:
       proto-list: 1.2.4
 
   conventional-changelog-angular@8.3.1:
+    dependencies:
+      compare-func: 2.0.0
+
+  conventional-changelog-conventionalcommits@8.0.0:
     dependencies:
       compare-func: 2.0.0
 
