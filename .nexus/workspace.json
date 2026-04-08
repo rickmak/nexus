@@ -3,7 +3,8 @@
   "version": 1,
   "runtime": {
     "required": [
-      "firecracker"
+      "linux",
+      "local",
     ],
     "selection": "prefer-first"
   },

@@ -29,7 +29,6 @@ func TestWorkspaceConfig_ReadinessCheckNameRequired(t *testing.T) {
 func TestWorkspaceConfig_ValidMinimal(t *testing.T) {
 	cfg := WorkspaceConfig{
 		Version: 1,
-		Runtime: RuntimeConfig{Required: []string{"local"}},
 	}
 	err := cfg.ValidateBasic()
 	if err != nil {
@@ -76,60 +75,11 @@ func TestWorkspaceConfig_DoctorProbeRetriesValidation(t *testing.T) {
 func TestWorkspaceConfig_RuntimeAndDoctorTestsValidation(t *testing.T) {
 	cfg := WorkspaceConfig{
 		Version:      1,
-		Runtime:      RuntimeConfig{Required: []string{"firecracker"}, Selection: "prefer-first"},
 		Capabilities: CapabilityRequirements{Required: []string{"spotlight.tunnel"}},
 		Doctor:       DoctorConfig{Tests: []DoctorCommandCheck{{Name: "auth-flow", Command: "bash", Args: []string{".nexus/lifecycles/test-auth-flow.sh"}, Required: true}}},
 	}
 	if err := cfg.ValidateBasic(); err != nil {
 		t.Fatalf("expected valid config, got %v", err)
-	}
-}
-
-func TestRuntimeRequired_AllowsOnlyFirecracker(t *testing.T) {
-	cfg := WorkspaceConfig{
-		Version: 1,
-		Runtime: RuntimeConfig{Required: []string{"firecracker"}, Selection: "prefer-first"},
-	}
-
-	if err := cfg.ValidateBasic(); err != nil {
-		t.Fatalf("expected firecracker runtime to validate, got %v", err)
-	}
-}
-
-func TestRuntimeRequired_RejectsLegacyAndGenericBackends(t *testing.T) {
-	for _, backend := range []string{"dind", "lxc", "vm"} {
-		cfg := WorkspaceConfig{
-			Version: 1,
-			Runtime: RuntimeConfig{Required: []string{backend}, Selection: "prefer-first"},
-		}
-
-		if err := cfg.ValidateBasic(); err == nil {
-			t.Fatalf("expected %s to be rejected", backend)
-		}
-	}
-}
-
-func TestWorkspaceConfig_InvalidRuntimeRequiredValue(t *testing.T) {
-	cfg := WorkspaceConfig{
-		Version: 1,
-		Runtime: RuntimeConfig{Required: []string{"invalid-backend"}},
-	}
-
-	err := cfg.ValidateBasic()
-	if err == nil {
-		t.Fatal("expected validation error for invalid runtime.required value")
-	}
-}
-
-func TestWorkspaceConfig_InvalidRuntimeSelection(t *testing.T) {
-	cfg := WorkspaceConfig{
-		Version: 1,
-		Runtime: RuntimeConfig{Selection: "invalid-selection"},
-	}
-
-	err := cfg.ValidateBasic()
-	if err == nil {
-		t.Fatal("expected validation error for invalid runtime.selection")
 	}
 }
 

@@ -3,13 +3,42 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspacemgr"
 )
+
+func setupRepoWithWorkspaceConfig(t *testing.T, workspaceConfig string) string {
+	t.Helper()
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	tmp := t.TempDir()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir temp: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(cwd)
+	})
+
+	repo := filepath.Join("repos", fmt.Sprintf("%s-repo", strings.ToLower(strings.ReplaceAll(t.Name(), "/", "-"))))
+	if err := os.MkdirAll(filepath.Join(repo, ".nexus"), 0o755); err != nil {
+		t.Fatalf("mkdir repo .nexus: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, ".nexus", "workspace.json"), []byte(workspaceConfig), 0o644); err != nil {
+		t.Fatalf("write workspace config: %v", err)
+	}
+
+	return "./" + repo
+}
 
 func TestHandleWorkspaceCreate(t *testing.T) {
 	mgr := workspacemgr.NewManager(t.TempDir())
@@ -38,17 +67,19 @@ func TestHandleWorkspaceCreate(t *testing.T) {
 func TestHandleWorkspaceCreate_WithFactory(t *testing.T) {
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
+	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
 	// Create workspace config with runtime.required
 	if err := os.MkdirAll(filepath.Join(mgrRoot, ".nexus"), 0o755); err != nil {
 		t.Fatalf("create .nexus dir: %v", err)
 	}
-	configData := []byte(`{"version":1,"runtime":{"required":["firecracker"],"selection":"prefer-first"}}`)
+	configData := []byte(`{"version":1}`)
 	if err := os.WriteFile(filepath.Join(mgrRoot, ".nexus", "workspace.json"), configData, 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
 	factory := runtime.NewFactory([]runtime.Capability{
+		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: true},
 	}, map[string]runtime.Driver{
 		"firecracker": &mockDriver{backend: "firecracker"},
@@ -56,7 +87,7 @@ func TestHandleWorkspaceCreate_WithFactory(t *testing.T) {
 
 	params, err := json.Marshal(WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
-			Repo:          "git@example/repo.git",
+			Repo:          repo,
 			Ref:           "main",
 			WorkspaceName: "alpha",
 			AgentProfile:  "default",
@@ -81,16 +112,18 @@ func TestHandleWorkspaceCreate_WithFactory(t *testing.T) {
 func TestHandleWorkspaceCreate_ConfigRequiredBackendHonored(t *testing.T) {
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
+	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
 	if err := os.MkdirAll(filepath.Join(mgrRoot, ".nexus"), 0o755); err != nil {
 		t.Fatalf("create .nexus dir: %v", err)
 	}
-	configData := []byte(`{"version":1,"runtime":{"required":["firecracker"],"selection":"prefer-first"}}`)
+	configData := []byte(`{"version":1}`)
 	if err := os.WriteFile(filepath.Join(mgrRoot, ".nexus", "workspace.json"), configData, 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
 	factory := runtime.NewFactory([]runtime.Capability{
+		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: true},
 	}, map[string]runtime.Driver{
 		"firecracker": &mockDriver{backend: "firecracker"},
@@ -98,7 +131,7 @@ func TestHandleWorkspaceCreate_ConfigRequiredBackendHonored(t *testing.T) {
 
 	params, err := json.Marshal(WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
-			Repo:          "git@example/repo.git",
+			Repo:          repo,
 			Ref:           "main",
 			WorkspaceName: "alpha",
 			AgentProfile:  "default",
@@ -122,8 +155,10 @@ func TestHandleWorkspaceCreate_ConfigRequiredBackendHonored(t *testing.T) {
 
 func TestHandleWorkspaceCreate_FactoryWithUnavailableCapability(t *testing.T) {
 	mgr := workspacemgr.NewManager(t.TempDir())
+	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
 	factory := runtime.NewFactory([]runtime.Capability{
+		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: false},
 	}, map[string]runtime.Driver{
 		"firecracker": &mockDriver{backend: "firecracker"},
@@ -131,7 +166,7 @@ func TestHandleWorkspaceCreate_FactoryWithUnavailableCapability(t *testing.T) {
 
 	params, err := json.Marshal(WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
-			Repo:          "git@example/repo.git",
+			Repo:          repo,
 			Ref:           "main",
 			WorkspaceName: "alpha",
 			AgentProfile:  "default",
@@ -147,9 +182,10 @@ func TestHandleWorkspaceCreate_FactoryWithUnavailableCapability(t *testing.T) {
 	}
 }
 
-func TestHandleWorkspaceCreate_MissingRuntimeRequired(t *testing.T) {
+func TestHandleWorkspaceCreate_MissingRuntimeRequiredUsesDefaultLinux(t *testing.T) {
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
+	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
 	// Create workspace config WITHOUT runtime.required
 	if err := os.MkdirAll(filepath.Join(mgrRoot, ".nexus"), 0o755); err != nil {
@@ -161,6 +197,7 @@ func TestHandleWorkspaceCreate_MissingRuntimeRequired(t *testing.T) {
 	}
 
 	factory := runtime.NewFactory([]runtime.Capability{
+		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: true},
 	}, map[string]runtime.Driver{
 		"firecracker": &mockDriver{backend: "firecracker"},
@@ -168,7 +205,86 @@ func TestHandleWorkspaceCreate_MissingRuntimeRequired(t *testing.T) {
 
 	params, err := json.Marshal(WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
-			Repo:          "git@example/repo.git",
+			Repo:          repo,
+			Ref:           "main",
+			WorkspaceName: "alpha",
+			AgentProfile:  "default",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+
+	result, rpcErr := HandleWorkspaceCreate(context.Background(), params, mgr, factory)
+	if rpcErr != nil {
+		t.Fatalf("expected success when runtime config is missing, got %+v", rpcErr)
+	}
+	if result == nil || result.Workspace == nil {
+		t.Fatalf("expected workspace, got %#v", result)
+	}
+	if result.Workspace.Backend != "firecracker" {
+		t.Fatalf("expected backend firecracker from default linux requirement, got %q", result.Workspace.Backend)
+	}
+}
+
+func TestHandleWorkspaceCreate_MissingRuntimeRequiredDoesNotUseSpecBackend(t *testing.T) {
+	mgrRoot := t.TempDir()
+	mgr := workspacemgr.NewManager(mgrRoot)
+	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
+
+	if err := os.MkdirAll(filepath.Join(mgrRoot, ".nexus"), 0o755); err != nil {
+		t.Fatalf("create .nexus dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mgrRoot, ".nexus", "workspace.json"), []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	factory := runtime.NewFactory([]runtime.Capability{
+		{Name: "runtime.local", Available: true},
+	}, map[string]runtime.Driver{
+		"local": &mockDriver{backend: "local"},
+	})
+
+	params, err := json.Marshal(WorkspaceCreateParams{
+		Spec: workspacemgr.CreateSpec{
+			Repo:          repo,
+			Ref:           "main",
+			WorkspaceName: "alpha",
+			AgentProfile:  "default",
+			Backend:       "local",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+
+	_, rpcErr := HandleWorkspaceCreate(context.Background(), params, mgr, factory)
+	if rpcErr == nil {
+		t.Fatal("expected rpc error when runtime.required is missing")
+	}
+}
+
+func TestHandleWorkspaceCreate_MissingRuntimeRequiredDoesNotFallbackToLocal(t *testing.T) {
+	mgrRoot := t.TempDir()
+	mgr := workspacemgr.NewManager(mgrRoot)
+	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
+
+	if err := os.MkdirAll(filepath.Join(mgrRoot, ".nexus"), 0o755); err != nil {
+		t.Fatalf("create .nexus dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mgrRoot, ".nexus", "workspace.json"), []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	factory := runtime.NewFactory([]runtime.Capability{
+		{Name: "runtime.local", Available: true},
+	}, map[string]runtime.Driver{
+		"local": &mockDriver{backend: "local"},
+	})
+
+	params, err := json.Marshal(WorkspaceCreateParams{
+		Spec: workspacemgr.CreateSpec{
+			Repo:          repo,
 			Ref:           "main",
 			WorkspaceName: "alpha",
 			AgentProfile:  "default",
@@ -180,24 +296,27 @@ func TestHandleWorkspaceCreate_MissingRuntimeRequired(t *testing.T) {
 
 	_, rpcErr := HandleWorkspaceCreate(context.Background(), params, mgr, factory)
 	if rpcErr == nil {
-		t.Fatalf("expected rpc error for missing runtime.required, got nil")
-	}
-	if rpcErr.Code != -32602 {
-		t.Fatalf("expected ErrInvalidParams (-32602), got %d", rpcErr.Code)
+		t.Fatal("expected rpc error when runtime.required is missing")
 	}
 }
 
 type mockDriver struct {
-	backend string
+	backend  string
+	createFn func(ctx context.Context, req runtime.CreateRequest) error
 }
 
-func (d *mockDriver) Backend() string                                             { return d.backend }
-func (d *mockDriver) Create(ctx context.Context, req runtime.CreateRequest) error { return nil }
-func (d *mockDriver) Start(ctx context.Context, workspaceID string) error         { return nil }
-func (d *mockDriver) Stop(ctx context.Context, workspaceID string) error          { return nil }
-func (d *mockDriver) Restore(ctx context.Context, workspaceID string) error       { return nil }
-func (d *mockDriver) Pause(ctx context.Context, workspaceID string) error         { return nil }
-func (d *mockDriver) Resume(ctx context.Context, workspaceID string) error        { return nil }
+func (d *mockDriver) Backend() string { return d.backend }
+func (d *mockDriver) Create(ctx context.Context, req runtime.CreateRequest) error {
+	if d.createFn != nil {
+		return d.createFn(ctx, req)
+	}
+	return nil
+}
+func (d *mockDriver) Start(ctx context.Context, workspaceID string) error   { return nil }
+func (d *mockDriver) Stop(ctx context.Context, workspaceID string) error    { return nil }
+func (d *mockDriver) Restore(ctx context.Context, workspaceID string) error { return nil }
+func (d *mockDriver) Pause(ctx context.Context, workspaceID string) error   { return nil }
+func (d *mockDriver) Resume(ctx context.Context, workspaceID string) error  { return nil }
 func (d *mockDriver) Fork(ctx context.Context, workspaceID, childWorkspaceID string) error {
 	return nil
 }
@@ -279,6 +398,36 @@ func TestHandleWorkspaceStop_NotFound(t *testing.T) {
 	}
 }
 
+func TestHandleWorkspaceStart(t *testing.T) {
+	mgr := workspacemgr.NewManager(t.TempDir())
+	createParams, _ := json.Marshal(WorkspaceCreateParams{
+		Spec: workspacemgr.CreateSpec{
+			Repo:          "git@example/repo.git",
+			WorkspaceName: "alpha",
+			AgentProfile:  "default",
+		},
+	})
+	created, _ := HandleWorkspaceCreate(context.Background(), createParams, mgr, nil)
+
+	startParams, _ := json.Marshal(WorkspaceStartParams{ID: created.Workspace.ID})
+	result, rpcErr := HandleWorkspaceStart(context.Background(), startParams, mgr)
+	if rpcErr != nil {
+		t.Fatalf("unexpected rpc error: %+v", rpcErr)
+	}
+	if !result.Started {
+		t.Fatal("expected started=true")
+	}
+}
+
+func TestHandleWorkspaceStart_NotFound(t *testing.T) {
+	mgr := workspacemgr.NewManager(t.TempDir())
+	startParams, _ := json.Marshal(WorkspaceStartParams{ID: "missing"})
+	_, rpcErr := HandleWorkspaceStart(context.Background(), startParams, mgr)
+	if rpcErr == nil {
+		t.Fatal("expected workspace not found error")
+	}
+}
+
 func TestHandleWorkspaceRestore(t *testing.T) {
 	mgr := workspacemgr.NewManager(t.TempDir())
 	createParams, _ := json.Marshal(WorkspaceCreateParams{
@@ -318,17 +467,19 @@ func TestHandleWorkspaceRestore_NotFound(t *testing.T) {
 func TestHandleWorkspaceRestore_WithFactory(t *testing.T) {
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
+	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
 	// Create workspace config with runtime.required
 	if err := os.MkdirAll(filepath.Join(mgrRoot, ".nexus"), 0o755); err != nil {
 		t.Fatalf("create .nexus dir: %v", err)
 	}
-	configData := []byte(`{"version":1,"runtime":{"required":["firecracker"],"selection":"prefer-first"}}`)
+	configData := []byte(`{"version":1}`)
 	if err := os.WriteFile(filepath.Join(mgrRoot, ".nexus", "workspace.json"), configData, 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
 	factory := runtime.NewFactory([]runtime.Capability{
+		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: true},
 	}, map[string]runtime.Driver{
 		"firecracker": &mockDriver{backend: "firecracker"},
@@ -336,7 +487,7 @@ func TestHandleWorkspaceRestore_WithFactory(t *testing.T) {
 
 	createParams, _ := json.Marshal(WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
-			Repo:          "git@example/repo.git",
+			Repo:          repo,
 			WorkspaceName: "alpha",
 			AgentProfile:  "default",
 		},
@@ -365,17 +516,19 @@ func TestHandleWorkspaceRestore_WithFactory(t *testing.T) {
 func TestHandleWorkspaceRestore_WithFactory_PersistsBackendSelection(t *testing.T) {
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
+	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
 	// Create workspace config with runtime.required
 	if err := os.MkdirAll(filepath.Join(mgrRoot, ".nexus"), 0o755); err != nil {
 		t.Fatalf("create .nexus dir: %v", err)
 	}
-	configData := []byte(`{"version":1,"runtime":{"required":["firecracker"],"selection":"prefer-first"}}`)
+	configData := []byte(`{"version":1}`)
 	if err := os.WriteFile(filepath.Join(mgrRoot, ".nexus", "workspace.json"), configData, 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
 	factory := runtime.NewFactory([]runtime.Capability{
+		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: true},
 	}, map[string]runtime.Driver{
 		"firecracker": &mockDriver{backend: "firecracker"},
@@ -383,7 +536,7 @@ func TestHandleWorkspaceRestore_WithFactory_PersistsBackendSelection(t *testing.
 
 	createParams, _ := json.Marshal(WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
-			Repo:          "git@example/repo.git",
+			Repo:          repo,
 			WorkspaceName: "alpha",
 			AgentProfile:  "default",
 		},
@@ -422,8 +575,10 @@ func TestHandleWorkspaceRestore_WithFactory_PersistsBackendSelection(t *testing.
 
 func TestHandleWorkspaceRestore_FactoryWithUnavailableCapability(t *testing.T) {
 	mgr := workspacemgr.NewManager(t.TempDir())
+	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
 	factory := runtime.NewFactory([]runtime.Capability{
+		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: false},
 	}, map[string]runtime.Driver{
 		"firecracker": &mockDriver{backend: "firecracker"},
@@ -431,7 +586,7 @@ func TestHandleWorkspaceRestore_FactoryWithUnavailableCapability(t *testing.T) {
 
 	createParams, _ := json.Marshal(WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
-			Repo:          "git@example/repo.git",
+			Repo:          repo,
 			WorkspaceName: "alpha",
 			AgentProfile:  "default",
 		},
@@ -459,16 +614,18 @@ func TestHandleWorkspaceRestore_FactoryWithUnavailableCapability(t *testing.T) {
 func TestHandleWorkspaceRestore_ConfigRequiredBackendHonored(t *testing.T) {
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
+	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
 	if err := os.MkdirAll(filepath.Join(mgrRoot, ".nexus"), 0o755); err != nil {
 		t.Fatalf("create .nexus dir: %v", err)
 	}
-	configData := []byte(`{"version":1,"runtime":{"required":["firecracker"],"selection":"prefer-first"}}`)
+	configData := []byte(`{"version":1}`)
 	if err := os.WriteFile(filepath.Join(mgrRoot, ".nexus", "workspace.json"), configData, 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
 	factory := runtime.NewFactory([]runtime.Capability{
+		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: true},
 	}, map[string]runtime.Driver{
 		"firecracker": &mockDriver{backend: "firecracker"},
@@ -476,7 +633,7 @@ func TestHandleWorkspaceRestore_ConfigRequiredBackendHonored(t *testing.T) {
 
 	createParams, _ := json.Marshal(WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
-			Repo:          "git@example/repo.git",
+			Repo:          repo,
 			Ref:           "main",
 			WorkspaceName: "alpha",
 			AgentProfile:  "default",
@@ -557,7 +714,7 @@ func TestHandleWorkspaceFork(t *testing.T) {
 	})
 	created, _ := HandleWorkspaceCreate(context.Background(), createParams, mgr, nil)
 
-	forkParams, _ := json.Marshal(WorkspaceForkParams{ID: created.Workspace.ID, ChildWorkspaceName: "alpha-child"})
+	forkParams, _ := json.Marshal(WorkspaceForkParams{ID: created.Workspace.ID, ChildWorkspaceName: "alpha-child", ChildRef: "alpha-child"})
 	result, rpcErr := HandleWorkspaceFork(context.Background(), forkParams, mgr, nil)
 	if rpcErr != nil {
 		t.Fatalf("unexpected rpc error: %+v", rpcErr)
@@ -570,37 +727,71 @@ func TestHandleWorkspaceFork(t *testing.T) {
 	}
 }
 
-func TestHandleWorkspaceFork_WithFactoryLocalBackend(t *testing.T) {
+func TestHandleWorkspaceFork_WithFactoryLinuxRequiresFirecracker(t *testing.T) {
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
+	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
 	if err := os.MkdirAll(filepath.Join(mgrRoot, ".nexus"), 0o755); err != nil {
 		t.Fatalf("create .nexus dir: %v", err)
 	}
-	configData := []byte(`{"version":1,"runtime":{"required":["local"],"selection":"prefer-first"}}`)
+	configData := []byte(`{"version":1}`)
 	if err := os.WriteFile(filepath.Join(mgrRoot, ".nexus", "workspace.json"), configData, 0o644); err != nil {
 		t.Fatalf("write config: %v", err)
 	}
 
 	factory := runtime.NewFactory([]runtime.Capability{
-		{Name: "runtime.local", Available: true},
+		{Name: "runtime.linux", Available: true},
+		{Name: "runtime.firecracker", Available: false},
 	}, map[string]runtime.Driver{
-		"local": &mockDriver{backend: "local"},
+		"firecracker": &mockDriver{backend: "firecracker"},
 	})
 
 	createParams, _ := json.Marshal(WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
-			Repo:          "git@example/repo.git",
+			Repo:          repo,
 			WorkspaceName: "alpha",
 			AgentProfile:  "default",
 		},
 	})
-	created, rpcErr := HandleWorkspaceCreate(context.Background(), createParams, mgr, factory)
-	if rpcErr != nil {
-		t.Fatalf("create failed: %+v", rpcErr)
+	_, rpcErr := HandleWorkspaceCreate(context.Background(), createParams, mgr, factory)
+	if rpcErr == nil {
+		t.Fatal("expected create failure when runtime.required=linux and firecracker unavailable")
+	}
+}
+
+func TestHandleWorkspaceFork_WithFactoryLinuxBackendAfterRestartLikeState(t *testing.T) {
+	mgrRoot := t.TempDir()
+	mgr := workspacemgr.NewManager(mgrRoot)
+	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
+
+	if err := os.MkdirAll(filepath.Join(mgrRoot, ".nexus"), 0o755); err != nil {
+		t.Fatalf("create .nexus dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mgrRoot, ".nexus", "workspace.json"), []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
 	}
 
-	forkParams, _ := json.Marshal(WorkspaceForkParams{ID: created.Workspace.ID, ChildWorkspaceName: "alpha-child"})
+	lxcDriver := &mockDriver{backend: "firecracker"}
+	factory := runtime.NewFactory([]runtime.Capability{
+		{Name: "runtime.linux", Available: true},
+		{Name: "runtime.firecracker", Available: true},
+	}, map[string]runtime.Driver{
+		"firecracker": lxcDriver,
+	})
+
+	parent, err := mgr.Create(context.Background(), workspacemgr.CreateSpec{
+		Repo:          repo,
+		Ref:           "main",
+		WorkspaceName: "alpha",
+		AgentProfile:  "default",
+		Backend:       "firecracker",
+	})
+	if err != nil {
+		t.Fatalf("seed workspace failed: %v", err)
+	}
+
+	forkParams, _ := json.Marshal(WorkspaceForkParams{ID: parent.ID, ChildWorkspaceName: "alpha-child", ChildRef: "alpha-child"})
 	result, rpcErr := HandleWorkspaceFork(context.Background(), forkParams, mgr, factory)
 	if rpcErr != nil {
 		t.Fatalf("fork failed: %+v", rpcErr)
@@ -608,10 +799,133 @@ func TestHandleWorkspaceFork_WithFactoryLocalBackend(t *testing.T) {
 	if result == nil || result.Workspace == nil {
 		t.Fatalf("expected forked workspace, got %#v", result)
 	}
-	if result.Workspace.Backend != "local" {
-		t.Fatalf("expected child backend 'local', got %q", result.Workspace.Backend)
+	if result.Workspace.Backend != "firecracker" {
+		t.Fatalf("expected child backend 'firecracker', got %q", result.Workspace.Backend)
 	}
-	if result.Workspace.ParentWorkspaceID != created.Workspace.ID {
-		t.Fatalf("expected parent id %q, got %q", created.Workspace.ID, result.Workspace.ParentWorkspaceID)
+}
+
+func TestHandleWorkspacePause_WithFactoryLinuxBackendAfterRestartLikeState(t *testing.T) {
+	mgrRoot := t.TempDir()
+	mgr := workspacemgr.NewManager(mgrRoot)
+	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
+
+	if err := os.MkdirAll(filepath.Join(mgrRoot, ".nexus"), 0o755); err != nil {
+		t.Fatalf("create .nexus dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(mgrRoot, ".nexus", "workspace.json"), []byte(`{"version":1}`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	lxcDriver := &mockDriver{backend: "firecracker"}
+	factory := runtime.NewFactory([]runtime.Capability{
+		{Name: "runtime.linux", Available: true},
+		{Name: "runtime.firecracker", Available: true},
+	}, map[string]runtime.Driver{
+		"firecracker": lxcDriver,
+	})
+
+	ws, err := mgr.Create(context.Background(), workspacemgr.CreateSpec{
+		Repo:          repo,
+		Ref:           "main",
+		WorkspaceName: "alpha",
+		AgentProfile:  "default",
+		Backend:       "firecracker",
+	})
+	if err != nil {
+		t.Fatalf("seed workspace failed: %v", err)
+	}
+
+	_ = mgr.Start(ws.ID)
+
+	pauseParams, _ := json.Marshal(WorkspacePauseParams{ID: ws.ID})
+	result, rpcErr := HandleWorkspacePause(context.Background(), pauseParams, mgr, factory)
+	if rpcErr != nil {
+		t.Fatalf("pause failed: %+v", rpcErr)
+	}
+	if result == nil || !result.Paused {
+		t.Fatalf("expected paused=true, got %#v", result)
+	}
+}
+
+func TestHandleWorkspaceCreate_WithFactoryFirecrackerBootstrapsRuntime(t *testing.T) {
+	mgrRoot := t.TempDir()
+	mgr := workspacemgr.NewManager(mgrRoot)
+	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
+
+	calledCreate := false
+	factory := runtime.NewFactory([]runtime.Capability{{Name: "runtime.linux", Available: true}, {Name: "runtime.firecracker", Available: true}}, map[string]runtime.Driver{
+		"firecracker": &mockDriver{
+			backend: "firecracker",
+			createFn: func(ctx context.Context, req runtime.CreateRequest) error {
+				calledCreate = true
+				if req.WorkspaceID == "" {
+					t.Fatal("expected workspace id in runtime create request")
+				}
+				return nil
+			},
+		},
+	})
+
+	params, err := json.Marshal(WorkspaceCreateParams{
+		Spec: workspacemgr.CreateSpec{
+			Repo:          repo,
+			Ref:           "main",
+			WorkspaceName: "alpha",
+			AgentProfile:  "default",
+		},
+	})
+	if err != nil {
+		t.Fatalf("marshal params: %v", err)
+	}
+
+	result, rpcErr := HandleWorkspaceCreate(context.Background(), params, mgr, factory)
+	if rpcErr != nil {
+		t.Fatalf("unexpected rpc error: %+v", rpcErr)
+	}
+	if result == nil || result.Workspace == nil {
+		t.Fatalf("expected workspace, got %#v", result)
+	}
+	if result.Workspace.Backend != "firecracker" {
+		t.Fatalf("expected backend firecracker, got %q", result.Workspace.Backend)
+	}
+	if !calledCreate {
+		t.Fatal("expected runtime create to be called for firecracker backend")
+	}
+}
+
+func TestLoadRuntimeSelectionFromRepoConfig_Succeeds(t *testing.T) {
+	repo := setupRepoWithWorkspaceConfig(t, `{"version":1,"capabilities":{"required":["spotlight.tunnel"]}}`)
+
+	required, caps, err := loadRuntimeSelectionFromRepoConfig(repo)
+	if err != nil {
+		t.Fatalf("expected success, got %v", err)
+	}
+	if len(required) != 1 || required[0] != "linux" {
+		t.Fatalf("expected runtime.required [linux], got %v", required)
+	}
+	if len(caps) != 1 || caps[0] != "spotlight.tunnel" {
+		t.Fatalf("expected capabilities [spotlight.tunnel], got %v", caps)
+	}
+}
+
+func TestLoadRuntimeSelectionFromRepoConfig_MissingRuntimeRequiredDefaultsToLinux(t *testing.T) {
+	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
+
+	required, caps, err := loadRuntimeSelectionFromRepoConfig(repo)
+	if err != nil {
+		t.Fatalf("expected success when runtime.required is missing, got %v", err)
+	}
+	if len(required) != 1 || required[0] != "linux" {
+		t.Fatalf("expected default runtime.required [linux], got %v", required)
+	}
+	if len(caps) != 0 {
+		t.Fatalf("expected empty capabilities, got %v", caps)
+	}
+}
+
+func TestLoadRuntimeSelectionFromRepoConfig_NonLocalRepoFails(t *testing.T) {
+	_, _, err := loadRuntimeSelectionFromRepoConfig("git@github.com:org/repo.git")
+	if err == nil {
+		t.Fatal("expected error for non-local repo")
 	}
 }

@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -146,6 +149,7 @@ func runWorkspaceCreateCommand(args []string) {
 	ref := fs.String("ref", "", "branch / ref (default: repo default branch)")
 	name := fs.String("name", "", "workspace name (required)")
 	profile := fs.String("profile", "default", "agent profile")
+	backend := fs.String("backend", "", "runtime backend override (firecracker)")
 	_ = fs.Parse(args)
 
 	if *repo == "" || *name == "" {
@@ -161,11 +165,14 @@ func runWorkspaceCreateCommand(args []string) {
 	}
 	defer conn.Close()
 
+	repoValue := normalizeRepoForCreate(*repo)
+
 	spec := workspacemgr.CreateSpec{
-		Repo:          *repo,
+		Repo:          repoValue,
 		Ref:           *ref,
 		WorkspaceName: *name,
 		AgentProfile:  *profile,
+		Backend:       strings.TrimSpace(*backend),
 	}
 	var result struct {
 		Workspace workspacemgr.Workspace `json:"workspace"`
@@ -212,6 +219,40 @@ func runWorkspaceCreateCommand(args []string) {
 			}
 		}
 	}
+}
+
+func normalizeRepoForCreate(repo string) string {
+	repo = strings.TrimSpace(repo)
+	if repo == "" || looksLikeRemoteRepo(repo) {
+		return repo
+	}
+
+	if filepath.IsAbs(repo) {
+		return filepath.Clean(repo)
+	}
+
+	if strings.HasPrefix(repo, "./") || strings.HasPrefix(repo, "../") {
+		if abs, err := filepath.Abs(repo); err == nil {
+			return abs
+		}
+		return repo
+	}
+
+	if info, err := os.Stat(repo); err == nil && info.IsDir() {
+		if abs, absErr := filepath.Abs(repo); absErr == nil {
+			return abs
+		}
+	}
+
+	return repo
+}
+
+func looksLikeRemoteRepo(repo string) bool {
+	if strings.HasPrefix(repo, "git@") || strings.HasPrefix(repo, "ssh://") {
+		return true
+	}
+	u, err := url.Parse(repo)
+	return err == nil && u.Scheme != "" && u.Host != ""
 }
 
 // ── workspace stop ────────────────────────────────────────────────────────────
@@ -288,7 +329,12 @@ func runWorkspaceForkCommand(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("forked workspace %s  (id: %s)\n", result.Workspace.WorkspaceName, result.Workspace.ID)
+	ws := result.Workspace
+	fmt.Printf("forked workspace %s  (id: %s)\n", ws.WorkspaceName, ws.ID)
+
+	if strings.TrimSpace(ws.LocalWorktreePath) != "" {
+		fmt.Printf("local worktree:   %s\n", ws.LocalWorktreePath)
+	}
 }
 
 // ── workspace portal ─────────────────────────────────────────────────────────
@@ -345,7 +391,7 @@ func printWorkspaceUsage() {
 
 subcommands:
   list                  list all workspaces
-  create --repo <url> --name <name> [--ref <ref>] [--profile <profile>]
+  create --repo <url|path> --name <name> [--ref <ref>] [--profile <profile>] [--backend <backend>]
   stop <id>             stop a running workspace
   remove <id>           remove a workspace
   fork --id <id> --name <child-name>

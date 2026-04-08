@@ -4,6 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/inizio/nexus/packages/nexus/pkg/config"
 
@@ -32,6 +35,10 @@ type WorkspaceStopParams struct {
 	ID string `json:"id"`
 }
 
+type WorkspaceStartParams struct {
+	ID string `json:"id"`
+}
+
 type WorkspaceRestoreParams struct {
 	ID string `json:"id"`
 }
@@ -47,6 +54,7 @@ type WorkspaceResumeParams struct {
 type WorkspaceForkParams struct {
 	ID                 string `json:"id"`
 	ChildWorkspaceName string `json:"childWorkspaceName,omitempty"`
+	ChildRef           string `json:"childRef,omitempty"`
 }
 
 type WorkspaceCreateResult struct {
@@ -67,6 +75,10 @@ type WorkspaceRemoveResult struct {
 
 type WorkspaceStopResult struct {
 	Stopped bool `json:"stopped"`
+}
+
+type WorkspaceStartResult struct {
+	Started bool `json:"started"`
 }
 
 type WorkspaceRestoreResult struct {
@@ -96,18 +108,12 @@ func HandleWorkspaceCreate(ctx context.Context, params json.RawMessage, mgr *wor
 	spec := p.Spec
 
 	if factory != nil {
-		cfg, _, _ := config.LoadWorkspaceConfig(mgr.Root())
-		requiredBackends := cfg.Runtime.Required
-		if len(requiredBackends) == 0 {
-			return nil, &rpckit.RPCError{Code: rpckit.ErrInvalidParams.Code, Message: "runtime.required must be present and non-empty in workspace config"}
+		requiredBackends, requiredCaps, cfgErr := loadRuntimeSelectionFromRepoConfig(spec.Repo)
+		if cfgErr != nil {
+			return &WorkspaceCreateResult{}, &rpckit.RPCError{Code: rpckit.ErrInvalidParams.Code, Message: cfgErr.Error()}
 		}
-		selection := cfg.Runtime.Selection
-		if selection == "" {
-			selection = "prefer-first"
-		}
-		requiredCaps := cfg.Capabilities.Required
 
-		driver, err := factory.SelectDriver(requiredBackends, selection, requiredCaps)
+		driver, err := factory.SelectDriver(requiredBackends, requiredCaps)
 		if err != nil {
 			return &WorkspaceCreateResult{}, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
 		}
@@ -117,6 +123,11 @@ func HandleWorkspaceCreate(ctx context.Context, params json.RawMessage, mgr *wor
 	ws, err := mgr.Create(ctx, spec)
 	if err != nil {
 		return nil, rpckit.ErrInvalidParams
+	}
+
+	if rpcErr := ensureLocalRuntimeWorkspace(ctx, ws, factory); rpcErr != nil {
+		_ = mgr.Remove(ws.ID)
+		return nil, rpcErr
 	}
 
 	cfg, _, cfgErr := config.LoadWorkspaceConfig(ws.RootPath)
@@ -192,6 +203,19 @@ func HandleWorkspaceStop(_ context.Context, params json.RawMessage, mgr *workspa
 	return &WorkspaceStopResult{Stopped: true}, nil
 }
 
+func HandleWorkspaceStart(_ context.Context, params json.RawMessage, mgr *workspacemgr.Manager) (*WorkspaceStartResult, *rpckit.RPCError) {
+	var p WorkspaceStartParams
+	if err := json.Unmarshal(params, &p); err != nil {
+		return nil, rpckit.ErrInvalidParams
+	}
+
+	if err := mgr.Start(p.ID); err != nil {
+		return nil, rpckit.ErrWorkspaceNotFound
+	}
+
+	return &WorkspaceStartResult{Started: true}, nil
+}
+
 func HandleWorkspaceRestore(ctx context.Context, params json.RawMessage, mgr *workspacemgr.Manager, factory *runtime.Factory) (*WorkspaceRestoreResult, *rpckit.RPCError) {
 	var p WorkspaceRestoreParams
 	if err := json.Unmarshal(params, &p); err != nil {
@@ -207,18 +231,12 @@ func HandleWorkspaceRestore(ctx context.Context, params json.RawMessage, mgr *wo
 	var requiredBackends []string
 
 	if factory != nil {
-		cfg, _, _ := config.LoadWorkspaceConfig(mgr.Root())
-		requiredBackends = cfg.Runtime.Required
-		if len(requiredBackends) == 0 {
-			return nil, &rpckit.RPCError{Code: rpckit.ErrInvalidParams.Code, Message: "runtime.required must be present and non-empty in workspace config"}
+		requiredBackends, requiredCaps, cfgErr := loadRuntimeSelectionFromRepoConfig(ws.Repo)
+		if cfgErr != nil {
+			return &WorkspaceRestoreResult{}, &rpckit.RPCError{Code: rpckit.ErrInvalidParams.Code, Message: cfgErr.Error()}
 		}
-		selection := cfg.Runtime.Selection
-		if selection == "" {
-			selection = "prefer-first"
-		}
-		requiredCaps := cfg.Capabilities.Required
 
-		driver, err := factory.SelectDriver(requiredBackends, selection, requiredCaps)
+		driver, err := factory.SelectDriver(requiredBackends, requiredCaps)
 		if err != nil {
 			return &WorkspaceRestoreResult{}, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
 		}
@@ -275,7 +293,11 @@ func HandleWorkspacePause(ctx context.Context, params json.RawMessage, mgr *work
 	}
 
 	if factory != nil {
-		driver, err := factory.SelectDriver([]string{ws.Backend}, "prefer-first", nil)
+		if rpcErr := ensureLocalRuntimeWorkspace(ctx, ws, factory); rpcErr != nil {
+			return nil, rpcErr
+		}
+
+		driver, err := factory.SelectDriver([]string{ws.Backend}, nil)
 		if err != nil {
 			return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
 		}
@@ -304,7 +326,11 @@ func HandleWorkspaceResume(ctx context.Context, params json.RawMessage, mgr *wor
 	}
 
 	if factory != nil {
-		driver, err := factory.SelectDriver([]string{ws.Backend}, "prefer-first", nil)
+		if rpcErr := ensureLocalRuntimeWorkspace(ctx, ws, factory); rpcErr != nil {
+			return nil, rpcErr
+		}
+
+		driver, err := factory.SelectDriver([]string{ws.Backend}, nil)
 		if err != nil {
 			return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
 		}
@@ -327,7 +353,7 @@ func HandleWorkspaceFork(ctx context.Context, params json.RawMessage, mgr *works
 		return nil, rpckit.ErrInvalidParams
 	}
 
-	child, err := mgr.Fork(p.ID, p.ChildWorkspaceName)
+	child, err := mgr.Fork(p.ID, p.ChildWorkspaceName, p.ChildRef)
 	if err != nil {
 		return nil, rpckit.ErrWorkspaceNotFound
 	}
@@ -337,7 +363,11 @@ func HandleWorkspaceFork(ctx context.Context, params json.RawMessage, mgr *works
 		if !ok {
 			return nil, rpckit.ErrWorkspaceNotFound
 		}
-		driver, selErr := factory.SelectDriver([]string{parent.Backend}, "prefer-first", nil)
+		if rpcErr := ensureLocalRuntimeWorkspace(ctx, parent, factory); rpcErr != nil {
+			return nil, rpcErr
+		}
+
+		driver, selErr := factory.SelectDriver([]string{parent.Backend}, nil)
 		if selErr != nil {
 			return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", selErr)}
 		}
@@ -347,4 +377,50 @@ func HandleWorkspaceFork(ctx context.Context, params json.RawMessage, mgr *works
 	}
 
 	return &WorkspaceForkResult{Forked: true, Workspace: child}, nil
+}
+
+func loadRuntimeSelectionFromRepoConfig(repo string) ([]string, []string, error) {
+	repoPath := strings.TrimSpace(repo)
+	if repoPath == "" {
+		return nil, nil, fmt.Errorf("repo is required")
+	}
+	if !filepath.IsAbs(repoPath) {
+		abs, err := filepath.Abs(repoPath)
+		if err == nil {
+			repoPath = abs
+		}
+	}
+
+	info, err := os.Stat(repoPath)
+	if err != nil || !info.IsDir() {
+		return nil, nil, fmt.Errorf("repo must be a local directory with .nexus/workspace.json: %s", repo)
+	}
+
+	cfg, _, err := config.LoadWorkspaceConfig(repoPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load repo workspace config: %w", err)
+	}
+	return []string{"linux"}, cfg.Capabilities.Required, nil
+}
+
+func ensureLocalRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace, factory *runtime.Factory) *rpckit.RPCError {
+	if factory == nil || ws == nil || (ws.Backend != "firecracker" && ws.Backend != "seatbelt") {
+		return nil
+	}
+
+	driver, err := factory.SelectDriver([]string{ws.Backend}, nil)
+	if err != nil {
+		return &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
+	}
+
+	err = driver.Create(ctx, runtime.CreateRequest{
+		WorkspaceID:   ws.ID,
+		WorkspaceName: ws.WorkspaceName,
+		ProjectRoot:   ws.RootPath,
+	})
+	if err != nil && !strings.Contains(err.Error(), "already exists") {
+		return &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("runtime create failed: %v", err)}
+	}
+
+	return nil
 }

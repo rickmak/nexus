@@ -76,6 +76,9 @@ dist/
 packages/nexus/workspace-daemon
 packages/nexus/daemon
 packages/nexus/nexus
+packages/nexus/nexus-daemon
+packages/nexus/.air-tmp/
+packages/nexus/.air.toml
 
 # Nested nexus folder
 nexus/nexus/

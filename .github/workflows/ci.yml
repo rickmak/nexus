@@ -166,3 +166,161 @@ jobs:
           else
             go test ./cmd/nexus -count=1 -run 'TestDoctor_|TestResolveCheckCommand|TestRunCheckCommandWithExecContextFirecracker|TestBootstrapFirecracker'
           fi
+
+  pty-runtime-e2e:
+    name: PTY Runtime E2E (${{ matrix.scenario }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - scenario: linux-firecracker
+            os: ubuntu-latest
+            backend: firecracker
+            expected_backend: firecracker
+            optional: false
+          - scenario: macos-seatbelt-fallback
+            os: macos-latest
+            backend: ''
+            expected_backend: seatbelt
+            optional: false
+          - scenario: macos-firecracker-preferred
+            os: macos-latest
+            backend: firecracker
+            expected_backend: firecracker
+            optional: true
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+
+      - name: Run PTY remote routing verification suite
+        working-directory: packages/nexus
+        run: |
+          set -euo pipefail
+          go test ./pkg/server -count=1 -run 'TestPTYOpenUsesRemoteConnectorForFirecracker|TestPTYOpenUsesRemoteConnectorForSeatbelt|TestPTYOpenFirecrackerAliasFallsBackToDriverReportedBackend' -v
+
+      - name: Run live PTY smoke against daemon
+        working-directory: packages/nexus
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          PORT=8094
+          TOKEN=ci-token
+          WS_DIR="$(mktemp -d)"
+          RUNNER_OS_LOWER="$(printf '%s' "${RUNNER_OS}" | tr '[:upper:]' '[:lower:]')"
+          DAEMON_LOG="/tmp/nexus-daemon-${RUNNER_OS_LOWER}.log"
+          SMOKE_LOG="pty-remote-smoke-${RUNNER_OS_LOWER}.log"
+          EXPECTED_BACKEND="${{ matrix.expected_backend }}"
+          REQUESTED_BACKEND="${{ matrix.backend }}"
+
+          if [[ "${{ matrix.scenario }}" == "macos-firecracker-preferred" ]]; then
+            if ! command -v limactl >/dev/null 2>&1; then
+              brew install lima
+            fi
+            PROJECT_ROOT="$(mktemp -d)"
+            if ! go run ./cmd/nexus init --project-root "${PROJECT_ROOT}" --force; then
+              if [[ "${{ matrix.optional }}" == "true" ]]; then
+                echo "Skipping optional firecracker-preferred macOS scenario (bootstrap unavailable)"
+                exit 0
+              fi
+              echo "firecracker-preferred bootstrap failed" >&2
+              exit 1
+            fi
+          fi
+
+          DAEMON_PATH="${PATH}"
+          if [[ "${{ matrix.scenario }}" == "macos-seatbelt-fallback" ]]; then
+            if command -v limactl >/dev/null 2>&1; then
+              LIMA_PATH="$(command -v limactl)"
+              LIMA_DIR="$(dirname "${LIMA_PATH}")"
+              DAEMON_PATH="$(PATH="${PATH}" LIMA_DIR="${LIMA_DIR}" python3 -c 'import os; p=os.environ["PATH"].split(":"); ld=os.environ.get("LIMA_DIR"); print(":".join([x for x in p if x and x != ld]))')"
+            fi
+          fi
+
+          PATH="${DAEMON_PATH}" go run ./cmd/daemon --port "${PORT}" --workspace-dir "${WS_DIR}" --token "${TOKEN}" >"${DAEMON_LOG}" 2>&1 &
+          DAEMON_PID=$!
+          cleanup() {
+            if kill -0 "${DAEMON_PID}" >/dev/null 2>&1; then
+              kill "${DAEMON_PID}" >/dev/null 2>&1 || true
+              wait "${DAEMON_PID}" 2>/dev/null || true
+            fi
+            rm -rf "${WS_DIR}"
+          }
+          trap cleanup EXIT
+
+          for _ in $(seq 1 40); do
+            if curl -fsS "http://127.0.0.1:${PORT}/healthz" >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          curl -fsS "http://127.0.0.1:${PORT}/healthz" >/dev/null
+
+          TEST_REPO="$(mktemp -d)"
+          mkdir -p "${TEST_REPO}/.nexus"
+          cat > "${TEST_REPO}/.nexus/workspace.json" <<'JSON'
+          {
+            "version": 1
+          }
+          JSON
+          git -C "${TEST_REPO}" init -b main
+          git -C "${TEST_REPO}" config user.email ci@nexus.local
+          git -C "${TEST_REPO}" config user.name "Nexus CI"
+          touch "${TEST_REPO}/README.md"
+          git -C "${TEST_REPO}" add .
+          git -C "${TEST_REPO}" commit -m "init" >/dev/null
+
+          CREATE_CMD=(go run ./cmd/nexus workspace create \
+            --repo "${TEST_REPO}" \
+            --name "ci-pty-${RUNNER_OS_LOWER}-${RANDOM}" \
+            --profile "codex")
+          if [[ -n "${REQUESTED_BACKEND}" ]]; then
+            CREATE_CMD+=(--backend "${REQUESTED_BACKEND}")
+          fi
+
+          CREATE_OUTPUT=$(NEXUS_DAEMON_PORT="${PORT}" \
+            NEXUS_DAEMON_TOKEN="${TOKEN}" \
+            "${CREATE_CMD[@]}")
+          echo "${CREATE_OUTPUT}"
+          WORKSPACE_ID=$(printf '%s\n' "${CREATE_OUTPUT}" | sed -nE 's/.*\(id: ([^)]+)\).*/\1/p' | tail -n 1)
+          if [[ -z "${WORKSPACE_ID}" ]]; then
+            echo "failed to parse workspace id from create output" >&2
+            exit 1
+          fi
+
+          LIST_OUTPUT=$(NEXUS_DAEMON_PORT="${PORT}" \
+            NEXUS_DAEMON_TOKEN="${TOKEN}" \
+            go run ./cmd/nexus workspace list)
+          echo "${LIST_OUTPUT}"
+          if ! printf '%s\n' "${LIST_OUTPUT}" | grep -q "${WORKSPACE_ID}"; then
+            echo "workspace list did not include workspace ${WORKSPACE_ID}" >&2
+            exit 1
+          fi
+          if ! printf '%s\n' "${LIST_OUTPUT}" | grep "${WORKSPACE_ID}" | grep -q "${EXPECTED_BACKEND}"; then
+            echo "expected backend ${EXPECTED_BACKEND} for ${WORKSPACE_ID}" >&2
+            exit 1
+          fi
+
+          NEXUS_DAEMON_WS="ws://127.0.0.1:${PORT}" \
+          NEXUS_DAEMON_TOKEN="${TOKEN}" \
+          NEXUS_PTY_SMOKE_LOG="${SMOKE_LOG}" \
+          NEXUS_PTY_TIMEOUT_MS=120000 \
+          node --experimental-websocket scripts/pty-remote-smoke.js "${WORKSPACE_ID}"
+
+      - name: Archive PTY runtime logs (if present)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pty-runtime-e2e-${{ matrix.scenario }}
+          path: |
+            packages/nexus/pty-remote-smoke-*.log
+            /tmp/nexus-daemon-*.log
+          if-no-files-found: ignore
+          retention-days: 7
