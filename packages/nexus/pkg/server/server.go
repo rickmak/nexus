@@ -214,6 +214,10 @@ func (s *Server) routes() *http.ServeMux {
 		}
 	}
 
+	if os.Getenv("NEXUS_DEV_UI") == "" {
+		log.Printf("[portal] NEXUS_DEV_UI not set; serving embedded UI assets. For hot reload, run daemon with NEXUS_DEV_UI=http://localhost:5173")
+	}
+
 	mux.Handle("/portal/static/", http.StripPrefix("/portal/", http.FileServer(http.FS(portal.FS))))
 	if uiDist, err := fs.Sub(portal.FS, "ui_dist"); err == nil {
 		mux.Handle("/ui/static/", http.StripPrefix("/ui/static/", http.FileServer(http.FS(uiDist))))
@@ -476,6 +480,8 @@ func (s *Server) processRPC(msg *RPCMessage, conn *Connection) *RPCResponse {
 		result, err = handlers.HandleCapabilitiesList(ctx, msg.Params, s.runtimeFactory)
 	case "node.info":
 		result, err = handlers.HandleNodeInfo(ctx, msg.Params, s.nodeCfg, s.runtimeFactory)
+	case "os.pickDirectory":
+		result, err = handlers.HandlePickDirectory(ctx, msg.Params)
 	case "workspace.ready":
 		workspaceID := extractWorkspaceID(msg.Params)
 		if workspaceID == "" {

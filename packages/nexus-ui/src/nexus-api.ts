@@ -279,3 +279,13 @@ export async function setLocalWorktree(
     ...(mutagenSessionId ? { mutagenSessionId } : {}),
   });
 }
+
+export async function pickDirectory(prompt?: string): Promise<{ path: string; cancelled: boolean }> {
+  const res = await rpc.request<{ path?: string; cancelled?: boolean }>("os.pickDirectory", {
+    ...(prompt ? { prompt } : {}),
+  });
+  return {
+    path: String(res.path || ""),
+    cancelled: Boolean(res.cancelled),
+  };
+}

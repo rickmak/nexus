@@ -20,6 +20,7 @@ import {
   listSpotlight,
   removeWorkspace,
   restoreWorkspace,
+  pickDirectory,
 } from "./nexus-api";
 import type { SpotlightForward, WorkspaceRelationsGroup } from "@nexus/sdk";
 
@@ -58,19 +59,36 @@ const showCreate = ref(false);
 const createForm = ref({ repo: "", ref: "main", workspaceName: "", agentProfile: "default" });
 const createBusy = ref(false);
 const createError = ref("");
+const repoPickerBusy = ref(false);
 
-// Handle native file input directory selection
-function onDirSelected(event: Event) {
+function deriveWorkspaceName(repoPath: string): string {
+  const normalized = repoPath.trim().replace(/\\/g, "/").replace(/\/+$/, "");
+  if (!normalized) return "";
+  const segments = normalized.split("/").filter(Boolean);
+  const base = (segments[segments.length - 1] || normalized)
+    .replace(/\.git$/, "")
+    .replace(/[^a-zA-Z0-9-_]/g, "-")
+    .toLowerCase();
+  return base || "workspace";
+}
+
+function onRepoChanged() {
   createError.value = "";
-  const input = event.target as HTMLInputElement;
-  const files = input.files;
-  if (!files || files.length === 0) return;
-  // Extract the top-level folder name from the first file's relative path
-  const folderName = files[0].webkitRelativePath.split("/")[0];
-  if (folderName) {
-    createForm.value.repo = folderName;
-    const derived = folderName.replace(/\.git$/, "").replace(/[^a-zA-Z0-9-_]/g, "-").toLowerCase();
-    createForm.value.workspaceName = derived;
+  createForm.value.workspaceName = deriveWorkspaceName(createForm.value.repo);
+}
+
+async function chooseRepoPath() {
+  repoPickerBusy.value = true;
+  try {
+    const picked = await pickDirectory("Select repository folder");
+    if (!picked.cancelled && picked.path) {
+      createForm.value.repo = picked.path;
+      createForm.value.workspaceName = deriveWorkspaceName(picked.path);
+    }
+  } catch (error) {
+    createError.value = (error as Error).message || "failed to open folder picker";
+  } finally {
+    repoPickerBusy.value = false;
   }
 }
 
@@ -303,23 +321,32 @@ onMounted(refreshAll);
           <div class="create-panel__header">
             <span class="create-panel__title">Register Workspace</span>
             <span class="create-panel__subtitle">
-              Pick a local repo folder to create and sync a workspace worktree.
+              Enter a repo path (absolute or relative to daemon working directory).
             </span>
           </div>
           <div class="create-panel__body">
-            <!-- Primary: folder picker -->
+            <!-- Primary: explicit path input -->
             <div class="form-field form-field--primary">
-              <label for="cf-dir">
+              <label for="cf-repo">
                 <i class="pi pi-folder-open" />
-                Local folder
+                Repo path
               </label>
-              <input
-                id="cf-dir"
-                type="file"
-                class="create-panel__file-input"
-                webkitdirectory
-                @change="onDirSelected"
-              />
+              <div class="repo-path-row">
+                <InputText
+                  id="cf-repo"
+                  v-model="createForm.repo"
+                  placeholder="e.g. .case-studies/hanlun-lms"
+                  @input="onRepoChanged"
+                  @keydown.enter="onCreate"
+                />
+                <Button
+                  label="Browse"
+                  icon="pi pi-folder-open"
+                  severity="secondary"
+                  :loading="repoPickerBusy"
+                  @click="chooseRepoPath"
+                />
+              </div>
             </div>
             <!-- Secondary fields row -->
             <div class="create-panel__secondary">
@@ -545,29 +572,15 @@ onMounted(refreshAll);
 }
 .create-panel__secondary {
   display: grid;
-  grid-template-columns: 2fr 1fr 1fr;
+  grid-template-columns: 1.5fr 1fr 1fr;
   gap: 10px;
 }
-.create-panel__file-input {
-  display: block;
-  width: 100%;
-  font-size: 13px;
-  color: var(--nx-text-secondary);
-  cursor: pointer;
-  margin-bottom: 8px;
-}
-.create-panel__file-input::file-selector-button {
-  font-size: 13px;
-  padding: 5px 12px;
-  border: 1px solid var(--nx-border);
-  border-radius: var(--nx-radius-sm);
-  background: var(--nx-surface);
-  color: var(--nx-text);
-  cursor: pointer;
-  margin-right: 10px;
-}
-.create-panel__file-input::file-selector-button:hover {
-  background: var(--nx-bg-hover);
+
+.repo-path-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: center;
 }
 
 .create-panel__error {
