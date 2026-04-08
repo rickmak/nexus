@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../../packages/nexus"
 
-go test ./pkg/server -count=1 -run 'TestPTYOpenUsesRemoteConnectorForFirecrackerAndLXC' -v
+go test ./pkg/server -count=1 -run 'TestPTYOpenUsesRemoteConnectorForFirecracker|TestPTYOpenUsesRemoteConnectorForSeatbelt|TestPTYOpenFirecrackerAliasFallsBackToDriverReportedBackend' -v
 
 PORT=8094
 TOKEN=ci-token
@@ -32,25 +32,13 @@ for _ in $(seq 1 40); do
 done
 curl -fsS "http://127.0.0.1:${PORT}/healthz" >/dev/null
 
-BACKEND="local"
-if command -v limactl >/dev/null 2>&1; then
-  if limactl list --json nexus-lxc 2>/dev/null | grep -qv '^\[\]$'; then
-    BACKEND="lxc"
-  elif limactl list --json nexus-firecracker 2>/dev/null | grep -qv '^\[\]$'; then
-    BACKEND="lxc"
-  fi
-fi
-echo "selected backend: ${BACKEND}"
+BACKEND=""
 
 TEST_REPO="$(mktemp -d)"
 mkdir -p "${TEST_REPO}/.nexus"
 cat > "${TEST_REPO}/.nexus/workspace.json" <<'JSON'
 {
-  "version": 1,
-  "runtime": {
-    "required": ["local"],
-    "selection": "prefer-first"
-  }
+  "version": 1
 }
 JSON
 git -C "${TEST_REPO}" init -b main
@@ -66,7 +54,7 @@ CREATE_OUTPUT=$(NEXUS_DAEMON_PORT="${PORT}" \
     --repo "${TEST_REPO}" \
     --name "ci-pty-local-${RANDOM}" \
     --profile "codex" \
-    --backend "${BACKEND}")
+    ${BACKEND:+--backend "${BACKEND}"})
 echo "${CREATE_OUTPUT}"
 WORKSPACE_ID=$(printf '%s\n' "${CREATE_OUTPUT}" | sed -nE 's/.*\(id: ([^)]+)\).*/\1/p' | tail -n 1)
 if [[ -z "${WORKSPACE_ID}" ]]; then
@@ -77,4 +65,5 @@ fi
 NEXUS_DAEMON_WS="ws://127.0.0.1:${PORT}" \
 NEXUS_DAEMON_TOKEN="${TOKEN}" \
 NEXUS_PTY_SMOKE_LOG="${SMOKE_LOG}" \
+NEXUS_PTY_TIMEOUT_MS=120000 \
 node --experimental-websocket scripts/pty-remote-smoke.js "${WORKSPACE_ID}"

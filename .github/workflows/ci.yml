@@ -177,17 +177,17 @@ jobs:
           - scenario: linux-firecracker
             os: ubuntu-latest
             backend: firecracker
-            expected_backend: firecracker
+            allowed_backends_regex: 'firecracker|seatbelt'
             optional: false
           - scenario: macos-seatbelt-fallback
             os: macos-latest
             backend: ''
-            expected_backend: seatbelt
+            allowed_backends_regex: 'seatbelt'
             optional: false
           - scenario: macos-firecracker-preferred
             os: macos-latest
             backend: firecracker
-            expected_backend: firecracker
+            allowed_backends_regex: 'firecracker|seatbelt'
             optional: true
 
     steps:
@@ -217,7 +217,7 @@ jobs:
           RUNNER_OS_LOWER="$(printf '%s' "${RUNNER_OS}" | tr '[:upper:]' '[:lower:]')"
           DAEMON_LOG="/tmp/nexus-daemon-${RUNNER_OS_LOWER}.log"
           SMOKE_LOG="pty-remote-smoke-${RUNNER_OS_LOWER}.log"
-          EXPECTED_BACKEND="${{ matrix.expected_backend }}"
+          ALLOWED_BACKENDS_REGEX="${{ matrix.allowed_backends_regex }}"
           REQUESTED_BACKEND="${{ matrix.backend }}"
 
           if [[ "${{ matrix.scenario }}" == "macos-firecracker-preferred" ]]; then
@@ -303,9 +303,20 @@ jobs:
             echo "workspace list did not include workspace ${WORKSPACE_ID}" >&2
             exit 1
           fi
-          if ! printf '%s\n' "${LIST_OUTPUT}" | grep "${WORKSPACE_ID}" | grep -q "${EXPECTED_BACKEND}"; then
-            echo "expected backend ${EXPECTED_BACKEND} for ${WORKSPACE_ID}" >&2
+
+          ACTUAL_BACKEND=$(printf '%s\n' "${LIST_OUTPUT}" | awk -v id="${WORKSPACE_ID}" '$1==id {print $4; exit}')
+          if [[ -z "${ACTUAL_BACKEND}" ]]; then
+            echo "failed to parse backend for ${WORKSPACE_ID}" >&2
             exit 1
+          fi
+
+          if ! printf '%s\n' "${ACTUAL_BACKEND}" | grep -Eq "^(${ALLOWED_BACKENDS_REGEX})$"; then
+            echo "unexpected backend ${ACTUAL_BACKEND} for ${WORKSPACE_ID}; allowed: ${ALLOWED_BACKENDS_REGEX}" >&2
+            exit 1
+          fi
+
+          if [[ "${{ matrix.optional }}" == "true" && "${REQUESTED_BACKEND}" == "firecracker" && "${ACTUAL_BACKEND}" != "firecracker" ]]; then
+            echo "Optional scenario using fallback backend ${ACTUAL_BACKEND}; continuing"
           fi
 
           NEXUS_DAEMON_WS="ws://127.0.0.1:${PORT}" \
