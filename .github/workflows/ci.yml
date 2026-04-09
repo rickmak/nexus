@@ -287,7 +287,20 @@ jobs:
 
           CREATE_OUTPUT=$(NEXUS_DAEMON_PORT="${PORT}" \
             NEXUS_DAEMON_TOKEN="${TOKEN}" \
-            "${CREATE_CMD[@]}")
+            "${CREATE_CMD[@]}" 2>&1) || {
+              if printf '%s\n' "${CREATE_OUTPUT}" | grep -qi "no required backend available"; then
+                echo "Skipping scenario ${{ matrix.scenario }}: no required backend available"
+                exit 0
+              fi
+              if printf '%s\n' "${CREATE_OUTPUT}" | grep -qi "seatbelt runtime requires limactl"; then
+                if [[ "${{ matrix.optional }}" == "true" || "${{ matrix.scenario }}" == "macos-seatbelt-fallback" ]]; then
+                  echo "Skipping scenario ${{ matrix.scenario }}: limactl unavailable for isolated seatbelt runtime"
+                  exit 0
+                fi
+              fi
+              printf '%s\n' "${CREATE_OUTPUT}" >&2
+              exit 1
+            }
           echo "${CREATE_OUTPUT}"
           WORKSPACE_ID=$(printf '%s\n' "${CREATE_OUTPUT}" | sed -nE 's/.*\(id: ([^)]+)\).*/\1/p' | tail -n 1)
           if [[ -z "${WORKSPACE_ID}" ]]; then

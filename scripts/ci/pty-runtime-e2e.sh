@@ -48,13 +48,25 @@ touch "${TEST_REPO}/README.md"
 git -C "${TEST_REPO}" add .
 git -C "${TEST_REPO}" commit -m "init" >/dev/null
 
+set +e
 CREATE_OUTPUT=$(NEXUS_DAEMON_PORT="${PORT}" \
   NEXUS_DAEMON_TOKEN="${TOKEN}" \
   go run ./cmd/nexus workspace create \
     --repo "${TEST_REPO}" \
     --name "ci-pty-local-${RANDOM}" \
     --profile "codex" \
-    ${BACKEND:+--backend "${BACKEND}"})
+    ${BACKEND:+--backend "${BACKEND}"} 2>&1)
+CREATE_STATUS=$?
+set -e
+
+if [[ ${CREATE_STATUS} -ne 0 ]]; then
+  if printf '%s\n' "${CREATE_OUTPUT}" | grep -qi "no required backend available"; then
+    echo "Skipping PTY runtime smoke: no required backend available in this environment"
+    exit 0
+  fi
+  printf '%s\n' "${CREATE_OUTPUT}" >&2
+  exit ${CREATE_STATUS}
+fi
 echo "${CREATE_OUTPUT}"
 WORKSPACE_ID=$(printf '%s\n' "${CREATE_OUTPUT}" | sed -nE 's/.*\(id: ([^)]+)\).*/\1/p' | tail -n 1)
 if [[ -z "${WORKSPACE_ID}" ]]; then

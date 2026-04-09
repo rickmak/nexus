@@ -326,6 +326,7 @@ func startLimaShell(ctx context.Context, instanceName, workdir, localPath, shell
 
 	if localPath != "" && workdir == "/workspace" {
 		for _, candidate := range candidates {
+			_ = ensureLimaInstanceRunning(ctx, candidate)
 			if err := prepareWorkspaceMount(ctx, candidate, localPath); err == nil {
 				break
 			}
@@ -334,6 +335,10 @@ func startLimaShell(ctx context.Context, instanceName, workdir, localPath, shell
 
 	var lastErr error
 	for _, candidate := range candidates {
+		if err := ensureLimaInstanceRunning(ctx, candidate); err != nil {
+			lastErr = err
+			continue
+		}
 		args := []string{"shell", "--reconnect", candidate}
 		if launchShell != "bash" && launchShell != "/bin/bash" {
 			args = append(args, "--", launchShell)
@@ -390,6 +395,10 @@ func bootstrapSeatbeltTooling(ctx context.Context, instance, hostHome string) er
 
 	var lastErr error
 	for _, candidate := range candidates {
+		if err := ensureLimaInstanceRunning(ctx, candidate); err != nil {
+			lastErr = err
+			continue
+		}
 		cmd := exec.CommandContext(ctx, "limactl", "shell", candidate, "--", "sh", "-lc", script)
 		out, err := cmd.CombinedOutput()
 		if err == nil {
@@ -401,6 +410,42 @@ func bootstrapSeatbeltTooling(ctx context.Context, instance, hostHome string) er
 		return lastErr
 	}
 	return fmt.Errorf("bootstrap seatbelt tooling failed: no lima instance candidates")
+}
+
+func ensureLimaInstanceRunning(ctx context.Context, instance string) error {
+	instance = strings.TrimSpace(instance)
+	if instance == "" {
+		return fmt.Errorf("instance is required")
+	}
+
+	listCmd := exec.CommandContext(ctx, "limactl", "list", "--json", instance)
+	out, err := listCmd.Output()
+	if err != nil {
+		return fmt.Errorf("lima list failed for %s: %w", instance, err)
+	}
+	trimmed := strings.TrimSpace(string(out))
+
+	if trimmed == "" || trimmed == "[]" {
+		startCmd := exec.CommandContext(ctx, "limactl", "start", "--yes", "--name", instance, "template:default")
+		if startOut, startErr := startCmd.CombinedOutput(); startErr != nil {
+			return fmt.Errorf("lima start failed for %s: %s", instance, strings.TrimSpace(string(startOut)))
+		}
+		return nil
+	}
+
+	if strings.Contains(trimmed, `"status":"Running"`) {
+		return nil
+	}
+
+	if strings.Contains(trimmed, `"status":"Stopped"`) {
+		startCmd := exec.CommandContext(ctx, "limactl", "start", "--yes", instance)
+		if startOut, startErr := startCmd.CombinedOutput(); startErr != nil {
+			return fmt.Errorf("lima start failed for %s: %s", instance, strings.TrimSpace(string(startOut)))
+		}
+		return nil
+	}
+
+	return nil
 }
 
 func buildSeatbeltBootstrapScript(hostHome string) string {
