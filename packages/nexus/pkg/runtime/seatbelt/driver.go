@@ -399,17 +399,47 @@ func bootstrapSeatbeltTooling(ctx context.Context, instance, hostHome string) er
 			lastErr = err
 			continue
 		}
-		cmd := exec.CommandContext(ctx, "limactl", "shell", candidate, "--", "sh", "-lc", script)
-		out, err := cmd.CombinedOutput()
-		if err == nil {
-			return nil
+
+		const maxAttempts = 3
+		for attempt := 1; attempt <= maxAttempts; attempt++ {
+			cmd := exec.CommandContext(ctx, "limactl", "shell", candidate, "--", "sh", "-lc", script)
+			out, err := cmd.CombinedOutput()
+			if err == nil {
+				return nil
+			}
+
+			trimmed := strings.TrimSpace(string(out))
+			lastErr = fmt.Errorf("bootstrap seatbelt tooling in %s failed: %s", candidate, trimmed)
+			if !isTransientLimaShellError(trimmed) || attempt == maxAttempts {
+				break
+			}
+			time.Sleep(500 * time.Millisecond)
 		}
-		lastErr = fmt.Errorf("bootstrap seatbelt tooling in %s failed: %s", candidate, strings.TrimSpace(string(out)))
 	}
 	if lastErr != nil {
 		return lastErr
 	}
 	return fmt.Errorf("bootstrap seatbelt tooling failed: no lima instance candidates")
+}
+
+func isTransientLimaShellError(message string) bool {
+	lower := strings.ToLower(strings.TrimSpace(message))
+	if lower == "" {
+		return false
+	}
+	for _, marker := range []string{
+		"kex_exchange_identification",
+		"connection reset by peer",
+		"connection closed by remote host",
+		"broken pipe",
+		"mux_client_request_session",
+		"session open refused by peer",
+	} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func ensureLimaInstanceRunning(ctx context.Context, instance string) error {

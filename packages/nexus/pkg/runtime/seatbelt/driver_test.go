@@ -167,3 +167,25 @@ func TestShellOpenDefaultsToWorkspaceMountPath(t *testing.T) {
 
 	_ = enc.Encode(map[string]any{"id": "2", "type": "shell.close"})
 }
+
+func TestIsTransientLimaShellError(t *testing.T) {
+	tests := []struct {
+		name    string
+		message string
+		want    bool
+	}{
+		{name: "kex exchange", message: "kex_exchange_identification: read: Connection reset by peer", want: true},
+		{name: "mux refusal", message: "mux_client_request_session: session request failed: Session open refused by peer", want: true},
+		{name: "plain failure", message: "permission denied", want: false},
+		{name: "empty", message: "", want: false},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := isTransientLimaShellError(tc.message)
+			if got != tc.want {
+				t.Fatalf("isTransientLimaShellError(%q)=%v, want %v", tc.message, got, tc.want)
+			}
+		})
+	}
+}
