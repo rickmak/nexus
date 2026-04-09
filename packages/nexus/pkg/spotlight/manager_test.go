@@ -2,9 +2,67 @@ package spotlight
 
 import (
 	"context"
-	"path/filepath"
+	"encoding/json"
+	"errors"
 	"testing"
+	"time"
+
+	"github.com/inizio/nexus/packages/nexus/pkg/store"
 )
+
+type fakeSpotlightRepo struct {
+	rows          []store.SpotlightForwardRow
+	upserted      []store.SpotlightForwardRow
+	deleted       []string
+	listErr       error
+	upsertErr     error
+	deleteErr     error
+	upsertErrOnce bool
+	deleteErrOnce bool
+}
+
+func (f *fakeSpotlightRepo) UpsertSpotlightForwardRow(row store.SpotlightForwardRow) error {
+	f.upserted = append(f.upserted, row)
+	if f.upsertErr != nil {
+		if f.upsertErrOnce {
+			err := f.upsertErr
+			f.upsertErr = nil
+			return err
+		}
+		return f.upsertErr
+	}
+	f.rows = append(f.rows, row)
+	return nil
+}
+
+func (f *fakeSpotlightRepo) DeleteSpotlightForwardRow(id string) error {
+	f.deleted = append(f.deleted, id)
+	if f.deleteErr != nil {
+		if f.deleteErrOnce {
+			err := f.deleteErr
+			f.deleteErr = nil
+			return err
+		}
+		return f.deleteErr
+	}
+	next := make([]store.SpotlightForwardRow, 0, len(f.rows))
+	for _, row := range f.rows {
+		if row.ID != id {
+			next = append(next, row)
+		}
+	}
+	f.rows = next
+	return nil
+}
+
+func (f *fakeSpotlightRepo) ListSpotlightForwardRows() ([]store.SpotlightForwardRow, error) {
+	if f.listErr != nil {
+		return nil, f.listErr
+	}
+	out := make([]store.SpotlightForwardRow, len(f.rows))
+	copy(out, f.rows)
+	return out, nil
+}
 
 func TestExpose_FailsOnLocalPortCollision(t *testing.T) {
 	mgr := NewManager()
@@ -41,44 +99,124 @@ func TestListAndClose(t *testing.T) {
 	}
 }
 
-func TestSaveLoadRoundTrip(t *testing.T) {
-	statePath := filepath.Join(t.TempDir(), "spotlight-state.json")
+func TestManager_HydratesAndPersistsViaRepository(t *testing.T) {
+	t.Run("hydrates from repository rows", func(t *testing.T) {
+		created := time.Date(2026, time.April, 9, 12, 0, 0, 0, time.UTC)
+		payload, err := json.Marshal(&Forward{
+			ID:          "spot-1",
+			WorkspaceID: "ws-1",
+			Service:     "api",
+			RemotePort:  8000,
+			LocalPort:   18000,
+			Host:        "127.0.0.1",
+			CreatedAt:   created,
+		})
+		if err != nil {
+			t.Fatalf("marshal payload: %v", err)
+		}
 
-	mgr := NewManager()
-	_, err := mgr.Expose(context.Background(), ExposeSpec{
-		WorkspaceID: "ws-1",
-		Service:     "api",
-		RemotePort:  8000,
-		LocalPort:   18000,
+		repo := &fakeSpotlightRepo{rows: []store.SpotlightForwardRow{{
+			ID:          "spot-1",
+			WorkspaceID: "ws-1",
+			LocalPort:   18000,
+			Payload:     payload,
+			CreatedAt:   created,
+		}}}
+
+		mgr, err := NewManagerWithRepository(repo)
+		if err != nil {
+			t.Fatalf("new manager with repo: %v", err)
+		}
+
+		all := mgr.List("")
+		if len(all) != 1 {
+			t.Fatalf("expected 1 hydrated forward, got %d", len(all))
+		}
+		if all[0].ID != "spot-1" || all[0].WorkspaceID != "ws-1" {
+			t.Fatalf("unexpected hydrated forward: %#v", all[0])
+		}
 	})
-	if err != nil {
-		t.Fatalf("expose ws-1: %v", err)
-	}
-	_, err = mgr.Expose(context.Background(), ExposeSpec{
-		WorkspaceID: "ws-2",
-		Service:     "web",
-		RemotePort:  3000,
-		LocalPort:   13000,
+
+	t.Run("expose persists row to repository", func(t *testing.T) {
+		repo := &fakeSpotlightRepo{}
+		mgr, err := NewManagerWithRepository(repo)
+		if err != nil {
+			t.Fatalf("new manager with repo: %v", err)
+		}
+
+		fwd, err := mgr.Expose(context.Background(), ExposeSpec{
+			WorkspaceID: "ws-1",
+			Service:     "api",
+			RemotePort:  8000,
+			LocalPort:   18000,
+		})
+		if err != nil {
+			t.Fatalf("expose: %v", err)
+		}
+		if len(repo.upserted) != 1 {
+			t.Fatalf("expected 1 upsert call, got %d", len(repo.upserted))
+		}
+		if repo.upserted[0].ID != fwd.ID {
+			t.Fatalf("expected upsert ID %q, got %q", fwd.ID, repo.upserted[0].ID)
+		}
+
+		repo.upsertErr = errors.New("boom")
+		repo.upsertErrOnce = true
+		_, err = mgr.Expose(context.Background(), ExposeSpec{
+			WorkspaceID: "ws-1",
+			Service:     "web",
+			RemotePort:  3000,
+			LocalPort:   13000,
+		})
+		if err == nil {
+			t.Fatal("expected expose to fail when upsert fails")
+		}
+		if len(mgr.List("")) != 1 {
+			t.Fatal("expected failed expose to rollback in-memory state")
+		}
 	})
-	if err != nil {
-		t.Fatalf("expose ws-2: %v", err)
-	}
 
-	if err := mgr.Save(statePath); err != nil {
-		t.Fatalf("save state: %v", err)
-	}
+	t.Run("close deletes row from repository", func(t *testing.T) {
+		repo := &fakeSpotlightRepo{}
+		mgr, err := NewManagerWithRepository(repo)
+		if err != nil {
+			t.Fatalf("new manager with repo: %v", err)
+		}
 
-	reloaded := NewManager()
-	if err := reloaded.Load(statePath); err != nil {
-		t.Fatalf("load state: %v", err)
-	}
+		fwd, err := mgr.Expose(context.Background(), ExposeSpec{
+			WorkspaceID: "ws-1",
+			Service:     "api",
+			RemotePort:  8000,
+			LocalPort:   18000,
+		})
+		if err != nil {
+			t.Fatalf("expose: %v", err)
+		}
 
-	all := reloaded.List("")
-	if len(all) != 2 {
-		t.Fatalf("expected 2 forwards after load, got %d", len(all))
-	}
-	ws1 := reloaded.List("ws-1")
-	if len(ws1) != 1 {
-		t.Fatalf("expected 1 ws-1 forward after load, got %d", len(ws1))
-	}
+		if !mgr.Close(fwd.ID) {
+			t.Fatal("expected close to succeed")
+		}
+		if len(repo.deleted) != 1 || repo.deleted[0] != fwd.ID {
+			t.Fatalf("expected delete call for %q, got %#v", fwd.ID, repo.deleted)
+		}
+
+		fwd, err = mgr.Expose(context.Background(), ExposeSpec{
+			WorkspaceID: "ws-1",
+			Service:     "api",
+			RemotePort:  8001,
+			LocalPort:   18001,
+		})
+		if err != nil {
+			t.Fatalf("second expose: %v", err)
+		}
+
+		repo.deleteErr = errors.New("delete failed")
+		repo.deleteErrOnce = true
+		if mgr.Close(fwd.ID) {
+			t.Fatal("expected close to fail when repository delete fails")
+		}
+		if len(mgr.List("")) != 1 {
+			t.Fatal("expected close failure to restore in-memory state")
+		}
+	})
 }

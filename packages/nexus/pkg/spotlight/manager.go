@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sort"
 	"sync"
 	"time"
+
+	"github.com/inizio/nexus/packages/nexus/pkg/store"
 )
 
 type Forward struct {
@@ -33,6 +33,13 @@ type Manager struct {
 	mu        sync.RWMutex
 	forwards  map[string]*Forward
 	localToID map[int]string
+	repo      spotlightRepository
+}
+
+type spotlightRepository interface {
+	UpsertSpotlightForwardRow(row store.SpotlightForwardRow) error
+	DeleteSpotlightForwardRow(id string) error
+	ListSpotlightForwardRows() ([]store.SpotlightForwardRow, error)
 }
 
 func NewManager() *Manager {
@@ -42,74 +49,65 @@ func NewManager() *Manager {
 	}
 }
 
-func (m *Manager) Save(path string) error {
-	if path == "" {
-		return nil
+func NewManagerWithRepository(repo spotlightRepository) (*Manager, error) {
+	m := NewManager()
+	m.repo = repo
+	if err := m.hydrateFromRepository(); err != nil {
+		return nil, err
 	}
-
-	m.mu.RLock()
-	all := make([]*Forward, 0, len(m.forwards))
-	for _, fwd := range m.forwards {
-		copy := *fwd
-		all = append(all, &copy)
-	}
-	m.mu.RUnlock()
-
-	sort.Slice(all, func(i, j int) bool {
-		return all[i].CreatedAt.Before(all[j].CreatedAt)
-	})
-
-	data, err := json.Marshal(all)
-	if err != nil {
-		return fmt.Errorf("marshal spotlight state: %w", err)
-	}
-
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return fmt.Errorf("create spotlight state dir: %w", err)
-	}
-	if err := os.WriteFile(path, data, 0o644); err != nil {
-		return fmt.Errorf("write spotlight state: %w", err)
-	}
-
-	return nil
+	return m, nil
 }
 
-func (m *Manager) Load(path string) error {
-	if path == "" {
+func (m *Manager) hydrateFromRepository() error {
+	if m.repo == nil {
 		return nil
 	}
 
-	data, err := os.ReadFile(path)
+	rows, err := m.repo.ListSpotlightForwardRows()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("read spotlight state: %w", err)
-	}
-
-	var saved []*Forward
-	if err := json.Unmarshal(data, &saved); err != nil {
-		return fmt.Errorf("unmarshal spotlight state: %w", err)
+		return fmt.Errorf("list spotlight forwards: %w", err)
 	}
 
 	m.mu.Lock()
-	m.forwards = make(map[string]*Forward, len(saved))
-	m.localToID = make(map[int]string, len(saved))
-	for _, fwd := range saved {
-		if fwd == nil {
+	defer m.mu.Unlock()
+
+	m.forwards = make(map[string]*Forward, len(rows))
+	m.localToID = make(map[int]string, len(rows))
+	for _, row := range rows {
+		if row.ID == "" || row.LocalPort <= 0 || len(row.Payload) == 0 {
 			continue
 		}
-		if fwd.LocalPort <= 0 || fwd.RemotePort <= 0 || fwd.ID == "" {
+
+		var fwd Forward
+		if err := json.Unmarshal(row.Payload, &fwd); err != nil {
+			continue
+		}
+		if fwd.ID == "" {
+			fwd.ID = row.ID
+		}
+		if fwd.WorkspaceID == "" {
+			fwd.WorkspaceID = row.WorkspaceID
+		}
+		if fwd.LocalPort <= 0 {
+			fwd.LocalPort = row.LocalPort
+		}
+		if fwd.CreatedAt.IsZero() {
+			fwd.CreatedAt = row.CreatedAt
+		}
+		if fwd.ID == "" || fwd.RemotePort <= 0 || fwd.LocalPort <= 0 {
+			continue
+		}
+		if _, dup := m.forwards[fwd.ID]; dup {
 			continue
 		}
 		if _, dup := m.localToID[fwd.LocalPort]; dup {
 			continue
 		}
-		copy := *fwd
+
+		copy := fwd
 		m.forwards[copy.ID] = &copy
 		m.localToID[copy.LocalPort] = copy.ID
 	}
-	m.mu.Unlock()
 
 	return nil
 }
@@ -120,9 +118,9 @@ func (m *Manager) Expose(_ context.Context, spec ExposeSpec) (*Forward, error) {
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 
 	if existing, ok := m.localToID[spec.LocalPort]; ok {
+		m.mu.Unlock()
 		return nil, fmt.Errorf("local port %d already in use by %s", spec.LocalPort, existing)
 	}
 
@@ -155,6 +153,30 @@ func (m *Manager) Expose(_ context.Context, spec ExposeSpec) (*Forward, error) {
 	m.forwards[id] = fwd
 	m.localToID[spec.LocalPort] = id
 
+	if m.repo != nil {
+		payload, err := json.Marshal(fwd)
+		if err != nil {
+			delete(m.forwards, id)
+			delete(m.localToID, spec.LocalPort)
+			m.mu.Unlock()
+			return nil, fmt.Errorf("marshal spotlight forward: %w", err)
+		}
+		if err := m.repo.UpsertSpotlightForwardRow(store.SpotlightForwardRow{
+			ID:          fwd.ID,
+			WorkspaceID: fwd.WorkspaceID,
+			LocalPort:   fwd.LocalPort,
+			Payload:     payload,
+			CreatedAt:   fwd.CreatedAt,
+		}); err != nil {
+			delete(m.forwards, id)
+			delete(m.localToID, spec.LocalPort)
+			m.mu.Unlock()
+			return nil, fmt.Errorf("persist spotlight forward: %w", err)
+		}
+	}
+
+	m.mu.Unlock()
+
 	copy := *fwd
 	return &copy, nil
 }
@@ -180,10 +202,25 @@ func (m *Manager) List(workspaceID string) []*Forward {
 func (m *Manager) Close(id string) bool {
 	m.mu.Lock()
 	fwd, ok := m.forwards[id]
-	if ok {
-		delete(m.forwards, id)
-		delete(m.localToID, fwd.LocalPort)
+	if !ok {
+		m.mu.Unlock()
+		return false
 	}
+
+	delete(m.forwards, id)
+	delete(m.localToID, fwd.LocalPort)
+
+	if m.repo != nil {
+		if err := m.repo.DeleteSpotlightForwardRow(id); err != nil {
+			// If repository persistence fails, restore in-memory state so close remains all-or-nothing.
+			copy := *fwd
+			m.forwards[id] = &copy
+			m.localToID[fwd.LocalPort] = id
+			m.mu.Unlock()
+			return false
+		}
+	}
+
 	m.mu.Unlock()
-	return ok
+	return true
 }
