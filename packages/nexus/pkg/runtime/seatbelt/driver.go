@@ -106,6 +106,18 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 
 	if d.prepareWorkspaceFS != nil {
 		if err := d.prepareWorkspaceFS(ctx, instance, req.ProjectRoot); err != nil {
+			if strings.TrimSpace(instance) == "nexus-seatbelt" {
+				fallbackCandidates := []string{"mvm", "default", "nexus-firecracker"}
+				for _, fallback := range fallbackCandidates {
+					if fallbackErr := d.prepareWorkspaceFS(ctx, fallback, req.ProjectRoot); fallbackErr != nil {
+						continue
+					}
+					if ws, ok := d.workspaces[req.WorkspaceID]; ok {
+						ws.instance = fallback
+					}
+					return nil
+				}
+			}
 			d.mu.Lock()
 			delete(d.workspaces, req.WorkspaceID)
 			d.mu.Unlock()
@@ -347,13 +359,27 @@ func startLimaShell(ctx context.Context, instanceName, workdir, localPath, shell
 	}
 
 	if localPath != "" && workdir == "/workspace" {
+		mounted := false
+		lastMountErr := ""
 		for _, candidate := range candidates {
 			if err := ensureLimaInstanceRunningFn(ctx, candidate); err != nil {
+				lastMountErr = err.Error()
 				continue
 			}
 			if err := prepareWorkspaceMountFn(ctx, candidate, localPath); err == nil {
+				instanceName = candidate
+				candidates = []string{candidate}
+				mounted = true
 				break
+			} else {
+				lastMountErr = err.Error()
 			}
+		}
+		if !mounted {
+			if strings.TrimSpace(lastMountErr) == "" {
+				lastMountErr = "no available lima candidates"
+			}
+			return nil, nil, fmt.Errorf("prepare /workspace mount failed: %s", lastMountErr)
 		}
 	}
 

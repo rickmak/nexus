@@ -77,6 +77,51 @@ func TestCreateRunsBootstrapAndMount(t *testing.T) {
 	}
 }
 
+func TestCreateFallsBackToDefaultInstanceWhenSeatbeltMountPrepareFails(t *testing.T) {
+	d := NewDriver()
+	oldLookPath := seatbeltLookPath
+	t.Cleanup(func() { seatbeltLookPath = oldLookPath })
+	seatbeltLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
+
+	d.instanceEnv = "nexus-seatbelt"
+	d.bootstrapInstance = func(ctx context.Context, instance, hostHome string) error { return nil }
+
+	seen := make([]string, 0)
+	d.prepareWorkspaceFS = func(ctx context.Context, instance, localPath string) error {
+		seen = append(seen, instance)
+		if instance == "nexus-seatbelt" {
+			return errors.New("instance does not exist")
+		}
+		if instance == "mvm" {
+			return nil
+		}
+		return errors.New("unexpected instance")
+	}
+
+	err := d.Create(context.Background(), runtime.CreateRequest{
+		WorkspaceID:   "ws-fallback",
+		WorkspaceName: "fallback",
+		ProjectRoot:   t.TempDir(),
+	})
+	if err != nil {
+		t.Fatalf("expected fallback create to succeed, got %v", err)
+	}
+
+	if len(seen) < 2 || seen[0] != "nexus-seatbelt" || seen[1] != "mvm" {
+		t.Fatalf("expected prepare sequence [nexus-seatbelt mvm], got %v", seen)
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	ws, ok := d.workspaces["ws-fallback"]
+	if !ok {
+		t.Fatal("expected workspace to be tracked")
+	}
+	if ws.instance != "mvm" {
+		t.Fatalf("expected workspace instance to switch to mvm, got %q", ws.instance)
+	}
+}
+
 func TestCreateFailsWhenBootstrapFails(t *testing.T) {
 	d := NewDriver()
 	oldLookPath := seatbeltLookPath
@@ -217,7 +262,10 @@ func TestStartLimaShellSkipsUnavailableCandidatesWhenPreparingWorkspaceMount(t *
 		return nil, errors.New("stop after observe")
 	}
 
-	_, _, _ = startLimaShell(ctx, "nexus-seatbelt", "/workspace", "/tmp/repo", "bash")
+	_, _, err := startLimaShell(ctx, "nexus-seatbelt", "/workspace", "/tmp/repo", "bash")
+	if err == nil {
+		t.Fatal("expected startLimaShell to fail once pty start is stubbed")
+	}
 	if len(called) != 1 || called[0] != "default:/tmp/repo" {
 		t.Fatalf("expected prepareWorkspaceMount called only for default candidate, got %v", called)
 	}
