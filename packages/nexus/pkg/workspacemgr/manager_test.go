@@ -2,6 +2,7 @@ package workspacemgr
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -142,6 +143,43 @@ func TestManager_RemovePersistsRecordDeletion(t *testing.T) {
 	_, ok := m2.Get(id)
 	if ok {
 		t.Fatal("expected workspace to be gone after remove and reload")
+	}
+}
+
+func TestManager_LoadAll_IgnoresLegacyJSON(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state-home"))
+
+	if err := os.WriteFile(filepath.Join(root, ".nexus"), []byte("block sqlite dir"), 0o644); err != nil {
+		t.Fatalf("write sqlite blocker file: %v", err)
+	}
+
+	legacyDir := filepath.Join(root, "workspaces")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatalf("mkdir legacy dir: %v", err)
+	}
+
+	legacy := Workspace{
+		ID:            "ws-legacy",
+		Repo:          "git@example/legacy.git",
+		WorkspaceName: "legacy",
+		AgentProfile:  "default",
+		State:         StateCreated,
+		RootPath:      filepath.Join(root, "instances", "ws-legacy"),
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatalf("marshal legacy workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, "ws-legacy.json"), data, 0o644); err != nil {
+		t.Fatalf("write legacy workspace json: %v", err)
+	}
+
+	m := NewManager(root)
+	if _, ok := m.Get("ws-legacy"); ok {
+		t.Fatal("expected manager to ignore legacy workspace json files")
 	}
 }
 

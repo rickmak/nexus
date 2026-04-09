@@ -19,10 +19,10 @@ import (
 )
 
 type Manager struct {
-	root       string
-	store      *store.NodeStore
-	mu         sync.RWMutex
-	workspaces map[string]*Workspace
+	root          string
+	workspaceRepo store.WorkspaceRepository
+	mu            sync.RWMutex
+	workspaces    map[string]*Workspace
 }
 
 func NewManager(root string) *Manager {
@@ -37,7 +37,7 @@ func NewManager(root string) *Manager {
 		storePath = filepath.Join(cleanRoot, ".nexus", "state", "node.db")
 	}
 	if st, err := store.Open(storePath); err == nil {
-		m.store = st
+		m.workspaceRepo = st
 	} else {
 		fmt.Fprintf(os.Stderr, "workspacemgr: warning: sqlite store disabled (%v)\n", err)
 	}
@@ -45,65 +45,21 @@ func NewManager(root string) *Manager {
 	return m
 }
 
-func (m *Manager) workspacesDir() string {
-	return filepath.Join(m.root, "workspaces")
-}
-
-func (m *Manager) recordPath(id string) string {
-	return filepath.Join(m.workspacesDir(), id+".json")
-}
-
 func (m *Manager) loadAll() error {
-	if m.store != nil {
-		all, err := m.store.ListWorkspaceRows()
-		if err == nil {
-			for _, row := range all {
-				if len(row.Payload) == 0 {
-					continue
-				}
-				var ws Workspace
-				if err := json.Unmarshal(row.Payload, &ws); err != nil {
-					continue
-				}
-				if ws.RepoID == "" {
-					ws.RepoID = deriveRepoID(ws.Repo)
-				}
-				if ws.RepoKind == "" {
-					ws.RepoKind = deriveRepoKind(ws.Repo)
-				}
-				if ws.LineageRootID == "" {
-					if ws.ParentWorkspaceID == "" {
-						ws.LineageRootID = ws.ID
-					} else {
-						ws.LineageRootID = ws.ParentWorkspaceID
-					}
-				}
-				copy := ws
-				m.workspaces[ws.ID] = &copy
-			}
-			return nil
-		}
+	if m.workspaceRepo == nil {
+		return nil
 	}
 
-	dir := m.workspacesDir()
-	entries, err := os.ReadDir(dir)
+	all, err := m.workspaceRepo.ListWorkspaceRows()
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("read workspaces dir: %w", err)
+		return fmt.Errorf("list sqlite workspaces: %w", err)
 	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		id := entry.Name()[:len(entry.Name())-5]
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
-		if err != nil {
+	for _, row := range all {
+		if len(row.Payload) == 0 {
 			continue
 		}
 		var ws Workspace
-		if err := json.Unmarshal(data, &ws); err != nil {
+		if err := json.Unmarshal(row.Payload, &ws); err != nil {
 			continue
 		}
 		if ws.RepoID == "" {
@@ -119,45 +75,37 @@ func (m *Manager) loadAll() error {
 				ws.LineageRootID = ws.ParentWorkspaceID
 			}
 		}
-		m.workspaces[id] = &ws
+		copy := ws
+		m.workspaces[ws.ID] = &copy
 	}
 	return nil
 }
 
 func (m *Manager) persistWorkspace(ws *Workspace) error {
-	if m.store != nil {
-		payload, err := json.Marshal(ws)
-		if err != nil {
-			return fmt.Errorf("marshal sqlite workspace payload: %w", err)
-		}
-		if err := m.store.UpsertWorkspaceRow(store.WorkspaceRow{
-			ID:        ws.ID,
-			Payload:   payload,
-			CreatedAt: ws.CreatedAt,
-			UpdatedAt: ws.UpdatedAt,
-		}); err != nil {
-			return fmt.Errorf("upsert sqlite workspace: %w", err)
-		}
+	if m.workspaceRepo == nil {
+		return nil
 	}
 
-	if err := os.MkdirAll(m.workspacesDir(), 0o755); err != nil {
-		return fmt.Errorf("create workspaces dir: %w", err)
-	}
-	data, err := json.Marshal(ws)
+	payload, err := json.Marshal(ws)
 	if err != nil {
-		return fmt.Errorf("marshal workspace: %w", err)
+		return fmt.Errorf("marshal sqlite workspace payload: %w", err)
 	}
-	if err := os.WriteFile(m.recordPath(ws.ID), data, 0o644); err != nil {
-		return fmt.Errorf("write workspace record: %w", err)
+	if err := m.workspaceRepo.UpsertWorkspaceRow(store.WorkspaceRow{
+		ID:        ws.ID,
+		Payload:   payload,
+		CreatedAt: ws.CreatedAt,
+		UpdatedAt: ws.UpdatedAt,
+	}); err != nil {
+		return fmt.Errorf("upsert sqlite workspace: %w", err)
 	}
+
 	return nil
 }
 
 func (m *Manager) deleteRecord(id string) {
-	if m.store != nil {
-		_ = m.store.DeleteWorkspace(id)
+	if m.workspaceRepo != nil {
+		_ = m.workspaceRepo.DeleteWorkspace(id)
 	}
-	_ = os.Remove(m.recordPath(id))
 }
 
 func (m *Manager) Create(_ context.Context, spec CreateSpec) (*Workspace, error) {
