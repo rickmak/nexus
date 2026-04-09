@@ -417,6 +417,9 @@ func ensureLocalRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace
 		WorkspaceID:   ws.ID,
 		WorkspaceName: ws.WorkspaceName,
 		ProjectRoot:   ws.RootPath,
+		Options: map[string]string{
+			"host_cli_sync": "true",
+		},
 	})
 	if err != nil && !strings.Contains(err.Error(), "already exists") {
 		return &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("runtime create failed: %v", err)}

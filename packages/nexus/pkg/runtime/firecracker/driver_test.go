@@ -1,8 +1,16 @@
 package firecracker
 
 import (
+	"archive/tar"
+	"bytes"
+	"compress/gzip"
 	"context"
+	"encoding/base64"
 	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
@@ -282,5 +290,78 @@ func TestFirecrackerDriver_DestroyWithoutManager(t *testing.T) {
 	err := d.Destroy(context.Background(), "ws-1")
 	if err != nil {
 		t.Fatalf("destroy should work without manager: %v", err)
+	}
+}
+
+func TestBuildGuestCLIBootstrapCommandInstallsOnlyHostAvailableCLIs(t *testing.T) {
+	cmd := buildGuestCLIBootstrapCommand(hostCLIAvailability{Opencode: true, Codex: false, Claude: true})
+	if !strings.Contains(cmd, "npm i -g opencode-ai @anthropic-ai/claude-code") {
+		t.Fatalf("expected selective install command, got %q", cmd)
+	}
+	if strings.Contains(cmd, "@openai/codex") {
+		t.Fatalf("did not expect codex package install when host codex unavailable, got %q", cmd)
+	}
+}
+
+func TestBuildHostAuthBundleIncludesKnownConfigPaths(t *testing.T) {
+	home := t.TempDir()
+	if err := os.Setenv("HOME", home); err != nil {
+		t.Fatalf("set HOME: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Unsetenv("HOME") })
+
+	mkdir := func(path string) {
+		if err := os.MkdirAll(path, 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", path, err)
+		}
+	}
+	mkdir(filepath.Join(home, ".config", "opencode"))
+	mkdir(filepath.Join(home, ".config", "codex"))
+	mkdir(filepath.Join(home, ".claude"))
+	if err := os.WriteFile(filepath.Join(home, ".config", "opencode", "session.json"), []byte("{}"), 0o644); err != nil {
+		t.Fatalf("write opencode session: %v", err)
+	}
+
+	bundle, err := buildHostAuthBundle()
+	if err != nil {
+		t.Fatalf("buildHostAuthBundle: %v", err)
+	}
+	if strings.TrimSpace(bundle) == "" {
+		t.Fatal("expected non-empty auth bundle")
+	}
+
+	raw, err := base64.StdEncoding.DecodeString(bundle)
+	if err != nil {
+		t.Fatalf("decode bundle: %v", err)
+	}
+
+	gz, err := gzip.NewReader(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("gzip reader: %v", err)
+	}
+	defer gz.Close()
+
+	tr := tar.NewReader(gz)
+	names := make([]string, 0)
+	for {
+		hdr, err := tr.Next()
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				break
+			}
+			t.Fatalf("read tar entry: %v", err)
+		}
+		names = append(names, hdr.Name)
+	}
+
+	joined := strings.Join(names, "\n")
+	if !strings.Contains(joined, ".config/opencode") {
+		t.Fatalf("expected opencode path in archive, got %q", joined)
+	}
+	if !strings.Contains(joined, ".config/codex") {
+		t.Fatalf("expected codex path in archive, got %q", joined)
+	}
+	if !strings.Contains(joined, ".claude") {
+		t.Fatalf("expected claude path in archive, got %q", joined)
 	}
 }

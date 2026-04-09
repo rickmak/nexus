@@ -30,6 +30,12 @@ type Driver struct {
 	prepareWorkspaceFS func(ctx context.Context, instance, localPath string) error
 }
 
+type hostCLIAvailability struct {
+	Opencode bool
+	Codex    bool
+	Claude   bool
+}
+
 type workspaceState struct {
 	projectRoot string
 	state       string
@@ -391,7 +397,8 @@ func bootstrapSeatbeltTooling(ctx context.Context, instance, hostHome string) er
 		candidates = filterCandidatesByAvailability(candidates, discovered)
 	}
 
-	script := buildSeatbeltBootstrapScript(hostHome)
+	hostCLI := detectHostCLIAvailability(seatbeltLookPath)
+	script := buildSeatbeltBootstrapScript(hostHome, hostCLI)
 
 	var lastErr error
 	for _, candidate := range candidates {
@@ -420,6 +427,21 @@ func bootstrapSeatbeltTooling(ctx context.Context, instance, hostHome string) er
 		return lastErr
 	}
 	return fmt.Errorf("bootstrap seatbelt tooling failed: no lima instance candidates")
+}
+
+func detectHostCLIAvailability(lookPath func(string) (string, error)) hostCLIAvailability {
+	has := func(bin string) bool {
+		if lookPath == nil {
+			return false
+		}
+		_, err := lookPath(bin)
+		return err == nil
+	}
+	return hostCLIAvailability{
+		Opencode: has("opencode"),
+		Codex:    has("codex"),
+		Claude:   has("claude"),
+	}
 }
 
 func isTransientLimaShellError(message string) bool {
@@ -478,7 +500,7 @@ func ensureLimaInstanceRunning(ctx context.Context, instance string) error {
 	return nil
 }
 
-func buildSeatbeltBootstrapScript(hostHome string) string {
+func buildSeatbeltBootstrapScript(hostHome string, hostCLI hostCLIAvailability) string {
 	parts := []string{
 		"set -e",
 		"unset DOCKER_HOST DOCKER_CONTEXT",
@@ -491,10 +513,31 @@ func buildSeatbeltBootstrapScript(hostHome string) string {
 		"(docker info >/dev/null 2>&1 || sudo -n docker info >/dev/null 2>&1)",
 		"(docker compose version >/dev/null 2>&1 || docker-compose version >/dev/null 2>&1)",
 		"command -v make >/dev/null 2>&1",
-		"if command -v npm >/dev/null 2>&1; then npm i -g opencode-ai @openai/codex @anthropic-ai/claude-code >/dev/null 2>&1 || true; fi",
-		"if command -v opencode >/dev/null 2>&1; then opencode --version >/dev/null 2>&1 || true; fi",
-		"if command -v codex >/dev/null 2>&1; then codex --version >/dev/null 2>&1 || true; fi",
-		"if command -v claude >/dev/null 2>&1; then claude --version >/dev/null 2>&1 || true; fi",
+	}
+
+	pkgs := make([]string, 0, 3)
+	if hostCLI.Opencode {
+		pkgs = append(pkgs, "opencode-ai")
+	}
+	if hostCLI.Codex {
+		pkgs = append(pkgs, "@openai/codex")
+	}
+	if hostCLI.Claude {
+		pkgs = append(pkgs, "@anthropic-ai/claude-code")
+	}
+	if len(pkgs) > 0 {
+		parts = append(parts,
+			"if command -v npm >/dev/null 2>&1; then npm i -g "+strings.Join(pkgs, " ")+" >/dev/null 2>&1 || true; fi",
+		)
+	}
+	if hostCLI.Opencode {
+		parts = append(parts, "if command -v opencode >/dev/null 2>&1; then opencode --version >/dev/null 2>&1 || true; fi")
+	}
+	if hostCLI.Codex {
+		parts = append(parts, "if command -v codex >/dev/null 2>&1; then codex --version >/dev/null 2>&1 || true; fi")
+	}
+	if hostCLI.Claude {
+		parts = append(parts, "if command -v claude >/dev/null 2>&1; then claude --version >/dev/null 2>&1 || true; fi")
 	}
 
 	hostHome = strings.TrimSpace(hostHome)

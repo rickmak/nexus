@@ -98,7 +98,7 @@ func TestCreateFailsWhenBootstrapFails(t *testing.T) {
 }
 
 func TestBuildSeatbeltBootstrapScriptIncludesIsolationAndForwarding(t *testing.T) {
-	script := buildSeatbeltBootstrapScript("/Users/tester")
+	script := buildSeatbeltBootstrapScript("/Users/tester", hostCLIAvailability{Opencode: true, Codex: true, Claude: true})
 
 	for _, token := range []string{
 		"unset DOCKER_HOST DOCKER_CONTEXT",
@@ -111,6 +111,16 @@ func TestBuildSeatbeltBootstrapScriptIncludesIsolationAndForwarding(t *testing.T
 		if !strings.Contains(script, token) {
 			t.Fatalf("expected script to include %q", token)
 		}
+	}
+}
+
+func TestBuildSeatbeltBootstrapScriptInstallsOnlyHostAvailableCLIs(t *testing.T) {
+	script := buildSeatbeltBootstrapScript("/Users/tester", hostCLIAvailability{Opencode: true, Codex: false, Claude: true})
+	if !strings.Contains(script, "npm i -g opencode-ai @anthropic-ai/claude-code") {
+		t.Fatalf("expected selective install command, got %q", script)
+	}
+	if strings.Contains(script, "@openai/codex") {
+		t.Fatalf("did not expect codex package install when host codex is unavailable, got %q", script)
 	}
 }
 
