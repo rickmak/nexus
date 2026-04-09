@@ -249,6 +249,7 @@ func buildGuestCLIBootstrapCommand(hostCLI hostCLIAvailability) string {
 			`(printf '%s' "$NEXUS_HOST_AUTH_BUNDLE" | base64 -d 2>/dev/null || printf '%s' "$NEXUS_HOST_AUTH_BUNDLE" | base64 -D 2>/dev/null) >/tmp/nexus-auth.tar.gz && `+
 			`tar -xzf /tmp/nexus-auth.tar.gz -C "$HOME" >/dev/null 2>&1 || true; `+
 			`rm -f /tmp/nexus-auth.tar.gz >/dev/null 2>&1 || true; fi`,
+		`if command -v npm >/dev/null 2>&1; then NPM_BIN=$(npm bin -g 2>/dev/null || true); if [ -n "$NPM_BIN" ] && [ -d "$NPM_BIN" ]; then export PATH="$NPM_BIN:$PATH"; fi; fi`,
 	)
 
 	pkg := make([]string, 0, 3)
@@ -286,6 +287,7 @@ func buildHostAuthBundle() (string, error) {
 	paths := []string{
 		filepath.Join(home, ".config", "opencode"),
 		filepath.Join(home, ".config", "codex"),
+		filepath.Join(home, ".codex"),
 		filepath.Join(home, ".config", "openai"),
 		filepath.Join(home, ".claude"),
 	}

@@ -317,6 +317,7 @@ func TestBuildHostAuthBundleIncludesKnownConfigPaths(t *testing.T) {
 	}
 	mkdir(filepath.Join(home, ".config", "opencode"))
 	mkdir(filepath.Join(home, ".config", "codex"))
+	mkdir(filepath.Join(home, ".codex"))
 	mkdir(filepath.Join(home, ".claude"))
 	if err := os.WriteFile(filepath.Join(home, ".config", "opencode", "session.json"), []byte("{}"), 0o644); err != nil {
 		t.Fatalf("write opencode session: %v", err)
@@ -360,6 +361,9 @@ func TestBuildHostAuthBundleIncludesKnownConfigPaths(t *testing.T) {
 	}
 	if !strings.Contains(joined, ".config/codex") {
 		t.Fatalf("expected codex path in archive, got %q", joined)
+	}
+	if !strings.Contains(joined, ".codex") {
+		t.Fatalf("expected .codex path in archive, got %q", joined)
 	}
 	if !strings.Contains(joined, ".claude") {
 		t.Fatalf("expected claude path in archive, got %q", joined)

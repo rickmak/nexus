@@ -106,7 +106,9 @@ func TestBuildSeatbeltBootstrapScriptIncludesIsolationAndForwarding(t *testing.T
 		"docker-compose-v2",
 		"npm i -g opencode-ai @openai/codex @anthropic-ai/claude-code",
 		"ln -sfn '/Users/tester'/.config/opencode ~/.config/opencode",
+		"ln -sfn '/Users/tester'/.codex ~/.codex",
 		"ln -sfn '/Users/tester'/.claude ~/.claude",
+		"npm bin -g",
 	} {
 		if !strings.Contains(script, token) {
 			t.Fatalf("expected script to include %q", token)

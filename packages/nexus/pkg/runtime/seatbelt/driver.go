@@ -547,8 +547,10 @@ func buildSeatbeltBootstrapScript(hostHome string, hostCLI hostCLIAvailability) 
 			"mkdir -p ~/.config",
 			"if [ -d "+host+"/.config/opencode ]; then ln -sfn "+host+"/.config/opencode ~/.config/opencode; fi",
 			"if [ -d "+host+"/.config/codex ]; then ln -sfn "+host+"/.config/codex ~/.config/codex; fi",
+			"if [ -d "+host+"/.codex ]; then ln -sfn "+host+"/.codex ~/.codex; fi",
 			"if [ -d "+host+"/.config/openai ]; then ln -sfn "+host+"/.config/openai ~/.config/openai; fi",
 			"if [ -d "+host+"/.claude ]; then ln -sfn "+host+"/.claude ~/.claude; fi",
+			"if command -v npm >/dev/null 2>&1; then NPM_BIN=$(npm bin -g 2>/dev/null || true); if [ -n \"$NPM_BIN\" ] && [ -d \"$NPM_BIN\" ]; then export PATH=\"$NPM_BIN:$PATH\"; fi; fi",
 		)
 	}
 
