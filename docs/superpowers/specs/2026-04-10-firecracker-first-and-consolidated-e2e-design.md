@@ -35,6 +35,7 @@ User direction for this design:
 2. Ensure firecracker/Lima readiness is validated before runtime create.
 3. Make create/start/pty/spotlight/auth/tool bootstrap behavior testable from SDK user perspective.
 4. Establish CI confidence such that passing e2e implies UI/CLI action-path confidence.
+5. Validate local-repo fixture, host/workspace sync, lifecycle hooks, and compose-driven spotlight behavior per run.
 
 ## Non-Goals
 
@@ -136,6 +137,21 @@ The suite must cover:
    - installable-missing with successful auto-setup retry,
    - unsupported nested virt exception path,
    - hard-fail path.
+8. Local fixture and sync fidelity:
+   - create fresh local git fixture per test run,
+   - create workspace from fixture,
+   - verify host -> workspace and workspace -> host propagation for tracked file mutations,
+   - verify resulting git status/contents on both sides.
+9. Lifecycle hooks:
+   - verify pre-start/post-start/pre-stop/post-stop hooks execute in expected order,
+   - verify hook failures propagate according to policy and produce diagnostics.
+10. Compose + spotlight auto-detection:
+   - include fixture with docker-compose exposed ports,
+   - verify auto-detected ports become spotlight forwards,
+   - verify forwards are reachable on host and represented in list output.
+11. Spotlight control and visibility UX parity:
+   - verify close/toggle behavior via RPC and CLI paths,
+   - verify active host-mapped ports overview is consistent across UI data payloads and CLI outputs.
 
 ### UI/CLI confidence contract
 
@@ -143,6 +159,7 @@ Maintain explicit mapping artifact:
 
 1. UI action -> RPC method -> e2e test case ID.
 2. CLI command -> RPC method -> e2e test case ID.
+3. Spotlight visibility actions (including toggle/close and active-port overview) must have explicit UI+CLI mappings.
 
 This mapping is required for confidence claims that passing e2e implies high confidence in UI/CLI action paths.
 
@@ -153,6 +170,7 @@ In this effort:
 1. Migrate scenarios from `scripts/ci/*.sh` and ad-hoc JS smoke files into `packages/e2e/sdk-runtime`.
 2. Update CI to execute the new package as the primary end-to-end gate.
 3. Remove migrated legacy scripts.
+4. Keep one migration manifest documenting old script -> new test case mapping for review parity.
 
 ## Observability and Diagnostics
 
@@ -181,3 +199,6 @@ In this effort:
 5. Legacy ad-hoc e2e scripts are removed after parity migration.
 6. CI gates on new e2e package and publishes coverage evidence artifacts.
 7. Structured diagnostics are present for preflight/setup/override/backend decisions.
+8. E2E run creates isolated local git fixtures and verifies bidirectional host/workspace sync.
+9. E2E run verifies lifecycle hooks and docker-compose spotlight auto-detection behavior.
+10. E2E run verifies spotlight close/toggle and active host-port overview parity across UI and CLI pathways.
