@@ -164,6 +164,11 @@ func (m *Manager) Create(_ context.Context, spec CreateSpec) (*Workspace, error)
 	m.mu.Unlock()
 
 	if err := m.persistWorkspace(ws); err != nil {
+		m.mu.Lock()
+		delete(m.workspaces, id)
+		m.mu.Unlock()
+		_ = os.RemoveAll(rootPath)
+		cleanupCreatedWorktree(spec.Repo, localWorktreePath)
 		return nil, fmt.Errorf("persist workspace: %w", err)
 	}
 
@@ -728,4 +733,30 @@ func uniqueWorktreePath(desired string) string {
 		}
 	}
 	return fmt.Sprintf("%s-%d", desired, time.Now().Unix())
+}
+
+func cleanupCreatedWorktree(repoPath, worktreePath string) {
+	if !isSafeWorktreeCleanupPath(repoPath, worktreePath) {
+		return
+	}
+
+	cleanRepo := filepath.Clean(repoPath)
+	cleanWorktree := filepath.Clean(worktreePath)
+	cmd := exec.Command("git", "-C", cleanRepo, "worktree", "remove", "--force", cleanWorktree)
+	_ = cmd.Run()
+	_ = os.RemoveAll(cleanWorktree)
+}
+
+func isSafeWorktreeCleanupPath(repoPath, worktreePath string) bool {
+	if strings.TrimSpace(repoPath) == "" || strings.TrimSpace(worktreePath) == "" {
+		return false
+	}
+	cleanRepo := filepath.Clean(repoPath)
+	cleanWorktree := filepath.Clean(worktreePath)
+	worktreesRoot := filepath.Join(cleanRepo, ".worktrees")
+	prefix := worktreesRoot + string(filepath.Separator)
+	if cleanWorktree == worktreesRoot || !strings.HasPrefix(cleanWorktree+string(filepath.Separator), prefix) {
+		return false
+	}
+	return true
 }

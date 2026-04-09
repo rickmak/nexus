@@ -203,6 +203,49 @@ func TestManager_CreateFailsWhenSQLiteStoreUnavailable(t *testing.T) {
 	}
 }
 
+func TestManager_CreateRollbackOnPersistFailure_RemovesCreateSideEffects(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state-home"))
+
+	if err := os.WriteFile(filepath.Join(root, ".nexus"), []byte("block sqlite dir"), 0o644); err != nil {
+		t.Fatalf("write sqlite blocker file: %v", err)
+	}
+
+	m := NewManager(root)
+	repoRoot := initGitRepoForWorktreeTests(t)
+
+	_, err := m.Create(context.Background(), CreateSpec{
+		Repo:          repoRoot,
+		Ref:           "main",
+		WorkspaceName: "alpha",
+		AgentProfile:  "default",
+	})
+	if err == nil {
+		t.Fatal("expected create to fail when sqlite store is unavailable")
+	}
+
+	if got := len(m.List()); got != 0 {
+		t.Fatalf("expected no workspaces in manager after failed create, got %d", got)
+	}
+
+	instancesDir := filepath.Join(root, "instances")
+	entries, readErr := os.ReadDir(instancesDir)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("read instances dir: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no workspace roots after failed create, got %d entries", len(entries))
+	}
+
+	worktreeEntries, readErr := os.ReadDir(filepath.Join(repoRoot, ".worktrees"))
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("read local worktrees dir: %v", readErr)
+	}
+	if len(worktreeEntries) != 0 {
+		t.Fatalf("expected no local worktrees after failed create, got %d entries", len(worktreeEntries))
+	}
+}
+
 func TestManager_ListWorkspaces_PersistedAcrossReload(t *testing.T) {
 	m := newTestManager(t)
 	_, err := m.Create(context.Background(), CreateSpec{
