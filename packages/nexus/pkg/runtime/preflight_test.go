@@ -57,3 +57,29 @@ func TestClassifyFirecrackerPreflight_UnsupportedNestedVirt(t *testing.T) {
 		t.Fatalf("expected unsupported_nested_virt, got %s", got.Status)
 	}
 }
+
+func TestClassifyFirecrackerPreflight_StatusPrecedence(t *testing.T) {
+	t.Run("hard_fail not overwritten by nested_virt later", func(t *testing.T) {
+		checks := []PreflightCheck{
+			{Name: "kernel_support", OK: false},
+			{Name: "nested_virt", OK: false, Message: "nested virtualization unsupported"},
+		}
+
+		got := ClassifyFirecrackerPreflight(checks, true)
+		if got.Status != PreflightHardFail {
+			t.Fatalf("expected hard_fail, got %s", got.Status)
+		}
+	})
+
+	t.Run("hard_fail wins even when nested_virt appears first", func(t *testing.T) {
+		checks := []PreflightCheck{
+			{Name: "nested_virt", OK: false, Message: "nested virtualization unsupported"},
+			{Name: "kernel_support", OK: false},
+		}
+
+		got := ClassifyFirecrackerPreflight(checks, true)
+		if got.Status != PreflightHardFail {
+			t.Fatalf("expected hard_fail, got %s", got.Status)
+		}
+	})
+}

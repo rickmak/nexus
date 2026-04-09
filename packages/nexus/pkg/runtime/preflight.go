@@ -33,21 +33,36 @@ func ClassifyFirecrackerPreflight(checks []PreflightCheck, macNestedVirtContext 
 			continue
 		}
 
+		candidate := PreflightHardFail
 		if macNestedVirtContext && check.Name == "nested_virt" {
-			status = PreflightUnsupportedNested
-			break
+			candidate = PreflightUnsupportedNested
+		} else if check.Installable {
+			candidate = PreflightInstallableMissing
 		}
 
-		if check.Installable {
-			if status == PreflightPass {
-				status = PreflightInstallableMissing
-			}
-			continue
-		}
-
-		status = PreflightHardFail
+		status = higherPreflightStatus(status, candidate)
 	}
 
 	result.Status = status
 	return result
+}
+
+func higherPreflightStatus(current, candidate PreflightStatus) PreflightStatus {
+	if preflightStatusRank(candidate) > preflightStatusRank(current) {
+		return candidate
+	}
+	return current
+}
+
+func preflightStatusRank(status PreflightStatus) int {
+	switch status {
+	case PreflightHardFail:
+		return 3
+	case PreflightUnsupportedNested:
+		return 2
+	case PreflightInstallableMissing:
+		return 1
+	default:
+		return 0
+	}
 }
