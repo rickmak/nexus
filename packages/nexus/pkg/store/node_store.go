@@ -189,6 +189,24 @@ func (s *NodeStore) ReplaceSpotlightForwardRows(forwards []SpotlightForwardRow) 
 		return fmt.Errorf("close spotlight ids for replace: %w", err)
 	}
 
+	desired := make(map[string]struct{})
+	for _, fwd := range forwards {
+		if fwd.ID == "" || fwd.WorkspaceID == "" || fwd.LocalPort <= 0 || len(fwd.Payload) == 0 {
+			continue
+		}
+		desired[fwd.ID] = struct{}{}
+	}
+
+	for id := range existing {
+		if _, keep := desired[id]; keep {
+			continue
+		}
+		if _, err := tx.Exec(`DELETE FROM spotlight_forwards WHERE id = ?`, id); err != nil {
+			_ = tx.Rollback()
+			return fmt.Errorf("delete spotlight forward in replace: %w", err)
+		}
+	}
+
 	stmt, err := tx.Prepare(
 		`INSERT INTO spotlight_forwards(id, workspace_id, local_port, payload_json, created_at)
 		 VALUES(?, ?, ?, ?, ?)
@@ -204,12 +222,10 @@ func (s *NodeStore) ReplaceSpotlightForwardRows(forwards []SpotlightForwardRow) 
 	}
 	defer stmt.Close()
 
-	desired := make(map[string]struct{})
 	for _, fwd := range forwards {
 		if fwd.ID == "" || fwd.WorkspaceID == "" || fwd.LocalPort <= 0 || len(fwd.Payload) == 0 {
 			continue
 		}
-		desired[fwd.ID] = struct{}{}
 		if _, err := stmt.Exec(
 			fwd.ID,
 			fwd.WorkspaceID,
@@ -219,16 +235,6 @@ func (s *NodeStore) ReplaceSpotlightForwardRows(forwards []SpotlightForwardRow) 
 		); err != nil {
 			_ = tx.Rollback()
 			return fmt.Errorf("upsert spotlight forward in replace: %w", err)
-		}
-	}
-
-	for id := range existing {
-		if _, keep := desired[id]; keep {
-			continue
-		}
-		if _, err := tx.Exec(`DELETE FROM spotlight_forwards WHERE id = ?`, id); err != nil {
-			_ = tx.Rollback()
-			return fmt.Errorf("delete spotlight forward in replace: %w", err)
 		}
 	}
 

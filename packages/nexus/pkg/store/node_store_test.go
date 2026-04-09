@@ -103,3 +103,118 @@ func TestNodeStore_PersistAndLoadWorkspaceAndSpotlight(t *testing.T) {
 		t.Fatalf("unexpected spotlight rows after delete: %#v", allFwd)
 	}
 }
+
+func TestNodeStore_ReplaceSpotlightForwardRows_ReplacesSetIncludingPortTakeover(t *testing.T) {
+	now := time.Date(2026, time.April, 9, 13, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "node.db")
+
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	seed := []store.SpotlightForwardRow{
+		{ID: "old", WorkspaceID: "ws-old", LocalPort: 18000, Payload: []byte(`{"id":"old","v":1}`), CreatedAt: now},
+		{ID: "keep", WorkspaceID: "ws-keep", LocalPort: 18001, Payload: []byte(`{"id":"keep","v":1}`), CreatedAt: now},
+	}
+	for _, row := range seed {
+		if err := st.UpsertSpotlightForwardRow(row); err != nil {
+			t.Fatalf("seed spotlight row %q: %v", row.ID, err)
+		}
+	}
+
+	desired := []store.SpotlightForwardRow{
+		{ID: "keep", WorkspaceID: "ws-keep-updated", LocalPort: 18001, Payload: []byte(`{"id":"keep","v":2}`), CreatedAt: now.Add(time.Minute)},
+		{ID: "new", WorkspaceID: "ws-new", LocalPort: 18000, Payload: []byte(`{"id":"new","v":1}`), CreatedAt: now.Add(2 * time.Minute)},
+	}
+
+	if err := st.ReplaceSpotlightForwardRows(desired); err != nil {
+		t.Fatalf("replace spotlight rows: %v", err)
+	}
+
+	rows, err := st.ListSpotlightForwardRows()
+	if err != nil {
+		t.Fatalf("list spotlight rows: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected 2 spotlight rows after replace, got %d: %#v", len(rows), rows)
+	}
+
+	byID := map[string]store.SpotlightForwardRow{}
+	for _, row := range rows {
+		byID[row.ID] = row
+	}
+
+	if _, ok := byID["old"]; ok {
+		t.Fatalf("stale row \"old\" should be deleted: %#v", rows)
+	}
+
+	keep, ok := byID["keep"]
+	if !ok {
+		t.Fatalf("expected updated row \"keep\" to exist: %#v", rows)
+	}
+	if keep.WorkspaceID != "ws-keep-updated" || string(keep.Payload) != `{"id":"keep","v":2}` {
+		t.Fatalf("expected updated \"keep\" row, got: %#v", keep)
+	}
+
+	newRow, ok := byID["new"]
+	if !ok {
+		t.Fatalf("expected new row \"new\" to exist: %#v", rows)
+	}
+	if newRow.LocalPort != 18000 {
+		t.Fatalf("expected new row to take over stale local port 18000, got: %#v", newRow)
+	}
+}
+
+func TestNodeStore_ReplaceSpotlightForwardRows_RollsBackOnFailure(t *testing.T) {
+	now := time.Date(2026, time.April, 9, 14, 0, 0, 0, time.UTC)
+	path := filepath.Join(t.TempDir(), "node.db")
+
+	st, err := store.Open(path)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	t.Cleanup(func() { _ = st.Close() })
+
+	seed := []store.SpotlightForwardRow{
+		{ID: "old", WorkspaceID: "ws-old", LocalPort: 19000, Payload: []byte(`{"id":"old"}`), CreatedAt: now},
+		{ID: "keep", WorkspaceID: "ws-keep", LocalPort: 19001, Payload: []byte(`{"id":"keep"}`), CreatedAt: now},
+	}
+	for _, row := range seed {
+		if err := st.UpsertSpotlightForwardRow(row); err != nil {
+			t.Fatalf("seed spotlight row %q: %v", row.ID, err)
+		}
+	}
+
+	err = st.ReplaceSpotlightForwardRows([]store.SpotlightForwardRow{
+		{ID: "new", WorkspaceID: "ws-new", LocalPort: 19000, Payload: []byte(`{"id":"new"}`), CreatedAt: now.Add(time.Minute)},
+		{ID: "dup", WorkspaceID: "ws-dup", LocalPort: 19000, Payload: []byte(`{"id":"dup"}`), CreatedAt: now.Add(2 * time.Minute)},
+	})
+	if err == nil {
+		t.Fatalf("expected replace to fail due to duplicate local port in desired set")
+	}
+
+	rows, listErr := st.ListSpotlightForwardRows()
+	if listErr != nil {
+		t.Fatalf("list spotlight rows: %v", listErr)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("expected rollback to preserve 2 original rows, got %d: %#v", len(rows), rows)
+	}
+
+	byID := map[string]store.SpotlightForwardRow{}
+	for _, row := range rows {
+		byID[row.ID] = row
+	}
+
+	if _, ok := byID["old"]; !ok {
+		t.Fatalf("expected rollback to restore stale row \"old\": %#v", rows)
+	}
+	if _, ok := byID["keep"]; !ok {
+		t.Fatalf("expected rollback to preserve row \"keep\": %#v", rows)
+	}
+	if _, ok := byID["new"]; ok {
+		t.Fatalf("expected rollback to remove partially inserted row \"new\": %#v", rows)
+	}
+}
