@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -19,6 +20,27 @@ import (
 	"github.com/inizio/nexus/packages/nexus/pkg/spotlight"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspacemgr"
 )
+
+func TestNewServer_FallsBackToInMemorySpotlightManagerOnRepositoryInitError(t *testing.T) {
+	originalFactory := newSpotlightManagerForServer
+	t.Cleanup(func() {
+		newSpotlightManagerForServer = originalFactory
+	})
+
+	newSpotlightManagerForServer = func(_ *workspacemgr.Manager) (*spotlight.Manager, error) {
+		return nil, fmt.Errorf("forced spotlight hydration failure")
+	}
+
+	srv, err := NewServer(0, t.TempDir(), "secret-token")
+	if err != nil {
+		t.Fatalf("expected NewServer to succeed when spotlight repository hydration fails, got err: %v", err)
+	}
+
+	forwards := srv.spotlightMgr.List("")
+	if len(forwards) != 0 {
+		t.Fatalf("expected empty in-memory spotlight manager after fallback, got %d forwards", len(forwards))
+	}
+}
 
 type serverTestDriver struct {
 	backend string

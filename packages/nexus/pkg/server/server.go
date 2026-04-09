@@ -120,6 +120,10 @@ type ptyCloseParams struct {
 	SessionID string `json:"sessionId"`
 }
 
+var newSpotlightManagerForServer = func(workspaceMgr *workspacemgr.Manager) (*spotlight.Manager, error) {
+	return spotlight.NewManagerWithRepository(workspaceMgr.SpotlightRepository())
+}
+
 func NewServer(port int, workspaceDir string, tokenSecret string) (*Server, error) {
 	ws, err := workspace.NewWorkspace(workspaceDir)
 	if err != nil {
@@ -128,9 +132,10 @@ func NewServer(port int, workspaceDir string, tokenSecret string) (*Server, erro
 
 	workspaceMgr := workspacemgr.NewManager(workspaceDir)
 
-	spotlightMgr, err := spotlight.NewManagerWithRepository(workspaceMgr.SpotlightRepository())
+	spotlightMgr, err := newSpotlightManagerForServer(workspaceMgr)
 	if err != nil {
-		return nil, fmt.Errorf("failed to initialize spotlight manager: %w", err)
+		log.Printf("[spotlight] Warning: failed to initialize sqlite-backed spotlight manager, falling back to in-memory manager: %v", err)
+		spotlightMgr = spotlight.NewManager()
 	}
 
 	lifecycleMgr, err := lifecycle.NewManager(workspaceDir)
