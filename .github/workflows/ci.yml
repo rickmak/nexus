@@ -298,6 +298,11 @@ jobs:
                   exit 0
                 fi
               fi
+              if [[ "${{ matrix.optional }}" == "true" ]]; then
+                echo "Skipping optional scenario ${{ matrix.scenario }} due to workspace create failure"
+                printf '%s\n' "${CREATE_OUTPUT}"
+                exit 0
+              fi
               printf '%s\n' "${CREATE_OUTPUT}" >&2
               exit 1
             }
