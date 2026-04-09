@@ -200,6 +200,60 @@ func TestPTYOpenFirecrackerAliasFallsBackToDriverReportedBackend(t *testing.T) {
 	}
 }
 
+func TestPTYOpenSeatbeltUsesSeatbeltDriver(t *testing.T) {
+	srv, err := NewServer(0, t.TempDir(), "secret-token")
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	firecrackerDriver := &serverTestConnectorDriver{
+		serverTestDriver: serverTestDriver{backend: "firecracker"},
+		writeSignal:      make(chan struct{}, 1),
+		resizeSignal:     make(chan struct{}, 1),
+	}
+	seatbeltDriver := &serverTestConnectorDriver{
+		serverTestDriver: serverTestDriver{backend: "seatbelt"},
+		writeSignal:      make(chan struct{}, 1),
+		resizeSignal:     make(chan struct{}, 1),
+	}
+
+	factory := runtime.NewFactory(
+		[]runtime.Capability{
+			{Name: "runtime.firecracker", Available: true},
+			{Name: "runtime.seatbelt", Available: true},
+		},
+		map[string]runtime.Driver{
+			"firecracker": firecrackerDriver,
+			"seatbelt":    seatbeltDriver,
+		},
+	)
+	srv.SetRuntimeFactory(factory)
+
+	ws := createWorkspaceForPTYTest(t, srv.workspaceMgr, "seatbelt")
+	if err := srv.workspaceMgr.Start(ws.ID); err != nil {
+		t.Fatalf("start workspace: %v", err)
+	}
+
+	conn := &Connection{send: make(chan []byte, 16), clientID: "test", pty: map[string]*ptySession{}}
+	payload, _ := json.Marshal(map[string]any{
+		"workspaceId": ws.ID,
+		"cols":        80,
+		"rows":        24,
+	})
+
+	_, rpcErr := srv.handlePTYOpen(payload, conn, srv.ws)
+	if rpcErr != nil {
+		t.Fatalf("pty.open rpc error: %+v", rpcErr)
+	}
+
+	if called, _, _ := firecrackerDriver.openDetails(ws.ID); called {
+		t.Fatalf("expected firecracker connector not to be used for seatbelt workspace %s", ws.ID)
+	}
+	if called, _, _ := seatbeltDriver.openDetails(ws.ID); !called {
+		t.Fatalf("expected seatbelt connector to be used for workspace %s", ws.ID)
+	}
+}
+
 func (d *serverTestConnectorDriver) openDetails(workspaceID string) (bool, string, string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()

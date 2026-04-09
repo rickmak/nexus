@@ -758,18 +758,11 @@ func (s *Server) handleFirecrackerPTYOpen(conn *Connection, p ptyOpenParams, wsR
 		backend = "firecracker"
 	}
 	if requestedBackend == "firecracker" || requestedBackend == "seatbelt" {
-		if driverAny, ok := s.runtimeFactory.DriverForBackend("firecracker"); ok {
-			log.Printf("[pty.open] firecracker driver type=%T reported-backend=%q", driverAny, strings.TrimSpace(driverAny.Backend()))
-			if reported := strings.TrimSpace(driverAny.Backend()); reported != "" && reported != requestedBackend {
-				log.Printf("[pty.open] backend alias: workspace backend=%s runtime backend=%s", requestedBackend, reported)
+		if driverAny, ok := s.runtimeFactory.DriverForBackend(requestedBackend); ok {
+			reported := strings.TrimSpace(driverAny.Backend())
+			log.Printf("[pty.open] %s driver type=%T reported-backend=%q", requestedBackend, driverAny, reported)
+			if reported != "" {
 				backend = reported
-			}
-		}
-		if requestedBackend == "seatbelt" {
-			if driverAny, ok := s.runtimeFactory.DriverForBackend("seatbelt"); ok {
-				if reported := strings.TrimSpace(driverAny.Backend()); reported != "" {
-					backend = reported
-				}
 			}
 		}
 	}
