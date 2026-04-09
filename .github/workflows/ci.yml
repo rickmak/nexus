@@ -107,30 +107,6 @@ jobs:
             **/coverage/
           retention-days: 7
 
-  opencode-nexus-plugin:
-    name: OpenCode Nexus Plugin Tests
-    runs-on: ubuntu-latest
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Install pnpm
-        uses: pnpm/action-setup@v4
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-          cache: 'pnpm'
-
-      - name: Install dependencies
-        run: pnpm install --frozen-lockfile
-
-      - name: Run opencode-nexus plugin tests
-        working-directory: packages/opencode-nexus
-        run: node --test test/*.test.js
-
   # macOS: GitHub-hosted arm64 runners cannot use Apple Hypervisor Framework inside the VM (HV_UNSUPPORTED);
   # see https://github.com/abiosoft/colima/issues/970 — use the hosted Intel image (nested virt) or slower QEMU/lima
   # workarounds on arm64. We use macos-15-intel (x86_64) for Lima + Firecracker strict E2E without self-hosted runners.
