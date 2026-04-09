@@ -7,9 +7,45 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+func TestNodeStorePathForRoot_UsesTempScopedDBForTmpSymlinkPath(t *testing.T) {
+	defaultPath := filepath.Join(t.TempDir(), "state-home", "nexus", "node.db")
+	target := t.TempDir()
+
+	link := filepath.Join("/tmp", fmt.Sprintf("nexus-link-%d", time.Now().UnixNano()))
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink setup unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(link) })
+
+	cleanLink := filepath.Clean(link)
+	cleanTemp := filepath.Clean(os.TempDir())
+	if strings.HasPrefix(cleanLink+string(filepath.Separator), cleanTemp+string(filepath.Separator)) {
+		t.Skip("raw path already under tempdir; canonicalization case not applicable")
+	}
+
+	resolvedLink, err := filepath.EvalSymlinks(cleanLink)
+	if err != nil {
+		t.Skipf("cannot resolve link path: %v", err)
+	}
+	resolvedTemp, err := filepath.EvalSymlinks(cleanTemp)
+	if err != nil {
+		t.Skipf("cannot resolve tempdir path: %v", err)
+	}
+	if !strings.HasPrefix(resolvedLink+string(filepath.Separator), resolvedTemp+string(filepath.Separator)) {
+		t.Skip("resolved link path is not under resolved tempdir on this host")
+	}
+
+	got := nodeStorePathForRoot(link, defaultPath)
+	want := filepath.Join(cleanLink, ".nexus", "state", "node.db")
+	if got != want {
+		t.Fatalf("expected temp-scoped db path %q, got %q", want, got)
+	}
+}
 
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()

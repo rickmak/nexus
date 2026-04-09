@@ -35,12 +35,7 @@ func NewManager(root string) *Manager {
 		root:       root,
 		workspaces: make(map[string]*Workspace),
 	}
-	storePath := config.NodeDBPath()
-	cleanRoot := filepath.Clean(root)
-	tmpPrefix := filepath.Clean(os.TempDir()) + string(filepath.Separator)
-	if strings.HasPrefix(cleanRoot+string(filepath.Separator), tmpPrefix) {
-		storePath = filepath.Join(cleanRoot, ".nexus", "state", "node.db")
-	}
+	storePath := nodeStorePathForRoot(root, config.NodeDBPath())
 	if st, err := store.Open(storePath); err == nil {
 		m.workspaceRepo = st
 	} else {
@@ -48,6 +43,30 @@ func NewManager(root string) *Manager {
 	}
 	_ = m.loadAll()
 	return m
+}
+
+func nodeStorePathForRoot(root string, defaultPath string) string {
+	cleanRoot := filepath.Clean(root)
+	if cleanRoot == "" || defaultPath == "" {
+		return defaultPath
+	}
+
+	resolvedRoot := cleanRoot
+	if real, err := filepath.EvalSymlinks(cleanRoot); err == nil {
+		resolvedRoot = filepath.Clean(real)
+	}
+
+	resolvedTemp := filepath.Clean(os.TempDir())
+	if real, err := filepath.EvalSymlinks(resolvedTemp); err == nil {
+		resolvedTemp = filepath.Clean(real)
+	}
+
+	tmpPrefix := resolvedTemp + string(filepath.Separator)
+	if strings.HasPrefix(resolvedRoot+string(filepath.Separator), tmpPrefix) {
+		return filepath.Join(cleanRoot, ".nexus", "state", "node.db")
+	}
+
+	return defaultPath
 }
 
 func (m *Manager) loadAll() error {
