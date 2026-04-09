@@ -133,6 +133,15 @@ func (m *Manager) Expose(_ context.Context, spec ExposeSpec) (*Forward, error) {
 
 	now := time.Now().UTC()
 	id := fmt.Sprintf("spot-%d", now.UnixNano())
+	if _, exists := m.forwards[id]; exists {
+		for suffix := 2; ; suffix++ {
+			candidate := fmt.Sprintf("%s-%d", id, suffix)
+			if _, dup := m.forwards[candidate]; !dup {
+				id = candidate
+				break
+			}
+		}
+	}
 	fwd := &Forward{
 		ID:          id,
 		WorkspaceID: spec.WorkspaceID,

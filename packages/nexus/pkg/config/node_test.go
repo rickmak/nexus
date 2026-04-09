@@ -105,3 +105,46 @@ func TestNodeConfigPath_NotEmpty(t *testing.T) {
 		t.Error("NodeConfigPath() returned empty string")
 	}
 }
+
+func TestLoadNodeConfig_Compatibility_MinimumDaemonVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "node.json")
+
+	raw := map[string]any{
+		"version": 1,
+		"compatibility": map[string]any{
+			"minimumDaemonVersion": "v0.3.0",
+		},
+	}
+	data, _ := json.Marshal(raw)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, err := config.LoadNodeConfig(path)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.Compatibility.MinimumDaemonVersion != "v0.3.0" {
+		t.Fatalf("expected minimum daemon version v0.3.0, got %q", cfg.Compatibility.MinimumDaemonVersion)
+	}
+}
+
+func TestLoadNodeConfig_Compatibility_InvalidMinimumDaemonVersion(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "node.json")
+
+	raw := map[string]any{
+		"version": 1,
+		"compatibility": map[string]any{
+			"minimumDaemonVersion": "not-semver",
+		},
+	}
+	data, _ := json.Marshal(raw)
+	_ = os.WriteFile(path, data, 0o644)
+
+	_, err := config.LoadNodeConfig(path)
+	if err == nil {
+		t.Fatal("expected error for invalid minimumDaemonVersion")
+	}
+}
