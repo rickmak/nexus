@@ -485,9 +485,18 @@ func (s *Server) processRPC(msg *RPCMessage, conn *Connection) *RPCResponse {
 	case "workspace.ready":
 		workspaceID := extractWorkspaceID(msg.Params)
 		if workspaceID == "" {
-			workspaceID = workspace.ID()
+			err = rpckit.ErrInvalidParams
+			break
 		}
-		s.ensureComposeForwards(ctx, workspaceID, workspace.Path())
+		if accessErr := s.requireWorkspaceStarted(workspaceID); accessErr != nil {
+			err = accessErr
+			break
+		}
+		rootPath := workspace.Path()
+		if wsRecord, ok := s.workspaceMgr.Get(workspaceID); ok && strings.TrimSpace(wsRecord.RootPath) != "" {
+			rootPath = wsRecord.RootPath
+		}
+		s.ensureComposeForwards(ctx, workspaceID, rootPath)
 		result, err = handlers.HandleWorkspaceReady(ctx, msg.Params, workspace, s.serviceMgr)
 	case "git.command":
 		result, err = handlers.HandleGitCommand(ctx, msg.Params, workspace)
@@ -649,6 +658,23 @@ func (s *Server) handleWorkspaceInfo(params json.RawMessage) map[string]interfac
 	return result
 }
 
+func (s *Server) requireWorkspaceStarted(workspaceID string) *rpckit.RPCError {
+	workspaceID = strings.TrimSpace(workspaceID)
+	if workspaceID == "" {
+		return rpckit.ErrInvalidParams
+	}
+
+	wsRecord, ok := s.workspaceMgr.Get(workspaceID)
+	if !ok {
+		return rpckit.ErrWorkspaceNotFound
+	}
+	if wsRecord.State != workspacemgr.StateRunning {
+		return rpckit.ErrWorkspaceNotStarted
+	}
+
+	return nil
+}
+
 func (s *Server) handlePTYOpen(params json.RawMessage, conn *Connection, ws *workspace.Workspace) (interface{}, *rpckit.RPCError) {
 	var p ptyOpenParams
 	if err := json.Unmarshal(params, &p); err != nil {
@@ -670,19 +696,21 @@ func (s *Server) handlePTYOpen(params json.RawMessage, conn *Connection, ws *wor
 	}
 
 	workDir := ws.Path()
-	workspaceID := p.WorkspaceID
-	if p.WorkspaceID != "" {
-		if wsRecord, ok := s.workspaceMgr.Get(p.WorkspaceID); ok {
-			log.Printf("[pty.open] workspace=%s name=%s backend=%s localWorktree=%s root=%s", wsRecord.ID, wsRecord.WorkspaceName, wsRecord.Backend, wsRecord.LocalWorktreePath, wsRecord.RootPath)
-			if wsRecord.Backend == "firecracker" || wsRecord.Backend == "seatbelt" {
-				return s.handleFirecrackerPTYOpen(conn, p, wsRecord)
-			}
-			if strings.TrimSpace(wsRecord.LocalWorktreePath) != "" {
-				workDir = wsRecord.LocalWorktreePath
-			}
-			if workspaceID == "" {
-				workspaceID = wsRecord.ID
-			}
+	workspaceID := strings.TrimSpace(p.WorkspaceID)
+	if workspaceID == "" {
+		return nil, rpckit.ErrInvalidParams
+	}
+	if accessErr := s.requireWorkspaceStarted(workspaceID); accessErr != nil {
+		return nil, accessErr
+	}
+
+	if wsRecord, ok := s.workspaceMgr.Get(workspaceID); ok {
+		log.Printf("[pty.open] workspace=%s name=%s backend=%s localWorktree=%s root=%s", wsRecord.ID, wsRecord.WorkspaceName, wsRecord.Backend, wsRecord.LocalWorktreePath, wsRecord.RootPath)
+		if wsRecord.Backend == "firecracker" || wsRecord.Backend == "seatbelt" {
+			return s.handleFirecrackerPTYOpen(conn, p, wsRecord)
+		}
+		if strings.TrimSpace(wsRecord.LocalWorktreePath) != "" {
+			workDir = wsRecord.LocalWorktreePath
 		}
 	}
 

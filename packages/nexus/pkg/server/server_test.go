@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	rpckit "github.com/inizio/nexus/packages/nexus/pkg/rpcerrors"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspacemgr"
 )
@@ -137,6 +138,9 @@ func TestPTYOpenFirecrackerAliasFallsBackToDriverReportedBackend(t *testing.T) {
 	srv.SetRuntimeFactory(factory)
 
 	ws := createWorkspaceForPTYTest(t, srv.workspaceMgr, "firecracker")
+	if err := srv.workspaceMgr.Start(ws.ID); err != nil {
+		t.Fatalf("start workspace: %v", err)
+	}
 	conn := &Connection{send: make(chan []byte, 16), clientID: "test", pty: map[string]*ptySession{}}
 
 	payload, _ := json.Marshal(map[string]any{
@@ -230,6 +234,9 @@ func testPTYOpenUsesRemoteConnectorForBackend(t *testing.T, backend string) {
 	srv.SetRuntimeFactory(factory)
 
 	ws := createWorkspaceForPTYTest(t, srv.workspaceMgr, backend)
+	if err := srv.workspaceMgr.Start(ws.ID); err != nil {
+		t.Fatalf("start workspace: %v", err)
+	}
 	conn := &Connection{send: make(chan []byte, 16), clientID: "test", pty: map[string]*ptySession{}}
 
 	payload, _ := json.Marshal(map[string]any{
@@ -306,6 +313,132 @@ func testPTYOpenUsesRemoteConnectorForBackend(t *testing.T, backend string) {
 	if closeResultMap, ok := closeResult.(map[string]bool); !ok || !closeResultMap["closed"] {
 		t.Fatalf("expected idempotent close result {closed:true}, got %#v", closeResult)
 	}
+}
+
+func TestPTYOpenRejectsWorkspaceNotStarted(t *testing.T) {
+	srv, err := NewServer(0, t.TempDir(), "secret-token")
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	ws := createWorkspaceForPTYTest(t, srv.workspaceMgr, "")
+	conn := &Connection{send: make(chan []byte, 16), clientID: "test", pty: map[string]*ptySession{}}
+
+	payload, _ := json.Marshal(map[string]any{"workspaceId": ws.ID})
+	_, rpcErr := srv.handlePTYOpen(payload, conn, srv.ws)
+	if rpcErr == nil {
+		t.Fatal("expected workspace-not-started rpc error")
+	}
+	if rpcErr.Code != rpckit.ErrWorkspaceNotStarted.Code {
+		t.Fatalf("expected ErrWorkspaceNotStarted code %d, got %+v", rpckit.ErrWorkspaceNotStarted.Code, rpcErr)
+	}
+	if rpcErr.Message != rpckit.ErrWorkspaceNotStarted.Message {
+		t.Fatalf("expected Workspace not started, got %+v", rpcErr)
+	}
+}
+
+func TestWorkspaceReadyRejectsWorkspaceNotStarted(t *testing.T) {
+	srv, err := NewServer(0, t.TempDir(), "secret-token")
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	ws := createWorkspaceForPTYTest(t, srv.workspaceMgr, "")
+	msg := &RPCMessage{
+		JSONRPC: "2.0",
+		ID:      "1",
+		Method:  "workspace.ready",
+		Params: mustRawJSON(map[string]any{
+			"workspaceId": ws.ID,
+			"checks": []map[string]any{{
+				"name":    "compose",
+				"command": "docker-compose",
+				"args":    []string{"ps"},
+			}},
+			"timeoutMs":  500,
+			"intervalMs": 100,
+		}),
+	}
+
+	resp := srv.processRPC(msg, &Connection{send: make(chan []byte, 1), clientID: "test", pty: map[string]*ptySession{}})
+	if resp.Error == nil {
+		t.Fatal("expected workspace-not-started error")
+	}
+	if resp.Error.Code != rpckit.ErrWorkspaceNotStarted.Code {
+		t.Fatalf("expected ErrWorkspaceNotStarted code %d, got %+v", rpckit.ErrWorkspaceNotStarted.Code, resp.Error)
+	}
+	if resp.Error.Message != rpckit.ErrWorkspaceNotStarted.Message {
+		t.Fatalf("unexpected rpc error: %+v", resp.Error)
+	}
+}
+
+func TestWorkspaceReadyAllowsStartedWorkspace(t *testing.T) {
+	srv, err := NewServer(0, t.TempDir(), "secret-token")
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	ws := createWorkspaceForPTYTest(t, srv.workspaceMgr, "")
+	if err := srv.workspaceMgr.Start(ws.ID); err != nil {
+		t.Fatalf("start workspace: %v", err)
+	}
+
+	msg := &RPCMessage{
+		JSONRPC: "2.0",
+		ID:      "1",
+		Method:  "workspace.ready",
+		Params: mustRawJSON(map[string]any{
+			"workspaceId": ws.ID,
+			"checks": []map[string]any{{
+				"name":    "compose",
+				"command": "sh",
+				"args":    []string{"-lc", "exit 0"},
+			}},
+			"timeoutMs":  500,
+			"intervalMs": 100,
+		}),
+	}
+
+	resp := srv.processRPC(msg, &Connection{send: make(chan []byte, 1), clientID: "test", pty: map[string]*ptySession{}})
+	if resp.Error != nil {
+		t.Fatalf("expected workspace.ready success for started workspace, got %+v", resp.Error)
+	}
+	if resp.Result == nil {
+		t.Fatal("expected workspace.ready result")
+	}
+}
+
+func TestPTYOpenAllowsStartedWorkspace(t *testing.T) {
+	srv, err := NewServer(0, t.TempDir(), "secret-token")
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	ws := createWorkspaceForPTYTest(t, srv.workspaceMgr, "")
+	if err := srv.workspaceMgr.Start(ws.ID); err != nil {
+		t.Fatalf("start workspace: %v", err)
+	}
+
+	conn := &Connection{send: make(chan []byte, 16), clientID: "test", pty: map[string]*ptySession{}}
+	payload, _ := json.Marshal(map[string]any{"workspaceId": ws.ID, "shell": "sh", "rows": 12, "cols": 40})
+	result, rpcErr := srv.handlePTYOpen(payload, conn, srv.ws)
+	if rpcErr != nil {
+		t.Fatalf("expected started workspace to open PTY, got %+v", rpcErr)
+	}
+	if result == nil {
+		t.Fatal("expected pty.open result")
+	}
+
+	open := result.(*ptyOpenResult)
+	closeParams, _ := json.Marshal(map[string]any{"sessionId": open.SessionID})
+	if _, rpcErr := srv.handlePTYClose(closeParams, conn); rpcErr != nil {
+		t.Fatalf("pty.close rpc error: %+v", rpcErr)
+	}
+}
+
+func mustRawJSON(v any) json.RawMessage {
+	b, _ := json.Marshal(v)
+	return b
 }
 
 func TestUIAPIEndpointsRemoved(t *testing.T) {
