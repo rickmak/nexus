@@ -12,7 +12,11 @@ tasks:
     desc: "Hot-reload daemon with air (proxies /ui to Vite on :5173)"
     dir: packages/nexus
     cmds:
-      - air
+      - >-
+        air
+        --build.cmd "go build -o ./tmp/main ./cmd/daemon"
+        --build.entrypoint "./tmp/main"
+        --build.args_bin "--token dev-token --workspace-dir $(python3 -c 'import os,tempfile; print(os.path.join(tempfile.gettempdir(),"nexus-dev-workspace"))')"
     env:
       NEXUS_DEV_UI: "http://localhost:5173"
 
@@ -20,6 +24,7 @@ tasks:
     desc: "Vite dev server for the admin UI"
     dir: packages/nexus-ui
     cmds:
+      - pnpm install
       - pnpm dev
 
   dev:workspace-dir:
