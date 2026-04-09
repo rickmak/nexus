@@ -13,10 +13,14 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/inizio/nexus/packages/nexus/pkg/config"
+	"github.com/inizio/nexus/packages/nexus/pkg/store"
 )
 
 type Manager struct {
 	root       string
+	store      *store.NodeStore
 	mu         sync.RWMutex
 	workspaces map[string]*Workspace
 }
@@ -25,6 +29,17 @@ func NewManager(root string) *Manager {
 	m := &Manager{
 		root:       root,
 		workspaces: make(map[string]*Workspace),
+	}
+	storePath := config.NodeDBPath()
+	cleanRoot := filepath.Clean(root)
+	tmpPrefix := filepath.Clean(os.TempDir()) + string(filepath.Separator)
+	if strings.HasPrefix(cleanRoot+string(filepath.Separator), tmpPrefix) {
+		storePath = filepath.Join(cleanRoot, ".nexus", "state", "node.db")
+	}
+	if st, err := store.Open(storePath); err == nil {
+		m.store = st
+	} else {
+		fmt.Fprintf(os.Stderr, "workspacemgr: warning: sqlite store disabled (%v)\n", err)
 	}
 	_ = m.loadAll()
 	return m
@@ -39,6 +54,37 @@ func (m *Manager) recordPath(id string) string {
 }
 
 func (m *Manager) loadAll() error {
+	if m.store != nil {
+		all, err := m.store.ListWorkspaceRows()
+		if err == nil {
+			for _, row := range all {
+				if len(row.Payload) == 0 {
+					continue
+				}
+				var ws Workspace
+				if err := json.Unmarshal(row.Payload, &ws); err != nil {
+					continue
+				}
+				if ws.RepoID == "" {
+					ws.RepoID = deriveRepoID(ws.Repo)
+				}
+				if ws.RepoKind == "" {
+					ws.RepoKind = deriveRepoKind(ws.Repo)
+				}
+				if ws.LineageRootID == "" {
+					if ws.ParentWorkspaceID == "" {
+						ws.LineageRootID = ws.ID
+					} else {
+						ws.LineageRootID = ws.ParentWorkspaceID
+					}
+				}
+				copy := ws
+				m.workspaces[ws.ID] = &copy
+			}
+			return nil
+		}
+	}
+
 	dir := m.workspacesDir()
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -79,6 +125,21 @@ func (m *Manager) loadAll() error {
 }
 
 func (m *Manager) persistWorkspace(ws *Workspace) error {
+	if m.store != nil {
+		payload, err := json.Marshal(ws)
+		if err != nil {
+			return fmt.Errorf("marshal sqlite workspace payload: %w", err)
+		}
+		if err := m.store.UpsertWorkspaceRow(store.WorkspaceRow{
+			ID:        ws.ID,
+			Payload:   payload,
+			CreatedAt: ws.CreatedAt,
+			UpdatedAt: ws.UpdatedAt,
+		}); err != nil {
+			return fmt.Errorf("upsert sqlite workspace: %w", err)
+		}
+	}
+
 	if err := os.MkdirAll(m.workspacesDir(), 0o755); err != nil {
 		return fmt.Errorf("create workspaces dir: %w", err)
 	}
@@ -93,6 +154,9 @@ func (m *Manager) persistWorkspace(ws *Workspace) error {
 }
 
 func (m *Manager) deleteRecord(id string) {
+	if m.store != nil {
+		_ = m.store.DeleteWorkspace(id)
+	}
 	_ = os.Remove(m.recordPath(id))
 }
 

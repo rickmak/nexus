@@ -12,6 +12,7 @@ import (
 
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state-home"))
 	return NewManager(t.TempDir())
 }
 

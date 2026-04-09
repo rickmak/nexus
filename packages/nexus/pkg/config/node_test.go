@@ -148,3 +148,35 @@ func TestLoadNodeConfig_Compatibility_InvalidMinimumDaemonVersion(t *testing.T) 
 		t.Fatal("expected error for invalid minimumDaemonVersion")
 	}
 }
+
+func TestNodeConfigPath_DefaultsToDotNexusWhenXDGConfigHomeMissing(t *testing.T) {
+	orig := os.Getenv("XDG_CONFIG_HOME")
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil || home == "" {
+		t.Skip("home directory unavailable")
+	}
+	t.Cleanup(func() { _ = os.Setenv("XDG_CONFIG_HOME", orig) })
+	_ = os.Unsetenv("XDG_CONFIG_HOME")
+
+	got := config.NodeConfigPath()
+	want := filepath.Join(home, ".nexus", "node.json")
+	if got != want {
+		t.Fatalf("expected default node config path %q, got %q", want, got)
+	}
+}
+
+func TestNodeDBPath_DefaultsToDotNexusWhenXDGStateHomeMissing(t *testing.T) {
+	orig := os.Getenv("XDG_STATE_HOME")
+	home, homeErr := os.UserHomeDir()
+	if homeErr != nil || home == "" {
+		t.Skip("home directory unavailable")
+	}
+	t.Cleanup(func() { _ = os.Setenv("XDG_STATE_HOME", orig) })
+	_ = os.Unsetenv("XDG_STATE_HOME")
+
+	got := config.NodeDBPath()
+	want := filepath.Join(home, ".nexus", "node.db")
+	if got != want {
+		t.Fatalf("expected default node db path %q, got %q", want, got)
+	}
+}

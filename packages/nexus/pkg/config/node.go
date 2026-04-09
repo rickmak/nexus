@@ -43,17 +43,32 @@ type NodeCapabilities struct {
 }
 
 // NodeConfigPath returns the XDG config path for the node config file.
-// It respects $XDG_CONFIG_HOME on all platforms, defaulting to ~/.config/nexus/node.json.
+// It respects $XDG_CONFIG_HOME on all platforms.
+// If $XDG_CONFIG_HOME is empty, it defaults to ~/.nexus/node.json.
 func NodeConfigPath() string {
 	configHome := os.Getenv("XDG_CONFIG_HOME")
 	if configHome == "" {
 		home, err := os.UserHomeDir()
 		if err != nil {
-			return filepath.Join(".config", "nexus", "node.json")
+			return filepath.Join(".nexus", "node.json")
 		}
-		configHome = filepath.Join(home, ".config")
+		return filepath.Join(home, ".nexus", "node.json")
 	}
 	return filepath.Join(configHome, "nexus", "node.json")
+}
+
+// NodeDBPath returns the sqlite path for node-level persistent metadata.
+// It respects $XDG_STATE_HOME on all platforms.
+// If $XDG_STATE_HOME is empty, it defaults to ~/.nexus/node.db.
+func NodeDBPath() string {
+	if stateHome := os.Getenv("XDG_STATE_HOME"); stateHome != "" {
+		return filepath.Join(stateHome, "nexus", "node.db")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return filepath.Join(".nexus", "node.db")
+	}
+	return filepath.Join(home, ".nexus", "node.db")
 }
 
 // LoadNodeConfig reads and parses the node config from the given path.
