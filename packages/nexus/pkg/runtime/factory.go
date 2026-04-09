@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"strings"
 )
 
 type Capability struct {
@@ -21,12 +22,12 @@ func NewFactory(capabilities []Capability, drivers map[string]Driver) *Factory {
 	}
 }
 
-func (f *Factory) SelectDriver(requiredBackends []string, selection string, requiredCapabilities []string) (Driver, error) {
+func (f *Factory) SelectDriver(requiredBackends []string, requiredCapabilities []string) (Driver, error) {
 	if err := f.validateCapabilities(requiredCapabilities); err != nil {
 		return nil, err
 	}
 
-	backend, err := f.selectBackend(requiredBackends, selection)
+	backend, err := f.selectBackend(requiredBackends)
 	if err != nil {
 		return nil, err
 	}
@@ -55,22 +56,54 @@ func (f *Factory) validateCapabilities(required []string) error {
 	return nil
 }
 
-func (f *Factory) selectBackend(required []string, selection string) (string, error) {
-	if selection != "prefer-first" {
-		return "", fmt.Errorf("unsupported selection strategy: %q", selection)
-	}
-
-	for _, backend := range required {
-		if _, ok := f.drivers[backend]; !ok {
+func (f *Factory) selectBackend(required []string) (string, error) {
+	for _, req := range required {
+		candidates := f.expandRuntimeRequirement(req)
+		if len(candidates) == 0 {
 			continue
 		}
-		if !f.isCapabilityAvailable("runtime." + backend) {
-			continue
+		for _, backend := range candidates {
+			if _, ok := f.drivers[backend]; !ok {
+				continue
+			}
+			if !f.isCapabilityAvailable("runtime." + backend) {
+				continue
+			}
+			return backend, nil
 		}
-		return backend, nil
 	}
 
 	return "", fmt.Errorf("no required backend available from: %v", required)
+}
+
+func (f *Factory) expandRuntimeRequirement(raw string) []string {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "linux":
+		if !f.isCapabilityAvailable("runtime.linux") {
+			return nil
+		}
+		if f.isCapabilityAvailable("runtime.firecracker") {
+			return []string{"firecracker"}
+		}
+		return nil
+	case "darwin":
+		if !f.isCapabilityAvailable("runtime.seatbelt") && !f.isCapabilityAvailable("runtime.firecracker") {
+			return nil
+		}
+		if f.isCapabilityAvailable("runtime.seatbelt") {
+			return []string{"seatbelt"}
+		}
+		if f.isCapabilityAvailable("runtime.firecracker") {
+			return []string{"firecracker"}
+		}
+		return nil
+	case "seatbelt":
+		return []string{"seatbelt"}
+	case "firecracker":
+		return []string{strings.ToLower(strings.TrimSpace(raw))}
+	default:
+		return nil
+	}
 }
 
 func (f *Factory) isCapabilityAvailable(name string) bool {
@@ -84,4 +117,9 @@ func (f *Factory) isCapabilityAvailable(name string) bool {
 
 func (f *Factory) Capabilities() []Capability {
 	return f.capabilities
+}
+
+func (f *Factory) DriverForBackend(backend string) (Driver, bool) {
+	d, ok := f.drivers[backend]
+	return d, ok
 }

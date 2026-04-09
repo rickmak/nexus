@@ -240,5 +240,10 @@ func urlToSlug(url string) string {
 	s = re.ReplaceAllString(s, "-")
 	// Collapse consecutive hyphens
 	re2 := regexp.MustCompile(`-+`)
-	return re2.ReplaceAllString(s, "-")
+	s = re2.ReplaceAllString(s, "-")
+	s = strings.Trim(s, "-")
+	if s == "" {
+		return "repo"
+	}
+	return s
 }

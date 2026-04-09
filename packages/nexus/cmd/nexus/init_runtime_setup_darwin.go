@@ -15,9 +15,6 @@ import (
 //go:embed templates/lima/firecracker.yaml
 var embeddedLimaTemplate string
 
-//go:embed templates/lima/lxc.yaml
-var embeddedLimaLXCTemplate string
-
 var initRuntimeBootstrapRunner func(projectRoot, runtimeName string) error = runInitRuntimeBootstrapDarwin
 
 var (
@@ -65,39 +62,15 @@ func runInitRuntimeBootstrapDarwin(projectRoot, runtimeName string) error {
 	}
 	defer cleanupTemplate()
 
-	startErr := ensurePersistentLimaInstance("nexus-firecracker", templatePath)
-	if startErr == nil {
+	if err := ensurePersistentLimaInstance("nexus-firecracker", templatePath); err == nil {
 		// Firecracker Lima started successfully - write firecracker env
 		_ = writeNexusInitEnv(projectRoot, map[string]string{
 			"NEXUS_RUNTIME_BACKEND": "firecracker",
 		})
 		return nil
-	}
-
-	// Firecracker Lima failed (likely nestedVirtualization not supported on this hardware).
-	// Delete any partially-created instance and retry with LXC template (no nestedVirt).
-	fmt.Printf("nexus init: firecracker lima start failed (nestedVirt likely unsupported), falling back to lxc: %v\n", startErr)
-	_ = limactlRunFn("limactl", "delete", "-f", "nexus-firecracker")
-
-	lxcTemplatePath, cleanupLXCTemplate, err := writeEmbeddedLimaLXCTemplate()
-	if err != nil {
-		return initRuntimeBootstrapDarwinWrapError(projectRoot, fmt.Errorf("lxc fallback: %w", err))
-	}
-	defer cleanupLXCTemplate()
-
-	if err := ensurePersistentLimaInstance("nexus-firecracker", lxcTemplatePath); err != nil {
-		return initRuntimeBootstrapDarwinWrapError(projectRoot, fmt.Errorf("lxc fallback lima: %w", err))
-	}
-
-	// LXC fallback succeeded - write lxc env so the action picks it up
-	if err := writeNexusInitEnv(projectRoot, map[string]string{
-		"NEXUS_RUNTIME_BACKEND": "lxc",
-	}); err != nil {
+	} else {
 		return initRuntimeBootstrapDarwinWrapError(projectRoot, err)
 	}
-
-	fmt.Println("nexus init: lxc fallback active (lima without nestedVirtualization)")
-	return nil
 }
 
 func ensurePersistentLimaInstance(instanceName, templatePath string) error {
@@ -122,7 +95,7 @@ func initRuntimeBootstrapDarwinWrapError(projectRoot string, err error) error {
 	if err == nil {
 		return nil
 	}
-	return fmt.Errorf("firecracker runtime setup failed on darwin: %w\n\nmanual next steps:\n  brew install lima\n  nexus init --project-root %s --runtime firecracker", err, projectRoot)
+	return fmt.Errorf("firecracker runtime setup failed on darwin: %w\n\nmanual next steps:\n  brew install lima\n  nexus init --project-root %s", err, projectRoot)
 }
 
 func writeLimaTemplate(content string) (string, func(), error) {
@@ -152,10 +125,6 @@ func writeLimaTemplate(content string) (string, func(), error) {
 
 func writeEmbeddedLimaTemplate() (string, func(), error) {
 	return writeLimaTemplate(embeddedLimaTemplate)
-}
-
-func writeEmbeddedLimaLXCTemplate() (string, func(), error) {
-	return writeLimaTemplate(embeddedLimaLXCTemplate)
 }
 
 func writeNexusInitEnv(projectRoot string, kvPairs map[string]string) error {

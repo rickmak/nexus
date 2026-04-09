@@ -42,7 +42,6 @@ type execOptions struct {
 
 type initOptions struct {
 	projectRoot string
-	runtime     string
 	force       bool
 }
 
@@ -120,7 +119,7 @@ func main() {
 func printUsage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
 	fmt.Fprintln(os.Stderr, "  nexus doctor --project-root <abs-path> --suite <name> [--compose-file docker-compose.yml] [--required-host-ports 5173,5174,8000] [--report-json path]")
-	fmt.Fprintln(os.Stderr, "  nexus init --project-root <abs-path> [--runtime firecracker|local] [--force]")
+	fmt.Fprintln(os.Stderr, "  nexus init --project-root <abs-path> [--force]")
 	fmt.Fprintln(os.Stderr, "  nexus exec --project-root <abs-path> [--timeout 10m] -- <command> [args...]")
 	fmt.Fprintln(os.Stderr, "  nexus workspace <list|create|stop|remove|fork|portal>")
 }
@@ -129,7 +128,6 @@ func runInitCommand(args []string) {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	projectRoot := fs.String("project-root", "", "absolute path to project repository")
-	runtimeName := fs.String("runtime", "firecracker", "runtime backend requirement (firecracker or local)")
 	force := fs.Bool("force", false, "overwrite existing .nexus files")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
@@ -142,7 +140,6 @@ func runInitCommand(args []string) {
 
 	if err := runInit(initOptions{
 		projectRoot: *projectRoot,
-		runtime:     strings.TrimSpace(*runtimeName),
 		force:       *force,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -181,14 +178,6 @@ func runInit(opts initOptions) error {
 		return fmt.Errorf("project root must be absolute: %s", opts.projectRoot)
 	}
 
-	runtimeName := strings.TrimSpace(opts.runtime)
-	if runtimeName == "" {
-		runtimeName = "firecracker"
-	}
-	if runtimeName != "firecracker" && runtimeName != "local" {
-		return fmt.Errorf("unsupported runtime %q (expected firecracker or local)", runtimeName)
-	}
-
 	nexusDir := filepath.Join(opts.projectRoot, ".nexus")
 	if err := os.MkdirAll(nexusDir, 0o755); err != nil {
 		return fmt.Errorf("create .nexus directory: %w", err)
@@ -203,7 +192,6 @@ func runInit(opts initOptions) error {
 	workspaceCfg := config.WorkspaceConfig{
 		Schema:  "https://raw.githubusercontent.com/IniZio/nexus/main/schemas/workspace.v1.schema.json",
 		Version: 1,
-		Runtime: config.RuntimeConfig{Required: []string{runtimeName}, Selection: "prefer-first"},
 		Doctor: config.DoctorConfig{
 			Probes: []config.DoctorCommandProbe{{
 				Name:     "runtime-backend",
@@ -254,10 +242,8 @@ func runInit(opts initOptions) error {
 		}
 	}
 
-	if runtimeName == "firecracker" {
-		if err := initRuntimeBootstrapRunner(opts.projectRoot, runtimeName); err != nil {
-			return err
-		}
+	if err := initRuntimeBootstrapRunner(opts.projectRoot, "firecracker"); err != nil {
+		fmt.Printf("init warning: firecracker bootstrap unavailable, runtime will auto-fallback (%v)\n", err)
 	}
 
 	fmt.Printf("initialized nexus workspace metadata at %s\n", nexusDir)
@@ -302,10 +288,8 @@ func runExec(opts execOptions) error {
 	ctx, cancel := context.WithTimeout(context.Background(), opts.timeout)
 	defer cancel()
 
-	var out string
-	var err error
-	fmt.Printf("exec exec: %s (attempt %d/%d, timeout=%s, context=firecracker): %s\n", opts.command, 1, 1, opts.timeout, formatCommand(opts.command, opts.args))
-	out, err = runFirecrackerCheckCommandForHost(ctx, opts.projectRoot, opts.command, opts.args)
+	fmt.Printf("exec exec: %s (attempt %d/%d, timeout=%s, context=%s): %s\n", opts.command, 1, 1, opts.timeout, execCtx.backend, formatCommand(opts.command, opts.args))
+	out, err := runCheckCommandWithExecContext(ctx, opts.projectRoot, "exec", opts.command, 1, 1, opts.timeout, opts.command, opts.args, execCtx)
 
 	if strings.TrimSpace(out) != "" {
 		fmt.Println(strings.TrimSpace(out))
@@ -357,9 +341,11 @@ func run(opts options) error {
 		return err
 	}
 
-	// Validate firecracker env contract before proceeding
-	if err := config.ValidateFirecrackerEnv(); err != nil {
-		return fmt.Errorf("firecracker configuration error: %w", err)
+	execCtx := loadDoctorExecContext()
+	if execCtx.backend == "firecracker" {
+		if err := config.ValidateFirecrackerEnv(); err != nil {
+			return fmt.Errorf("firecracker configuration error: %w", err)
+		}
 	}
 
 	if opts.composeFile == "" {
@@ -423,7 +409,6 @@ func run(opts options) error {
 		return err
 	}
 
-	execCtx := loadDoctorExecContext()
 	if execCtx.backend == "firecracker" {
 		if err := doctorFirecrackerRuntimeVerifier(); err != nil {
 			return err
@@ -528,10 +513,7 @@ type checkResult struct {
 }
 
 type doctorExecContext struct {
-	backend    string
-	dockerHost string
-	lxcName    string
-	lxcExec    string
+	backend string
 }
 
 type firecrackerDoctorSession struct {
@@ -789,7 +771,7 @@ func validateFirecrackerTapHelper() error {
 	path, err := firecrackerHostBinaryLookup(tapHelper)
 	if err != nil {
 		return fmt.Errorf(
-			"%s not found in PATH\n\nRun `nexus init --project-root <abs-path> --runtime firecracker --force` to provision host prerequisites",
+			"%s not found in PATH\n\nRun `nexus init --project-root <abs-path> --force` to provision host prerequisites",
 			tapHelper,
 		)
 	}
@@ -802,7 +784,7 @@ func validateFirecrackerTapHelper() error {
 	}
 	if !strings.Contains(string(out), "cap_net_admin") {
 		return fmt.Errorf(
-			"%s at %s lacks cap_net_admin\n\nRun `nexus init --project-root <abs-path> --runtime firecracker --force` to refresh host prerequisites",
+			"%s at %s lacks cap_net_admin\n\nRun `nexus init --project-root <abs-path> --force` to refresh host prerequisites",
 			tapHelper, path,
 		)
 	}
@@ -817,13 +799,13 @@ func validateFirecrackerBridge() error {
 	out, err := exec.Command("ip", "link", "show", bridge).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf(
-			"bridge %s not found\n\nRun `nexus init --project-root <abs-path> --runtime firecracker --force` to provision host prerequisites",
+			"bridge %s not found\n\nRun `nexus init --project-root <abs-path> --force` to provision host prerequisites",
 			bridge,
 		)
 	}
 	if !strings.Contains(string(out), "UP") {
 		return fmt.Errorf(
-			"bridge %s exists but is not UP\n\nRun `nexus init --project-root <abs-path> --runtime firecracker --force` to refresh host prerequisites",
+			"bridge %s exists but is not UP\n\nRun `nexus init --project-root <abs-path> --force` to refresh host prerequisites",
 			bridge,
 		)
 	}
@@ -834,7 +816,7 @@ func validateFirecrackerBridge() error {
 	}
 	if !strings.Contains(string(addrOut), "172.26.0.1/") {
 		return fmt.Errorf(
-			"bridge %s is missing gateway IP %s\n\nRun `nexus init --project-root <abs-path> --runtime firecracker --force` to refresh host prerequisites",
+			"bridge %s is missing gateway IP %s\n\nRun `nexus init --project-root <abs-path> --force` to refresh host prerequisites",
 			bridge, gatewayCIDR,
 		)
 	}
@@ -949,7 +931,7 @@ func verifyFirecrackerWorkspaceReady() error {
 	}
 
 	if strings.Contains(detail, "chdir /workspace: no such file or directory") {
-		return fmt.Errorf("firecracker guest is missing /workspace; re-run `nexus init --project-root <abs-path> --runtime firecracker --force` to refresh the runtime and then retry")
+		return fmt.Errorf("firecracker guest is missing /workspace; re-run `nexus init --project-root <abs-path> --force` to refresh the runtime and then retry")
 	}
 
 	return fmt.Errorf("firecracker guest workspace verification failed: %s", detail)
@@ -1092,8 +1074,8 @@ func detectHostDockerSocket() string {
 }
 
 func bootstrapContainerExecContext(projectRoot string, execCtx doctorExecContext, backendLabel string, allowInstall bool) error {
-	if execCtx.backend != "firecracker" && execCtx.backend != "lxc" {
-		return fmt.Errorf("unsupported runtime backend %q: only firecracker and lxc are supported", execCtx.backend)
+	if execCtx.backend != "firecracker" {
+		return fmt.Errorf("unsupported runtime backend %q: only firecracker is supported", execCtx.backend)
 	}
 
 	timeout := 90 * time.Second
@@ -1101,8 +1083,6 @@ func bootstrapContainerExecContext(projectRoot string, execCtx doctorExecContext
 	if execCtx.backend == "firecracker" {
 		commandProjectRoot = "/"
 	}
-	// For lxc on darwin: commandProjectRoot = projectRoot (Lima mounts ~ from macOS, so
-	// /Users/runner/... is accessible inside Lima at the same path)
 	hostProxyMode := execCtx.backend == "firecracker" && strings.EqualFold(strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_FIRECRACKER_DOCKER_MODE")), "host-proxy")
 	collectDockerDiagnostics := func() string {
 		diagCmd := "set +e; echo '--- docker binary ---'; command -v docker || true; echo '--- docker version ---'; docker version || true; echo '--- docker info ---'; docker info || true; echo '--- dockerd ps ---'; ps -ef | grep '[d]ockerd' || true; echo '--- dockerd log ---'; cat /tmp/nexus-doctor-dockerd.log || true; if command -v systemctl >/dev/null 2>&1; then echo '--- systemctl status docker ---'; systemctl status docker --no-pager || true; fi"
@@ -1519,7 +1499,7 @@ func runBuiltInOpencodeSessionCheck(projectRoot string) (checkResult, error) {
 		Required:   true,
 		Attempts:   0,
 		DurationMs: time.Since(start).Milliseconds(),
-		SkipReason: "opencode session check is skipped for firecracker backend",
+		SkipReason: "opencode session check is skipped for runtime backend checks",
 	}, nil
 }
 
@@ -1534,10 +1514,10 @@ func runBuiltInRuntimeBackendCheck() (checkResult, error) {
 	}
 
 	backend := strings.TrimSpace(os.Getenv("NEXUS_RUNTIME_BACKEND"))
-	if backend != "firecracker" && backend != "lxc" {
+	if backend != "firecracker" && backend != "seatbelt" {
 		result.Status = "failed_required"
 		result.DurationMs = time.Since(start).Milliseconds()
-		result.Error = fmt.Sprintf("unsupported runtime backend %q: doctor command only supports firecracker or lxc", backend)
+		result.Error = fmt.Sprintf("unsupported runtime backend %q: doctor command only supports firecracker or seatbelt", backend)
 		return result, fmt.Errorf("required probes failed: %s", checkName)
 	}
 
@@ -1556,23 +1536,24 @@ func bootstrapDoctorExecContext(projectRoot string) error {
 			return err
 		}
 		return containerBootstrapRunner(projectRoot, execCtx, "firecracker", true)
-	case "lxc":
-		if err := bootstrapFirecrackerExecContext(projectRoot, execCtx); err != nil {
-			return err
-		}
-		return containerBootstrapRunner(projectRoot, execCtx, "lxc", true)
+	case "seatbelt":
+		return nil
 	default:
-		return fmt.Errorf("unsupported runtime backend %q: doctor command only supports firecracker or lxc", execCtx.backend)
+		return fmt.Errorf("unsupported runtime backend %q: doctor command only supports firecracker or seatbelt", execCtx.backend)
 	}
 }
 
 func bootstrapExecCommandContext(projectRoot string) error {
 	setDoctorExecContextCleanup(nil)
 	execCtx := loadDoctorExecContext()
-	if execCtx.backend != "firecracker" && execCtx.backend != "lxc" {
-		return fmt.Errorf("unsupported runtime backend %q: exec command only supports firecracker or lxc", execCtx.backend)
+	switch execCtx.backend {
+	case "firecracker":
+		return bootstrapFirecrackerExecContext(projectRoot, execCtx)
+	case "seatbelt":
+		return nil
+	default:
+		return fmt.Errorf("unsupported runtime backend %q: exec command only supports firecracker or seatbelt", execCtx.backend)
 	}
-	return bootstrapFirecrackerExecContext(projectRoot, execCtx)
 }
 
 func markChecksNotRun(tests []config.DoctorCommandCheck, skipReason string) []checkResult {
@@ -1613,7 +1594,7 @@ func runCheckCommand(ctx context.Context, projectRoot, phase, name string, attem
 }
 
 func runCheckCommandWithExecContext(ctx context.Context, projectRoot, phase, name string, attempt, attempts int, timeout time.Duration, command string, args []string, execCtx doctorExecContext) (string, error) {
-	if execCtx.backend == "firecracker" || (execCtx.backend == "lxc" && firecrackerHostGOOS == "darwin") {
+	if execCtx.backend == "firecracker" {
 		fmt.Printf("%s exec: %s (attempt %d/%d, timeout=%s, context=%s): %s\n", phase, name, attempt, attempts, timeout, execCtx.backend, formatCommand(command, args))
 		return runFirecrackerCheckCommandForHost(ctx, projectRoot, command, args)
 	}
@@ -1667,32 +1648,46 @@ func hasEnvKey(env []string, key string) bool {
 func loadDoctorExecContext() doctorExecContext {
 	backend := strings.TrimSpace(os.Getenv("NEXUS_RUNTIME_BACKEND"))
 	if backend == "" {
-		backend = "firecracker"
+		backend = selectRuntimeBackend(nil)
+		if backend == "" {
+			backend = "seatbelt"
+		}
 	}
 	return doctorExecContext{
-		backend:    backend,
-		dockerHost: strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_DIND_DOCKER_HOST")),
-		lxcName:    strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_LXC_INSTANCE")),
-		lxcExec:    strings.TrimSpace(os.Getenv("NEXUS_DOCTOR_LXC_EXEC_MODE")),
+		backend: backend,
 	}
 }
 
 func applyRuntimeBackendFromWorkspace(projectRoot string) error {
 	if rawBackend := strings.TrimSpace(os.Getenv("NEXUS_RUNTIME_BACKEND")); rawBackend != "" {
-		if rawBackend != "firecracker" && rawBackend != "lxc" {
-			return fmt.Errorf("unsupported runtime backend %q: doctor command only supports firecracker or lxc", rawBackend)
+		backend, ok := normalizeRuntimeBackend(rawBackend)
+		if !ok {
+			return fmt.Errorf("unsupported runtime backend %q: doctor command only supports firecracker or seatbelt", rawBackend)
+		}
+		if err := os.Setenv("NEXUS_RUNTIME_BACKEND", backend); err != nil {
+			return fmt.Errorf("set runtime backend env: %w", err)
+		}
+		if backend == "firecracker" {
+			applyFirecrackerAssetDefaults()
 		}
 		return nil
 	}
 
-	workspaceConfig, _, err := config.LoadWorkspaceConfig(projectRoot)
-	if err != nil {
-		return fmt.Errorf("invalid workspace config: %w", err)
+	if hintedBackend, err := loadRuntimeBackendHint(projectRoot); err != nil {
+		return err
+	} else if hintedBackend != "" {
+		if err := os.Setenv("NEXUS_RUNTIME_BACKEND", hintedBackend); err != nil {
+			return fmt.Errorf("set runtime backend env: %w", err)
+		}
+		if hintedBackend == "firecracker" {
+			applyFirecrackerAssetDefaults()
+		}
+		return nil
 	}
 
-	backend := selectRuntimeBackend(workspaceConfig.Runtime.Required)
+	backend := selectRuntimeBackend(nil)
 	if backend == "" {
-		return fmt.Errorf("no firecracker runtime found in workspace config required runtimes; doctor command only supports firecracker")
+		return fmt.Errorf("no supported runtime found; doctor/exec support firecracker or seatbelt")
 	}
 
 	if err := os.Setenv("NEXUS_RUNTIME_BACKEND", backend); err != nil {
@@ -1706,19 +1701,86 @@ func applyRuntimeBackendFromWorkspace(projectRoot string) error {
 	return nil
 }
 
+func loadRuntimeBackendHint(projectRoot string) (string, error) {
+	hintPath := filepath.Join(projectRoot, ".nexus", "run", "nexus-init-env")
+	data, err := os.ReadFile(hintPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read init runtime hint: %w", err)
+	}
+
+	for _, line := range strings.Split(string(data), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == "" || strings.HasPrefix(trimmed, "#") {
+			continue
+		}
+		key, value, ok := strings.Cut(trimmed, "=")
+		if !ok {
+			continue
+		}
+		if strings.TrimSpace(key) != "NEXUS_RUNTIME_BACKEND" {
+			continue
+		}
+		backend, valid := normalizeRuntimeBackend(value)
+		if !valid {
+			return "", fmt.Errorf("invalid NEXUS_RUNTIME_BACKEND value %q in %s", strings.TrimSpace(value), hintPath)
+		}
+		return backend, nil
+	}
+
+	return "", nil
+}
+
 func selectRuntimeBackend(required []string) string {
 	if len(required) == 0 {
-		return ""
+		required = []string{"darwin", "linux"}
 	}
 
 	for _, candidate := range required {
-		switch strings.ToLower(strings.TrimSpace(candidate)) {
-		case "firecracker", "vm":
-			return "firecracker"
+		trimmed := strings.ToLower(strings.TrimSpace(candidate))
+		switch trimmed {
+		case "darwin":
+			if firecrackerHostGOOS == "darwin" {
+				if _, err := exec.LookPath("limactl"); err == nil {
+					return "firecracker"
+				}
+				return "seatbelt"
+			}
+		case "linux":
+			if firecrackerHostGOOS == "linux" {
+				return "firecracker"
+			}
+		default:
+			if backend, ok := normalizeRuntimeBackend(candidate); ok {
+				return backend
+			}
 		}
 	}
 
+	if firecrackerHostGOOS == "darwin" {
+		if _, err := exec.LookPath("limactl"); err == nil {
+			return "firecracker"
+		}
+		return "seatbelt"
+	}
+	if firecrackerHostGOOS == "linux" {
+		return "firecracker"
+	}
+
 	return ""
+}
+
+func normalizeRuntimeBackend(raw string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "firecracker":
+		return "firecracker", true
+	case "seatbelt":
+		return "seatbelt", true
+	default:
+		return "", false
+	}
 }
 
 func applyFirecrackerAssetDefaults() {

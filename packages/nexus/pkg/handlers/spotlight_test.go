@@ -19,9 +19,6 @@ func TestHandleSpotlightApplyDefaults(t *testing.T) {
 
 	configJSON := `{
   "version": 1,
-  "runtime": {
-    "required": ["local"]
-  },
   "spotlight": {
     "defaults": [
       {"service":"student-portal","remotePort":5173,"localPort":5173},

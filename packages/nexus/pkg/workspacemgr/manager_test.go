@@ -2,9 +2,11 @@ package workspacemgr
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func newTestManager(t *testing.T) *Manager {
@@ -409,12 +411,24 @@ func TestManager_ForkPersistsParentWorkspaceID(t *testing.T) {
 		t.Fatalf("create returned error: %v", err)
 	}
 
-	child, err := m.Fork(parent.ID, "alpha-child")
+	child, err := m.Fork(parent.ID, "alpha-child", "alpha-child")
 	if err != nil {
 		t.Fatalf("fork returned error: %v", err)
 	}
 	if child.ParentWorkspaceID != parent.ID {
 		t.Fatalf("expected child parent %q, got %q", parent.ID, child.ParentWorkspaceID)
+	}
+	if child.RepoID == "" {
+		t.Fatal("expected child repoId to be set")
+	}
+	if child.RepoID != parent.RepoID {
+		t.Fatalf("expected child repoId %q, got %q", parent.RepoID, child.RepoID)
+	}
+	if child.LineageRootID != parent.ID {
+		t.Fatalf("expected child lineage root %q, got %q", parent.ID, child.LineageRootID)
+	}
+	if child.DerivedFromRef != parent.Ref {
+		t.Fatalf("expected child derivedFromRef %q, got %q", parent.Ref, child.DerivedFromRef)
 	}
 	if child.Backend != parent.Backend {
 		t.Fatalf("expected child backend %q, got %q", parent.Backend, child.Backend)
@@ -426,6 +440,50 @@ func TestManager_ForkPersistsParentWorkspaceID(t *testing.T) {
 	}
 	if restored.ParentWorkspaceID != parent.ID {
 		t.Fatalf("expected persisted parent %q, got %q", parent.ID, restored.ParentWorkspaceID)
+	}
+	if restored.LineageRootID != parent.ID {
+		t.Fatalf("expected persisted lineage root %q, got %q", parent.ID, restored.LineageRootID)
+	}
+}
+
+func TestManager_CreateSetsRepoIdentityForHostedAndLocal(t *testing.T) {
+	m := newTestManager(t)
+	hosted, err := m.Create(context.Background(), CreateSpec{
+		Repo:          "git@github.com:IniZio/hanlun-lms.git",
+		Ref:           "main",
+		WorkspaceName: "hosted",
+		AgentProfile:  "default",
+	})
+	if err != nil {
+		t.Fatalf("hosted create returned error: %v", err)
+	}
+	if hosted.RepoID == "" {
+		t.Fatal("expected hosted repoId to be set")
+	}
+	if hosted.RepoKind != "hosted" {
+		t.Fatalf("expected hosted repo kind 'hosted', got %q", hosted.RepoKind)
+	}
+	if hosted.LineageRootID != hosted.ID {
+		t.Fatalf("expected hosted lineage root %q, got %q", hosted.ID, hosted.LineageRootID)
+	}
+
+	local, err := m.Create(context.Background(), CreateSpec{
+		Repo:          "./repos/hanlun-lms-" + fmt.Sprintf("%d", time.Now().UnixNano()),
+		Ref:           "feature/worktree",
+		WorkspaceName: "local",
+		AgentProfile:  "default",
+	})
+	if err != nil {
+		t.Fatalf("local create returned error: %v", err)
+	}
+	if local.RepoID == "" {
+		t.Fatal("expected local repoId to be set")
+	}
+	if local.RepoKind != "local" {
+		t.Fatalf("expected local repo kind 'local', got %q", local.RepoKind)
+	}
+	if local.LineageRootID != local.ID {
+		t.Fatalf("expected local lineage root %q, got %q", local.ID, local.LineageRootID)
 	}
 }
 
@@ -457,7 +515,7 @@ func TestManager_ForkParallelWorkspacesRemainIndependent(t *testing.T) {
 		t.Fatalf("start parentB returned error: %v", err)
 	}
 
-	childA, err := m.Fork(parentA.ID, "alpha-child")
+	childA, err := m.Fork(parentA.ID, "alpha-child", "alpha-child")
 	if err != nil {
 		t.Fatalf("fork parentA returned error: %v", err)
 	}
@@ -478,5 +536,102 @@ func TestManager_ForkParallelWorkspacesRemainIndependent(t *testing.T) {
 	}
 	if gotB.State != StateRunning {
 		t.Fatalf("expected parentB state %q, got %q", StateRunning, gotB.State)
+	}
+}
+
+func TestResolveForkBasePath_PrefersNestedParentUnderRepoRoot(t *testing.T) {
+	repoRoot := t.TempDir()
+	parentName := "alpha"
+	nestedParent := filepath.Join(repoRoot, ".worktrees", sanitizeWorktreeName(parentName))
+	if err := os.MkdirAll(nestedParent, 0o755); err != nil {
+		t.Fatalf("mkdir nested parent: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoRoot, ".git"), []byte("gitdir: /tmp/fake\n"), 0o644); err != nil {
+		t.Fatalf("write .git marker: %v", err)
+	}
+
+	parent := &Workspace{
+		Repo:              repoRoot,
+		WorkspaceName:     parentName,
+		LocalWorktreePath: repoRoot,
+	}
+
+	got := resolveForkBasePath(parent)
+	if got != nestedParent {
+		t.Fatalf("expected nested parent %q, got %q", nestedParent, got)
+	}
+}
+
+func TestResolveForkBasePath_FallsBackToInferredPathWithoutLocalWorktree(t *testing.T) {
+	repoRoot := t.TempDir()
+	parentName := "alpha"
+	inferred := filepath.Join(repoRoot, ".worktrees", sanitizeWorktreeName(parentName))
+	if err := os.MkdirAll(inferred, 0o755); err != nil {
+		t.Fatalf("mkdir inferred parent: %v", err)
+	}
+
+	parent := &Workspace{
+		Repo:          repoRoot,
+		WorkspaceName: parentName,
+	}
+
+	got := resolveForkBasePath(parent)
+	if got != inferred {
+		t.Fatalf("expected inferred path %q, got %q", inferred, got)
+	}
+}
+
+func TestForkChildrenDir_UsesRepoRootForNestedParent(t *testing.T) {
+	parent := filepath.Join("/tmp/repo", ".worktrees", "alpha")
+	got := forkChildrenDir(parent)
+	want := filepath.Join("/tmp/repo", ".worktrees")
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestIsLikelyLocalPath_DetectsExistingRelativeDirectory(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	tmp := t.TempDir()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir to temp dir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(cwd)
+	})
+
+	if err := os.MkdirAll("hanlun-lms", 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	if !isLikelyLocalPath("hanlun-lms") {
+		t.Fatal("expected bare existing directory name to be treated as local path")
+	}
+}
+
+func TestDeriveRepoKind_DetectsExistingRelativeDirectoryAsLocal(t *testing.T) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+
+	tmp := t.TempDir()
+	if err := os.Chdir(tmp); err != nil {
+		t.Fatalf("chdir to temp dir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(cwd)
+	})
+
+	if err := os.MkdirAll("hanlun-lms", 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+
+	if got := deriveRepoKind("hanlun-lms"); got != "local" {
+		t.Fatalf("expected repo kind local, got %q", got)
 	}
 }

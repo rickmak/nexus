@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -101,6 +104,9 @@ func daemonRPC(conn *websocket.Conn, method string, params interface{}, out inte
 	return nil
 }
 
+var ensureDaemonFn = ensureDaemon
+var daemonRPCFn = daemonRPC
+
 // ── workspace list ────────────────────────────────────────────────────────────
 
 func runWorkspaceListCommand(_ []string) {
@@ -146,6 +152,7 @@ func runWorkspaceCreateCommand(args []string) {
 	ref := fs.String("ref", "", "branch / ref (default: repo default branch)")
 	name := fs.String("name", "", "workspace name (required)")
 	profile := fs.String("profile", "default", "agent profile")
+	backend := fs.String("backend", "", "runtime backend override (firecracker)")
 	_ = fs.Parse(args)
 
 	if *repo == "" || *name == "" {
@@ -161,11 +168,14 @@ func runWorkspaceCreateCommand(args []string) {
 	}
 	defer conn.Close()
 
+	repoValue := normalizeRepoForCreate(*repo)
+
 	spec := workspacemgr.CreateSpec{
-		Repo:          *repo,
+		Repo:          repoValue,
 		Ref:           *ref,
 		WorkspaceName: *name,
 		AgentProfile:  *profile,
+		Backend:       strings.TrimSpace(*backend),
 	}
 	var result struct {
 		Workspace workspacemgr.Workspace `json:"workspace"`
@@ -214,6 +224,40 @@ func runWorkspaceCreateCommand(args []string) {
 	}
 }
 
+func normalizeRepoForCreate(repo string) string {
+	repo = strings.TrimSpace(repo)
+	if repo == "" || looksLikeRemoteRepo(repo) {
+		return repo
+	}
+
+	if filepath.IsAbs(repo) {
+		return filepath.Clean(repo)
+	}
+
+	if strings.HasPrefix(repo, "./") || strings.HasPrefix(repo, "../") {
+		if abs, err := filepath.Abs(repo); err == nil {
+			return abs
+		}
+		return repo
+	}
+
+	if info, err := os.Stat(repo); err == nil && info.IsDir() {
+		if abs, absErr := filepath.Abs(repo); absErr == nil {
+			return abs
+		}
+	}
+
+	return repo
+}
+
+func looksLikeRemoteRepo(repo string) bool {
+	if strings.HasPrefix(repo, "git@") || strings.HasPrefix(repo, "ssh://") {
+		return true
+	}
+	u, err := url.Parse(repo)
+	return err == nil && u.Scheme != "" && u.Host != ""
+}
+
 // ── workspace stop ────────────────────────────────────────────────────────────
 
 func runWorkspaceStopCommand(args []string) {
@@ -233,6 +277,29 @@ func runWorkspaceStopCommand(args []string) {
 		os.Exit(1)
 	}
 	fmt.Printf("stopped workspace %s\n", args[0])
+}
+
+// ── workspace start ───────────────────────────────────────────────────────────
+
+func runWorkspaceStartCommand(args []string) {
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: nexus workspace start <id>")
+		os.Exit(2)
+	}
+	conn, err := ensureDaemonFn()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nexus workspace start: %v\n", err)
+		os.Exit(1)
+	}
+	if conn != nil {
+		defer conn.Close()
+	}
+
+	if err := daemonRPCFn(conn, "workspace.start", map[string]any{"id": args[0]}, nil); err != nil {
+		fmt.Fprintf(os.Stderr, "nexus workspace start: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("started workspace %s\n", args[0])
 }
 
 // ── workspace remove ──────────────────────────────────────────────────────────
@@ -288,7 +355,12 @@ func runWorkspaceForkCommand(args []string) {
 		os.Exit(1)
 	}
 
-	fmt.Printf("forked workspace %s  (id: %s)\n", result.Workspace.WorkspaceName, result.Workspace.ID)
+	ws := result.Workspace
+	fmt.Printf("forked workspace %s  (id: %s)\n", ws.WorkspaceName, ws.ID)
+
+	if strings.TrimSpace(ws.LocalWorktreePath) != "" {
+		fmt.Printf("local worktree:   %s\n", ws.LocalWorktreePath)
+	}
 }
 
 // ── workspace portal ─────────────────────────────────────────────────────────
@@ -325,6 +397,8 @@ func runWorkspaceCommand(args []string) {
 		runWorkspaceListCommand(rest)
 	case "create":
 		runWorkspaceCreateCommand(rest)
+	case "start":
+		runWorkspaceStartCommand(rest)
 	case "stop":
 		runWorkspaceStopCommand(rest)
 	case "remove", "rm", "delete":
@@ -345,7 +419,8 @@ func printWorkspaceUsage() {
 
 subcommands:
   list                  list all workspaces
-  create --repo <url> --name <name> [--ref <ref>] [--profile <profile>]
+  create --repo <url|path> --name <name> [--ref <ref>] [--profile <profile>] [--backend <backend>]
+  start <id>            start a workspace and make it accessible
   stop <id>             stop a running workspace
   remove <id>           remove a workspace
   fork --id <id> --name <child-name>

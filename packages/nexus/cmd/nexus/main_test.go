@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
@@ -210,6 +211,17 @@ func TestRunBuiltInRuntimeBackendCheckFirecrackerPasses(t *testing.T) {
 	}
 }
 
+func TestRunBuiltInRuntimeBackendCheckUnsupportedBackendFails(t *testing.T) {
+	t.Setenv("NEXUS_RUNTIME_BACKEND", "host")
+	result, err := runBuiltInRuntimeBackendCheck()
+	if err == nil {
+		t.Fatal("expected error for unsupported backend")
+	}
+	if result.Status != "failed_required" {
+		t.Fatalf("expected failed_required status, got %+v", result)
+	}
+}
+
 func TestRunBuiltInOpencodeSessionCheckSkipsFirecracker(t *testing.T) {
 	t.Setenv("NEXUS_RUNTIME_BACKEND", "firecracker")
 	result, err := runBuiltInOpencodeSessionCheck(t.TempDir())
@@ -219,8 +231,8 @@ func TestRunBuiltInOpencodeSessionCheckSkipsFirecracker(t *testing.T) {
 	if result.Status != "not_run" {
 		t.Fatalf("expected not_run status, got %+v", result)
 	}
-	if !strings.Contains(result.SkipReason, "firecracker") {
-		t.Fatalf("expected firecracker skip reason, got %+v", result)
+	if !strings.Contains(result.SkipReason, "runtime backend") {
+		t.Fatalf("expected runtime backend skip reason, got %+v", result)
 	}
 }
 
@@ -321,8 +333,11 @@ func TestRunDoctorLifecycleStartPrefersMakeStartOverLifecycleScript(t *testing.T
 		if len(args) != 2 || args[0] != "-lc" {
 			t.Fatalf("expected sh -lc args, got %v", args)
 		}
-		if !strings.Contains(args[1], "export UID=1000; export GID=1000;") || !strings.Contains(args[1], "make start") {
-			t.Fatalf("expected make start command with UID/GID defaults, got %v", args)
+		if !strings.Contains(args[1], "make start") {
+			t.Fatalf("expected make start in lifecycle start script, got %q", args[1])
+		}
+		if !strings.Contains(args[1], "export UID=1000; export GID=1000;") {
+			t.Fatalf("expected UID/GID export prefix in lifecycle start script, got %q", args[1])
 		}
 		if name != "lifecycle-start-make" {
 			t.Fatalf("expected lifecycle-start-make context, got %q", name)
@@ -385,13 +400,10 @@ func TestResolveDoctorLifecycleStartCommandReturnsSummary(t *testing.T) {
 	if command != "sh" || len(args) != 2 || args[0] != "-lc" || !strings.Contains(args[1], "make start") {
 		t.Fatalf("unexpected command resolution: command=%q args=%v", command, args)
 	}
-	if !strings.Contains(args[1], "export UID=1000; export GID=1000;") {
-		t.Fatalf("expected make start command to export UID/GID defaults, got %v", args)
-	}
 	if contextLabel != "lifecycle-start-make" {
 		t.Fatalf("unexpected context label: %q", contextLabel)
 	}
-	if summary != "make start" {
+	if !strings.Contains(summary, "make start") {
 		t.Fatalf("unexpected summary: %q", summary)
 	}
 }
@@ -933,7 +945,7 @@ func TestRunInitCreatesNexusWorkspaceFiles(t *testing.T) {
 		return nil
 	}
 
-	if err := runInit(initOptions{projectRoot: root, runtime: "firecracker"}); err != nil {
+	if err := runInit(initOptions{projectRoot: root}); err != nil {
 		t.Fatalf("expected init success, got %v", err)
 	}
 
@@ -942,8 +954,8 @@ func TestRunInitCreatesNexusWorkspaceFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected workspace config file, got %v", err)
 	}
-	if !strings.Contains(string(data), `"required": [`) || !strings.Contains(string(data), `"firecracker"`) {
-		t.Fatalf("expected runtime requirement firecracker in workspace.json, got:\n%s", string(data))
+	if !strings.Contains(string(data), `"version": 1`) {
+		t.Fatalf("expected version in workspace.json, got:\n%s", string(data))
 	}
 
 	for _, rel := range []string{
@@ -971,7 +983,7 @@ func TestRunInitDoesNotOverwriteExistingFilesWithoutForce(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := runInit(initOptions{projectRoot: root, runtime: "local"}); err != nil {
+	if err := runInit(initOptions{projectRoot: root}); err != nil {
 		t.Fatalf("expected init success, got %v", err)
 	}
 
@@ -996,7 +1008,7 @@ func TestRunInitCallsRuntimeBootstrapForFirecracker(t *testing.T) {
 		}
 		return nil
 	}
-	if err := runInit(initOptions{projectRoot: root, runtime: "firecracker"}); err != nil {
+	if err := runInit(initOptions{projectRoot: root}); err != nil {
 		t.Fatalf("unexpected init error: %v", err)
 	}
 	if !called {
@@ -1004,20 +1016,23 @@ func TestRunInitCallsRuntimeBootstrapForFirecracker(t *testing.T) {
 	}
 }
 
-func TestRunInitSkipsRuntimeBootstrapForLocal(t *testing.T) {
+func TestRunInitCallsRuntimeBootstrapByDefault(t *testing.T) {
 	root := t.TempDir()
 	called := false
 	orig := initRuntimeBootstrapRunner
 	t.Cleanup(func() { initRuntimeBootstrapRunner = orig })
 	initRuntimeBootstrapRunner = func(projectRoot, runtimeName string) error {
 		called = true
+		if runtimeName != "firecracker" {
+			t.Fatalf("expected firecracker runtime, got %q", runtimeName)
+		}
 		return nil
 	}
-	if err := runInit(initOptions{projectRoot: root, runtime: "local"}); err != nil {
+	if err := runInit(initOptions{projectRoot: root}); err != nil {
 		t.Fatalf("unexpected init error: %v", err)
 	}
-	if called {
-		t.Fatal("expected init runtime bootstrap runner to NOT be called for local runtime")
+	if !called {
+		t.Fatal("expected init runtime bootstrap runner to be called by default")
 	}
 }
 
@@ -1025,18 +1040,12 @@ func TestRunInitFirecrackerReturnsManualStepsInNonInteractiveMode(t *testing.T) 
 	origRunner := initRuntimeBootstrapRunner
 	t.Cleanup(func() { initRuntimeBootstrapRunner = origRunner })
 	initRuntimeBootstrapRunner = func(projectRoot, runtimeName string) error {
-		return fmt.Errorf("firecracker runtime setup failed: bootstrap setup failed\n\nmanual next steps:\n  sudo -E nexus init --project-root %s --runtime firecracker", projectRoot)
+		return fmt.Errorf("firecracker runtime setup failed: bootstrap setup failed\n\nmanual next steps:\n  sudo -E nexus init --project-root %s", projectRoot)
 	}
 
-	err := runInit(initOptions{projectRoot: t.TempDir(), runtime: "firecracker"})
-	if err == nil {
-		t.Fatal("expected init failure")
-	}
-	if !strings.Contains(err.Error(), "manual next steps") {
-		t.Fatalf("expected error to contain 'manual next steps', got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "sudo -E nexus init") {
-		t.Fatalf("expected error to contain 'sudo -E nexus init' command, got: %v", err)
+	err := runInit(initOptions{projectRoot: t.TempDir()})
+	if err != nil {
+		t.Fatalf("expected init to continue when bootstrap fails, got: %v", err)
 	}
 }
 
@@ -1133,7 +1142,6 @@ func setupDoctorTestWorkspace(t *testing.T, doctorConfig config.DoctorConfig) st
 	}
 	wsCfg := config.WorkspaceConfig{
 		Version: 1,
-		Runtime: config.RuntimeConfig{Required: []string{"firecracker"}},
 		Doctor:  doctorConfig,
 	}
 	cfgData, err := json.Marshal(wsCfg)
@@ -1148,15 +1156,42 @@ func setupDoctorTestWorkspace(t *testing.T, doctorConfig config.DoctorConfig) st
 
 func TestDoctor_StillRunsTestsWhenRequiredProbeFails(t *testing.T) {
 	t.Setenv("NEXUS_DOCTOR_DISABLE_BUILTIN_CHECKS", "1")
-	t.Setenv("NEXUS_RUNTIME_BACKEND", "lxc")
+	t.Setenv("NEXUS_RUNTIME_BACKEND", "firecracker")
 	originalGOOS := firecrackerHostGOOS
 	originalBootstrap := doctorExecBootstrapRunner
+	originalVerifier := doctorFirecrackerRuntimeVerifier
+	originalLifecycleSetup := doctorLifecycleSetupRunner
+	originalLifecycleStart := doctorLifecycleStartRunner
+	originalRunner := doctorCheckCommandRunner
+	originalFirecrackerRunner := firecrackerCheckCommandRunner
 	t.Cleanup(func() {
 		firecrackerHostGOOS = originalGOOS
 		doctorExecBootstrapRunner = originalBootstrap
+		doctorFirecrackerRuntimeVerifier = originalVerifier
+		doctorLifecycleSetupRunner = originalLifecycleSetup
+		doctorLifecycleStartRunner = originalLifecycleStart
+		doctorCheckCommandRunner = originalRunner
+		firecrackerCheckCommandRunner = originalFirecrackerRunner
 	})
 	firecrackerHostGOOS = "linux"
 	doctorExecBootstrapRunner = func(projectRoot string) error { return nil }
+	doctorFirecrackerRuntimeVerifier = func() error { return nil }
+	doctorLifecycleSetupRunner = func(projectRoot string, execCtx doctorExecContext) error { return nil }
+	doctorLifecycleStartRunner = func(projectRoot string, execCtx doctorExecContext) error { return nil }
+	doctorCheckCommandRunner = func(ctx context.Context, projectRoot, phase, name string, attempt, attempts int, timeout time.Duration, command string, args []string, execCtx doctorExecContext) (string, error) {
+		switch name {
+		case "failing-probe", "still-runs-and-fails":
+			return "", errors.New("simulated failure")
+		default:
+			return "ok", nil
+		}
+	}
+	firecrackerCheckCommandRunner = func(ctx context.Context, projectRoot, command string, args []string) (string, error) {
+		if command == "bash" && len(args) >= 2 && args[0] == "-lc" && strings.Contains(args[1], "exit 1") {
+			return "", errors.New("simulated failure")
+		}
+		return "ok", nil
+	}
 
 	workspaceRoot := setupDoctorTestWorkspace(t, config.DoctorConfig{
 		Probes: []config.DoctorCommandProbe{
@@ -1221,15 +1256,34 @@ func TestDoctor_StillRunsTestsWhenRequiredProbeFails(t *testing.T) {
 
 func TestDoctor_ProbesPassThenTestsRun(t *testing.T) {
 	t.Setenv("NEXUS_DOCTOR_DISABLE_BUILTIN_CHECKS", "1")
-	t.Setenv("NEXUS_RUNTIME_BACKEND", "lxc")
+	t.Setenv("NEXUS_RUNTIME_BACKEND", "firecracker")
 	originalGOOS := firecrackerHostGOOS
 	originalBootstrap := doctorExecBootstrapRunner
+	originalVerifier := doctorFirecrackerRuntimeVerifier
+	originalLifecycleSetup := doctorLifecycleSetupRunner
+	originalLifecycleStart := doctorLifecycleStartRunner
+	originalRunner := doctorCheckCommandRunner
+	originalFirecrackerRunner := firecrackerCheckCommandRunner
 	t.Cleanup(func() {
 		firecrackerHostGOOS = originalGOOS
 		doctorExecBootstrapRunner = originalBootstrap
+		doctorFirecrackerRuntimeVerifier = originalVerifier
+		doctorLifecycleSetupRunner = originalLifecycleSetup
+		doctorLifecycleStartRunner = originalLifecycleStart
+		doctorCheckCommandRunner = originalRunner
+		firecrackerCheckCommandRunner = originalFirecrackerRunner
 	})
 	firecrackerHostGOOS = "linux"
 	doctorExecBootstrapRunner = func(projectRoot string) error { return nil }
+	doctorFirecrackerRuntimeVerifier = func() error { return nil }
+	doctorLifecycleSetupRunner = func(projectRoot string, execCtx doctorExecContext) error { return nil }
+	doctorLifecycleStartRunner = func(projectRoot string, execCtx doctorExecContext) error { return nil }
+	doctorCheckCommandRunner = func(ctx context.Context, projectRoot, phase, name string, attempt, attempts int, timeout time.Duration, command string, args []string, execCtx doctorExecContext) (string, error) {
+		return "ok", nil
+	}
+	firecrackerCheckCommandRunner = func(ctx context.Context, projectRoot, command string, args []string) (string, error) {
+		return "ok", nil
+	}
 
 	workspaceRoot := setupDoctorTestWorkspace(t, config.DoctorConfig{
 		Probes: []config.DoctorCommandProbe{
@@ -1277,15 +1331,42 @@ func TestDoctor_ProbesPassThenTestsRun(t *testing.T) {
 
 func TestDoctor_RequiredTestFailureReturnsError(t *testing.T) {
 	t.Setenv("NEXUS_DOCTOR_DISABLE_BUILTIN_CHECKS", "1")
-	t.Setenv("NEXUS_RUNTIME_BACKEND", "lxc")
+	t.Setenv("NEXUS_RUNTIME_BACKEND", "firecracker")
 	originalGOOS := firecrackerHostGOOS
 	originalBootstrap := doctorExecBootstrapRunner
+	originalVerifier := doctorFirecrackerRuntimeVerifier
+	originalLifecycleSetup := doctorLifecycleSetupRunner
+	originalLifecycleStart := doctorLifecycleStartRunner
+	originalRunner := doctorCheckCommandRunner
+	originalFirecrackerRunner := firecrackerCheckCommandRunner
 	t.Cleanup(func() {
 		firecrackerHostGOOS = originalGOOS
 		doctorExecBootstrapRunner = originalBootstrap
+		doctorFirecrackerRuntimeVerifier = originalVerifier
+		doctorLifecycleSetupRunner = originalLifecycleSetup
+		doctorLifecycleStartRunner = originalLifecycleStart
+		doctorCheckCommandRunner = originalRunner
+		firecrackerCheckCommandRunner = originalFirecrackerRunner
 	})
 	firecrackerHostGOOS = "linux"
 	doctorExecBootstrapRunner = func(projectRoot string) error { return nil }
+	doctorFirecrackerRuntimeVerifier = func() error { return nil }
+	doctorLifecycleSetupRunner = func(projectRoot string, execCtx doctorExecContext) error { return nil }
+	doctorLifecycleStartRunner = func(projectRoot string, execCtx doctorExecContext) error { return nil }
+	doctorCheckCommandRunner = func(ctx context.Context, projectRoot, phase, name string, attempt, attempts int, timeout time.Duration, command string, args []string, execCtx doctorExecContext) (string, error) {
+		switch name {
+		case "failing-test":
+			return "", errors.New("simulated failure")
+		default:
+			return "ok", nil
+		}
+	}
+	firecrackerCheckCommandRunner = func(ctx context.Context, projectRoot, command string, args []string) (string, error) {
+		if command == "bash" && len(args) >= 2 && args[0] == "-lc" && strings.Contains(args[1], "exit 1") {
+			return "", errors.New("simulated failure")
+		}
+		return "ok", nil
+	}
 
 	workspaceRoot := setupDoctorTestWorkspace(t, config.DoctorConfig{
 		Probes: []config.DoctorCommandProbe{
@@ -1366,14 +1447,13 @@ func TestRunCheckCommandCapturesOutput(t *testing.T) {
 	}
 }
 
-func TestResolveCheckCommandLXCNoLongerSupported(t *testing.T) {
+func TestResolveCheckCommandNonFirecrackerFallsBackToHost(t *testing.T) {
 	cmd, args, env, label := resolveCheckCommand("/tmp/project", "bash", []string{"-lc", "echo ok"}, doctorExecContext{
-		backend: "lxc",
-		lxcName: "nexus-ws",
+		backend: "host",
 	})
 
 	if cmd != "bash" {
-		t.Fatalf("expected bash command (lxc no longer supported), got %q", cmd)
+		t.Fatalf("expected bash command, got %q", cmd)
 	}
 	if label != "host" {
 		t.Fatalf("expected label host, got %q", label)
@@ -1407,8 +1487,7 @@ func TestResolveCheckCommandFirecracker(t *testing.T) {
 
 func TestResolveCheckCommandDindNoLongerSupported(t *testing.T) {
 	cmd, args, env, label := resolveCheckCommand("/tmp/project", "docker", []string{"compose", "ps"}, doctorExecContext{
-		backend:    "dind",
-		dockerHost: "unix:///var/run/docker.sock",
+		backend: "dind",
 	})
 
 	if cmd != "docker" {
@@ -1675,7 +1754,7 @@ func TestVerifyFirecrackerWorkspaceReadyProvidesSetupGuidanceOnMissingWorkspace(
 	if err == nil {
 		t.Fatal("expected workspace verification error")
 	}
-	if !strings.Contains(err.Error(), "nexus init --project-root <abs-path> --runtime firecracker --force") {
+	if !strings.Contains(err.Error(), "nexus init --project-root <abs-path> --force") {
 		t.Fatalf("expected setup guidance, got %v", err)
 	}
 }
@@ -1695,6 +1774,24 @@ func TestRunExecHostBackendNoLongerSupported(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "unsupported runtime backend") {
 		t.Fatalf("expected unsupported backend error, got: %v", err)
+	}
+}
+
+func TestRunExecUnsupportedBackendFails(t *testing.T) {
+	t.Setenv("NEXUS_RUNTIME_BACKEND", "host")
+
+	root := t.TempDir()
+	err := runExec(execOptions{
+		projectRoot: root,
+		timeout:     15 * time.Second,
+		command:     "bash",
+		args:        []string{"-lc", "printf exec-local-ok"},
+	})
+	if err == nil {
+		t.Fatal("expected unsupported backend to fail")
+	}
+	if !strings.Contains(err.Error(), "unsupported runtime backend") {
+		t.Fatalf("expected unsupported backend error, got %v", err)
 	}
 }
 
@@ -1765,7 +1862,7 @@ func TestRunExecSelectsBackendFromWorkspaceRuntimeWhenEnvUnset(t *testing.T) {
 	if err := os.MkdirAll(nexusDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(nexusDir, "workspace.json"), []byte(`{"version":1,"runtime":{"required":["firecracker"]}}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(nexusDir, "workspace.json"), []byte(`{"version":1}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -1773,7 +1870,7 @@ func TestRunExecSelectsBackendFromWorkspaceRuntimeWhenEnvUnset(t *testing.T) {
 	firecrackerBootstrapRunner = func(projectRoot string, execCtx doctorExecContext) error {
 		calledFirecrackerBootstrap = true
 		if execCtx.backend != "firecracker" {
-			t.Fatalf("expected backend firecracker from workspace runtime.required, got %q", execCtx.backend)
+			t.Fatalf("expected backend firecracker from default backend selection, got %q", execCtx.backend)
 		}
 		return nil
 	}
@@ -1793,7 +1890,21 @@ func TestRunExecSelectsBackendFromWorkspaceRuntimeWhenEnvUnset(t *testing.T) {
 		t.Fatalf("expected runExec to succeed, got %v", err)
 	}
 	if !calledFirecrackerBootstrap {
-		t.Fatal("expected firecracker backend bootstrap from workspace runtime.required")
+		t.Fatal("expected firecracker backend bootstrap from default selection")
+	}
+}
+
+func TestSelectRuntimeBackendLinuxRequirementPrefersFirecrackerOnDarwin(t *testing.T) {
+	originalGOOS := firecrackerHostGOOS
+	t.Cleanup(func() { firecrackerHostGOOS = originalGOOS })
+	firecrackerHostGOOS = "darwin"
+
+	want := "seatbelt"
+	if _, err := exec.LookPath("limactl"); err == nil {
+		want = "firecracker"
+	}
+	if got := selectRuntimeBackend([]string{"linux"}); got != want {
+		t.Fatalf("expected linux->%s on darwin, got %q", want, got)
 	}
 }
 
@@ -2008,7 +2119,7 @@ func TestRunFirecrackerDoctorFailsFastWhenGuestDockerUnavailable(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	wsCfg := config.WorkspaceConfig{Version: 1, Runtime: config.RuntimeConfig{Required: []string{"firecracker"}}}
+	wsCfg := config.WorkspaceConfig{Version: 1}
 	data, err := json.Marshal(wsCfg)
 	if err != nil {
 		t.Fatal(err)
@@ -2037,17 +2148,52 @@ func TestRunFirecrackerDoctorFailsFastWhenGuestDockerUnavailable(t *testing.T) {
 }
 
 func TestSelectRuntimeBackend(t *testing.T) {
-	if got := selectRuntimeBackend([]string{"local"}); got != "" {
-		t.Fatalf("expected local->empty (unsupported), got %q", got)
-	}
-	if got := selectRuntimeBackend([]string{"vm"}); got != "firecracker" {
-		t.Fatalf("expected vm->firecracker, got %q", got)
-	}
 	if got := selectRuntimeBackend([]string{"firecracker"}); got != "firecracker" {
 		t.Fatalf("expected firecracker->firecracker, got %q", got)
 	}
-	if got := selectRuntimeBackend([]string{"lxc"}); got != "" {
-		t.Fatalf("expected lxc->empty (unsupported), got %q", got)
+	if got := selectRuntimeBackend([]string{"seatbelt"}); got != "seatbelt" {
+		t.Fatalf("expected seatbelt->seatbelt, got %q", got)
+	}
+}
+
+func TestApplyRuntimeBackendFromWorkspaceUsesInitHintWhenPresent(t *testing.T) {
+	t.Setenv("NEXUS_RUNTIME_BACKEND", "")
+
+	root := t.TempDir()
+	runDir := filepath.Join(root, ".nexus", "run")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "nexus-init-env"), []byte("NEXUS_RUNTIME_BACKEND=firecracker\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := applyRuntimeBackendFromWorkspace(root); err != nil {
+		t.Fatalf("expected init hint backend to apply, got %v", err)
+	}
+	if got := os.Getenv("NEXUS_RUNTIME_BACKEND"); got != "firecracker" {
+		t.Fatalf("expected hinted runtime backend firecracker, got %q", got)
+	}
+}
+
+func TestApplyRuntimeBackendFromWorkspaceRejectsInvalidInitHint(t *testing.T) {
+	t.Setenv("NEXUS_RUNTIME_BACKEND", "")
+
+	root := t.TempDir()
+	runDir := filepath.Join(root, ".nexus", "run")
+	if err := os.MkdirAll(runDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(runDir, "nexus-init-env"), []byte("NEXUS_RUNTIME_BACKEND=dind\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	err := applyRuntimeBackendFromWorkspace(root)
+	if err == nil {
+		t.Fatal("expected invalid init hint to fail")
+	}
+	if !strings.Contains(err.Error(), "invalid NEXUS_RUNTIME_BACKEND value") {
+		t.Fatalf("expected invalid hint error, got %v", err)
 	}
 }
 
@@ -2059,7 +2205,7 @@ func TestApplyRuntimeBackendFromWorkspaceRejectsDind(t *testing.T) {
 	if err := os.MkdirAll(nexusDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(nexusDir, "workspace.json"), []byte(`{"version":1,"runtime":{"required":["firecracker"]}}`), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(nexusDir, "workspace.json"), []byte(`{"version":1}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

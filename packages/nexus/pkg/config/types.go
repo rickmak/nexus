@@ -11,13 +11,7 @@ type WorkspaceConfig struct {
 	Auth         AuthConfig             `json:"auth,omitempty"`
 	Lifecycle    LifecycleCompatV1      `json:"lifecycle,omitempty"`
 	Doctor       DoctorConfig           `json:"doctor,omitempty"`
-	Runtime      RuntimeConfig          `json:"runtime,omitempty"`
 	Capabilities CapabilityRequirements `json:"capabilities,omitempty"`
-}
-
-type RuntimeConfig struct {
-	Required  []string `json:"required,omitempty"`
-	Selection string   `json:"selection,omitempty"`
 }
 
 type CapabilityRequirements struct {
@@ -143,18 +137,6 @@ func (c WorkspaceConfig) ValidateBasic() error {
 		if probe.Retries < 0 {
 			return fmt.Errorf("doctor.probes[].retries must be >= 0")
 		}
-	}
-
-	for _, allowed := range c.Runtime.Required {
-		if allowed != "firecracker" && allowed != "local" {
-			return fmt.Errorf("runtime.required values must be: firecracker or local")
-		}
-	}
-	if len(c.Runtime.Required) == 0 {
-		return fmt.Errorf("runtime.required must be present and non-empty")
-	}
-	if c.Runtime.Selection != "" && c.Runtime.Selection != "prefer-first" {
-		return fmt.Errorf("runtime.selection must be prefer-first when set")
 	}
 
 	for _, test := range c.Doctor.Tests {

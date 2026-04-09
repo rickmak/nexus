@@ -8,11 +8,19 @@ import {
 } from './types';
 import { FSOperations } from './fs';
 import { ExecOperations } from './exec';
+import { SpotlightOperations } from './spotlight';
 import { WorkspaceManager } from './workspace-manager';
 
 export class WorkspaceClient {
   private ws: WebSocket | null = null;
-  private config: Required<WorkspaceClientConfig>;
+  private config: {
+    endpoint: string;
+    workspaceId?: string;
+    token: string;
+    reconnect: boolean;
+    reconnectDelay: number;
+    maxReconnectAttempts: number;
+  };
   private state: ConnectionState = 'disconnected';
   private reconnectAttempts = 0;
   private requestMap: Map<string, { resolve: (value: unknown) => void; reject: (reason: Error) => void }> = new Map();
@@ -24,6 +32,7 @@ export class WorkspaceClient {
 
   public readonly fs: FSOperations;
   public readonly exec: ExecOperations;
+  public readonly spotlight: SpotlightOperations;
   public readonly workspace: WorkspaceManager;
 
   constructor(config: WorkspaceClientConfig) {
@@ -36,8 +45,9 @@ export class WorkspaceClient {
       maxReconnectAttempts: config.maxReconnectAttempts ?? 10,
     };
 
-    this.fs = new FSOperations(this);
-    this.exec = new ExecOperations(this);
+    this.fs = new FSOperations(this, this.config.workspaceId ? { workspaceId: this.config.workspaceId } : {});
+    this.exec = new ExecOperations(this, this.config.workspaceId ? { workspaceId: this.config.workspaceId } : {});
+    this.spotlight = new SpotlightOperations(this, this.config.workspaceId ? { workspaceId: this.config.workspaceId } : {});
     this.workspace = new WorkspaceManager(this);
   }
 
@@ -59,7 +69,9 @@ export class WorkspaceClient {
     return new Promise((resolve, reject) => {
       try {
         const url = new URL(this.config.endpoint);
-        url.searchParams.set('workspaceId', this.config.workspaceId);
+        if (this.config.workspaceId && this.config.workspaceId.trim() !== '') {
+          url.searchParams.set('workspaceId', this.config.workspaceId);
+        }
         url.searchParams.set('token', this.config.token);
 
         this.ws = new WebSocket(url.toString());
@@ -233,3 +245,5 @@ export class WorkspaceClient {
     }
   }
 }
+
+export { WorkspaceClient as Client };

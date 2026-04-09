@@ -17,7 +17,7 @@ var runLimaCheckCommandFn = runLimaCheckCommand
 var doctorLimaInstanceName string
 
 func bootstrapFirecrackerExecContextDarwin(projectRoot string, execCtx doctorExecContext) error {
-	if execCtx.backend != "firecracker" && execCtx.backend != "lxc" {
+	if execCtx.backend != "firecracker" {
 		return fmt.Errorf("invalid backend for lima bootstrap on darwin: %s", execCtx.backend)
 	}
 
@@ -25,14 +25,7 @@ func bootstrapFirecrackerExecContextDarwin(projectRoot string, execCtx doctorExe
 		return fmt.Errorf("limactl not found; brew install lima: %w", err)
 	}
 
-	var templatePath string
-	var cleanupTemplate func()
-	var err error
-	if execCtx.backend == "lxc" {
-		templatePath, cleanupTemplate, err = writeEmbeddedLimaLXCTemplate()
-	} else {
-		templatePath, cleanupTemplate, err = writeEmbeddedLimaTemplate()
-	}
+	templatePath, cleanupTemplate, err := writeEmbeddedLimaTemplate()
 	if err != nil {
 		return fmt.Errorf("failed to write lima template: %w", err)
 	}

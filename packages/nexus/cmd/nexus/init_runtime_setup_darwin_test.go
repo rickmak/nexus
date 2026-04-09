@@ -4,6 +4,8 @@ package main
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -141,6 +143,53 @@ func TestBootstrapFirecrackerExecContextDarwinFailsWhenWorkspaceNotReady(t *test
 	}
 	if !strings.Contains(err.Error(), "workspace readiness") {
 		t.Fatalf("expected workspace readiness error, got: %v", err)
+	}
+}
+
+func TestDarwinBootstrapReturnsErrorWhenLimaStartFails(t *testing.T) {
+	originalLookPath := limactlLookPathFn
+	originalRun := limactlRunFn
+	originalOutput := limactlOutputFn
+	t.Cleanup(func() {
+		limactlLookPathFn = originalLookPath
+		limactlRunFn = originalRun
+		limactlOutputFn = originalOutput
+	})
+
+	projectRoot := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(projectRoot, ".nexus"), 0o755); err != nil {
+		t.Fatalf("create .nexus: %v", err)
+	}
+
+	limactlLookPathFn = func(name string) (string, error) {
+		if name == "limactl" || name == "brew" {
+			return "/opt/homebrew/bin/" + name, nil
+		}
+		return "", &notFoundError{name: name}
+	}
+
+	limactlRunFn = func(name string, args ...string) error {
+		if name == "limactl" && len(args) > 0 && args[0] == "start" {
+			return &notFoundError{name: "nested virtualization unsupported"}
+		}
+		return nil
+	}
+
+	limactlOutputFn = func(name string, args ...string) ([]byte, error) {
+		return []byte("[]"), nil
+	}
+
+	err := runInitRuntimeBootstrapDarwin(projectRoot, "firecracker")
+	if err == nil {
+		t.Fatal("expected bootstrap error when limactl start fails")
+	}
+	if !strings.Contains(err.Error(), "firecracker runtime setup failed on darwin") {
+		t.Fatalf("expected wrapped firecracker setup error, got: %v", err)
+	}
+
+	envPath := filepath.Join(projectRoot, ".nexus", "run", "nexus-init-env")
+	if _, statErr := os.Stat(envPath); !os.IsNotExist(statErr) {
+		t.Fatalf("did not expect nexus-init-env to be written on bootstrap failure")
 	}
 }
 
