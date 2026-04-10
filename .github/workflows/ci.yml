@@ -180,11 +180,22 @@ jobs:
       - name: Build nexus CLI, runtime tools, and seed nexus init
         run: ./scripts/ci/sdk-runtime-e2e-setup.sh
 
-      - name: Run consolidated SDK runtime E2E suite
+      - name: Reset conflicting Lima instances on macOS
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          limactl delete -f nexus-firecracker || true
+          limactl delete -f nexus-seatbelt || true
+
+      - name: Run runtime backend selection E2E (strict)
         shell: bash
         run: |
           set -euo pipefail
           set -a
           source "${GITHUB_WORKSPACE}/.nexus-e2e-env.sh"
           set +a
-          pnpm --filter @nexus/e2e-sdk-runtime test:ci
+          if [[ "${RUNNER_OS}" == "macOS" ]]; then
+            export NEXUS_RUNTIME_SEATBELT_INSTANCE=nexus-seatbelt
+          fi
+          pnpm --filter @nexus/e2e-sdk-runtime exec jest --runInBand --ci src/cases/runtime-selection.e2e.test.ts
