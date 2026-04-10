@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -587,12 +588,14 @@ func TestManagerSpawnProcessOutlivesSpawnContext(t *testing.T) {
 		t.Fatalf("expected firecracker process to outlive spawn context, but it exited: %v", err)
 	}
 
-	state, err := processState(inst.Process.Pid)
-	if err != nil {
-		t.Fatalf("failed to read firecracker process state: %v", err)
-	}
-	if state == 'Z' {
-		t.Fatal("expected firecracker process to outlive spawn context, but it became a zombie")
+	if runtime.GOOS == "linux" {
+		state, err := processState(inst.Process.Pid)
+		if err != nil {
+			t.Fatalf("failed to read firecracker process state: %v", err)
+		}
+		if state == 'Z' {
+			t.Fatal("expected firecracker process to outlive spawn context, but it became a zombie")
+		}
 	}
 }
 
