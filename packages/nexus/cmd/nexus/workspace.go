@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -213,20 +212,42 @@ func runWorkspaceListCommand(_ []string) {
 // ── workspace create ──────────────────────────────────────────────────────────
 
 func runWorkspaceCreateCommand(args []string) {
-	fs := flag.NewFlagSet("workspace create", flag.ExitOnError)
+	fs := flag.NewFlagSet("workspace create", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	repo := fs.String("repo", "", "repository URL (required)")
+	pathArg := fs.String("path", "", "local repository path (default: current directory)")
 	ref := fs.String("ref", "", "branch / ref (default: repo default branch)")
-	name := fs.String("name", "", "workspace name (required)")
-	profile := fs.String("profile", "default", "agent profile")
 	backend := fs.String("backend", "", "runtime backend override (firecracker)")
-	_ = fs.Parse(args)
-
-	if *repo == "" || *name == "" {
-		fmt.Fprintf(os.Stderr, "nexus workspace create: --repo and --name are required\n")
+	filteredArgs, positionalPath, err := splitWorkspaceCreateArgs(args)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nexus workspace create: %v\n", err)
 		fs.Usage()
 		os.Exit(2)
 	}
+	if err := fs.Parse(filteredArgs); err != nil {
+		os.Exit(2)
+	}
+
+	if strings.TrimSpace(*pathArg) != "" && positionalPath != "" {
+		fmt.Fprintln(os.Stderr, "nexus workspace create: use either --path or positional path, not both")
+		fs.Usage()
+		os.Exit(2)
+	}
+
+	targetPath := strings.TrimSpace(*pathArg)
+	if targetPath == "" {
+		if positionalPath != "" {
+			targetPath = positionalPath
+		} else {
+			targetPath = "."
+		}
+	}
+
+	repoPath, err := normalizeLocalRepoPath(targetPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nexus workspace create: %v\n", err)
+		os.Exit(2)
+	}
+	workspaceName := deriveWorkspaceName(repoPath)
 
 	conn, err := ensureDaemon()
 	if err != nil {
@@ -235,13 +256,11 @@ func runWorkspaceCreateCommand(args []string) {
 	}
 	defer conn.Close()
 
-	repoValue := normalizeRepoForCreate(*repo)
-
 	spec := workspacemgr.CreateSpec{
-		Repo:          repoValue,
+		Repo:          repoPath,
 		Ref:           *ref,
-		WorkspaceName: *name,
-		AgentProfile:  *profile,
+		WorkspaceName: workspaceName,
+		AgentProfile:  "default",
 		Backend:       strings.TrimSpace(*backend),
 	}
 	var result struct {
@@ -294,38 +313,83 @@ func runWorkspaceCreateCommand(args []string) {
 	}
 }
 
-func normalizeRepoForCreate(repo string) string {
-	repo = strings.TrimSpace(repo)
-	if repo == "" || looksLikeRemoteRepo(repo) {
-		return repo
-	}
-
-	if filepath.IsAbs(repo) {
-		return filepath.Clean(repo)
-	}
-
-	if strings.HasPrefix(repo, "./") || strings.HasPrefix(repo, "../") {
-		if abs, err := filepath.Abs(repo); err == nil {
-			return abs
+func splitWorkspaceCreateArgs(args []string) ([]string, string, error) {
+	filtered := make([]string, 0, len(args))
+	positionalPath := ""
+	expectFlagValue := false
+	for i := 0; i < len(args); i++ {
+		current := args[i]
+		if expectFlagValue {
+			filtered = append(filtered, current)
+			expectFlagValue = false
+			continue
 		}
-		return repo
-	}
-
-	if info, err := os.Stat(repo); err == nil && info.IsDir() {
-		if abs, absErr := filepath.Abs(repo); absErr == nil {
-			return abs
+		if strings.HasPrefix(current, "-") {
+			filtered = append(filtered, current)
+			if strings.Contains(current, "=") {
+				continue
+			}
+			if current == "--path" || current == "--ref" || current == "--backend" {
+				expectFlagValue = true
+			}
+			continue
 		}
+		if positionalPath != "" {
+			return nil, "", fmt.Errorf("accepts at most one path argument")
+		}
+		positionalPath = current
 	}
-
-	return repo
+	if expectFlagValue {
+		return nil, "", fmt.Errorf("missing value for %s", filtered[len(filtered)-1])
+	}
+	return filtered, positionalPath, nil
 }
 
-func looksLikeRemoteRepo(repo string) bool {
-	if strings.HasPrefix(repo, "git@") || strings.HasPrefix(repo, "ssh://") {
-		return true
+func normalizeLocalRepoPath(pathValue string) (string, error) {
+	pathValue = strings.TrimSpace(pathValue)
+	if pathValue == "" {
+		pathValue = "."
 	}
-	u, err := url.Parse(repo)
-	return err == nil && u.Scheme != "" && u.Host != ""
+	absolutePath, err := filepath.Abs(pathValue)
+	if err != nil {
+		return "", fmt.Errorf("resolve path %q: %w", pathValue, err)
+	}
+	info, err := os.Stat(absolutePath)
+	if err != nil {
+		return "", fmt.Errorf("invalid path %q: %w", absolutePath, err)
+	}
+	if !info.IsDir() {
+		return "", fmt.Errorf("path %q is not a directory", absolutePath)
+	}
+	return absolutePath, nil
+}
+
+func deriveWorkspaceName(repoPath string) string {
+	base := filepath.Base(filepath.Clean(repoPath))
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		base = "workspace"
+	}
+	base = strings.ToLower(base)
+	var b strings.Builder
+	lastDash := false
+	for _, r := range base {
+		isLetter := r >= 'a' && r <= 'z'
+		isNumber := r >= '0' && r <= '9'
+		if isLetter || isNumber {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	name := strings.Trim(b.String(), "-")
+	if name == "" {
+		return "workspace"
+	}
+	return name
 }
 
 // ── workspace stop ────────────────────────────────────────────────────────────
@@ -630,7 +694,7 @@ func printWorkspaceUsage() {
 
 subcommands:
   list                  list all workspaces
-  create --repo <url|path> --name <name> [--ref <ref>] [--profile <profile>] [--backend <backend>]
+  create [path] [--ref <ref>] [--backend <backend>]
   start <id>            start a workspace and make it accessible
   ssh <id>              open interactive shell via daemon PTY
   stop <id>             stop a running workspace
