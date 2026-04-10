@@ -20,17 +20,6 @@ const guestSubnetCIDR = "172.26.0.0/16"
 // tapHelperBin is the name of the privileged tap helper binary.
 const tapHelperBin = "nexus-tap-helper"
 
-// tapNameForWorkspace returns a tap interface name for a given workspace ID.
-// Linux IFNAMSIZ is 16 bytes including null, so names must be ≤ 15 chars.
-// We use "nx-" prefix (3) + first 12 chars of workspaceID = 15 max.
-func tapNameForWorkspace(workspaceID string) string {
-	suffix := workspaceID
-	if len(suffix) > 12 {
-		suffix = suffix[:12]
-	}
-	return "nx-" + suffix
-}
-
 // checkTapHelper verifies that nexus-tap-helper is installed and has cap_net_admin.
 // Returns an error with setup instructions if not found or not configured.
 func checkTapHelper() error {

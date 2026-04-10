@@ -13,14 +13,6 @@ const bridgeGatewayIP = "172.26.0.1"
 
 const guestSubnetCIDR = "172.26.0.0/16"
 
-func tapNameForWorkspace(workspaceID string) string {
-	suffix := workspaceID
-	if len(suffix) > 12 {
-		suffix = suffix[:12]
-	}
-	return "nx-" + suffix
-}
-
 func checkTapHelper() error {
 	return errors.New("tap helper is only available on Linux")
 }
