@@ -10,8 +10,9 @@ import (
 )
 
 type NodeInfoResult struct {
-	Node         config.NodeIdentity  `json:"node"`
-	Capabilities []runtime.Capability `json:"capabilities"`
+	Node          config.NodeIdentity      `json:"node"`
+	Capabilities  []runtime.Capability     `json:"capabilities"`
+	Compatibility config.NodeCompatibility `json:"compatibility"`
 }
 
 func HandleNodeInfo(_ context.Context, _ json.RawMessage, nodeCfg *config.NodeConfig, factory *runtime.Factory) (*NodeInfoResult, *rpckit.RPCError) {
@@ -21,6 +22,7 @@ func HandleNodeInfo(_ context.Context, _ json.RawMessage, nodeCfg *config.NodeCo
 
 	if nodeCfg != nil {
 		result.Node = nodeCfg.Node
+		result.Compatibility = nodeCfg.Compatibility
 	}
 
 	if factory != nil {

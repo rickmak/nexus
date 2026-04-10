@@ -120,10 +120,22 @@ type ptyCloseParams struct {
 	SessionID string `json:"sessionId"`
 }
 
+var newSpotlightManagerForServer = func(workspaceMgr *workspacemgr.Manager) (*spotlight.Manager, error) {
+	return spotlight.NewManagerWithRepository(workspaceMgr.SpotlightRepository())
+}
+
 func NewServer(port int, workspaceDir string, tokenSecret string) (*Server, error) {
 	ws, err := workspace.NewWorkspace(workspaceDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create workspace: %w", err)
+	}
+
+	workspaceMgr := workspacemgr.NewManager(workspaceDir)
+
+	spotlightMgr, err := newSpotlightManagerForServer(workspaceMgr)
+	if err != nil {
+		log.Printf("[spotlight] Warning: failed to initialize sqlite-backed spotlight manager, falling back to in-memory manager: %v", err)
+		spotlightMgr = spotlight.NewManager()
 	}
 
 	lifecycleMgr, err := lifecycle.NewManager(workspaceDir)
@@ -148,9 +160,9 @@ func NewServer(port int, workspaceDir string, tokenSecret string) (*Server, erro
 		},
 		connections:         make(map[string]*Connection),
 		ws:                  ws,
-		workspaceMgr:        workspacemgr.NewManager(workspaceDir),
+		workspaceMgr:        workspaceMgr,
 		serviceMgr:          services.NewManager(),
-		spotlightMgr:        spotlight.NewManager(),
+		spotlightMgr:        spotlightMgr,
 		lifecycle:           lifecycleMgr,
 		authRelayBroker:     authrelay.NewBroker(),
 		autoComposeForwards: make(map[string]bool),
@@ -746,18 +758,11 @@ func (s *Server) handleFirecrackerPTYOpen(conn *Connection, p ptyOpenParams, wsR
 		backend = "firecracker"
 	}
 	if requestedBackend == "firecracker" || requestedBackend == "seatbelt" {
-		if driverAny, ok := s.runtimeFactory.DriverForBackend("firecracker"); ok {
-			log.Printf("[pty.open] firecracker driver type=%T reported-backend=%q", driverAny, strings.TrimSpace(driverAny.Backend()))
-			if reported := strings.TrimSpace(driverAny.Backend()); reported != "" && reported != requestedBackend {
-				log.Printf("[pty.open] backend alias: workspace backend=%s runtime backend=%s", requestedBackend, reported)
+		if driverAny, ok := s.runtimeFactory.DriverForBackend(requestedBackend); ok {
+			reported := strings.TrimSpace(driverAny.Backend())
+			log.Printf("[pty.open] %s driver type=%T reported-backend=%q", requestedBackend, driverAny, reported)
+			if reported != "" {
 				backend = reported
-			}
-		}
-		if requestedBackend == "seatbelt" {
-			if driverAny, ok := s.runtimeFactory.DriverForBackend("seatbelt"); ok {
-				if reported := strings.TrimSpace(driverAny.Backend()); reported != "" {
-					backend = reported
-				}
 			}
 		}
 	}
@@ -842,10 +847,6 @@ func (s *Server) streamRemoteShellOutput(conn *Connection, session *ptySession) 
 			continue
 		}
 		if typeStr == "result" {
-			if !session.closing.Load() {
-				continue
-			}
-
 			exitCode := 0
 			if v, ok := msg["exit_code"].(float64); ok {
 				exitCode = int(v)

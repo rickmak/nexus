@@ -63,27 +63,18 @@ func TestCheckBridgeExists(t *testing.T) {
 	}
 }
 
-// TestTapNameForWorkspace verifies the tap naming scheme stays within IFNAMSIZ.
 func TestTapNameForWorkspace(t *testing.T) {
-	cases := []struct {
-		workspaceID string
-		wantPrefix  string
-		maxLen      int
-	}{
-		{"abc", "nx-abc", 15},
-		{"abcdefghijklmnopqrstuvwxyz", "nx-abcdefghijkl", 15},
-		{"ws-12345678901234567890", "nx-ws-123456789", 15},
-		{"short", "nx-short", 15},
+	const maxLen = 15
+	id := "ws-12345678901234567890"
+	got := tapNameForWorkspace(id)
+	if len(got) > maxLen {
+		t.Fatalf("tapNameForWorkspace(%q) len %d > %d", id, len(got), maxLen)
 	}
-
-	for _, tc := range cases {
-		got := tapNameForWorkspace(tc.workspaceID)
-		if got != tc.wantPrefix {
-			t.Errorf("tapNameForWorkspace(%q) = %q, want %q", tc.workspaceID, got, tc.wantPrefix)
-		}
-		if len(got) > tc.maxLen {
-			t.Errorf("tapNameForWorkspace(%q) = %q (len %d), exceeds IFNAMSIZ-1 (%d)",
-				tc.workspaceID, got, len(got), tc.maxLen)
-		}
+	if got != tapNameForWorkspace(id) {
+		t.Fatal("tap name must be deterministic")
+	}
+	other := tapNameForWorkspace("ws-12345678901234567891")
+	if got == other {
+		t.Fatalf("tap names must differ for different workspace ids: both %q", got)
 	}
 }

@@ -3,8 +3,10 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/inizio/nexus/packages/nexus/pkg/compose"
@@ -17,12 +19,14 @@ func TestHandleSpotlightApplyDefaults(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	studentPort := freeTCPPort(t)
+	apiPort := freeTCPPort(t)
 	configJSON := `{
   "version": 1,
   "spotlight": {
     "defaults": [
-      {"service":"student-portal","remotePort":5173,"localPort":5173},
-      {"service":"api","remotePort":8000,"localPort":8000}
+      {"service":"student-portal","remotePort":` + strconv.Itoa(studentPort) + `,"localPort":` + strconv.Itoa(studentPort) + `},
+      {"service":"api","remotePort":` + strconv.Itoa(apiPort) + `,"localPort":` + strconv.Itoa(apiPort) + `}
     ]
   }
 }`
@@ -45,13 +49,15 @@ func TestHandleSpotlightApplyDefaults(t *testing.T) {
 func TestHandleSpotlightApplyComposePorts_ForwardsDiscoveredPorts(t *testing.T) {
 	mgr := spotlight.NewManager()
 	params, _ := json.Marshal(SpotlightApplyComposePortsParams{WorkspaceID: "ws-1", RootPath: t.TempDir()})
+	studentPort := freeTCPPort(t)
+	apiPort := freeTCPPort(t)
 
 	orig := discoverPublishedPorts
 	t.Cleanup(func() { discoverPublishedPorts = orig })
 	discoverPublishedPorts = func(_ context.Context, _ string) ([]compose.PublishedPort, error) {
 		return []compose.PublishedPort{
-			{Service: "student", HostPort: 5173, TargetPort: 5173, Protocol: "tcp"},
-			{Service: "api", HostPort: 8000, TargetPort: 8000, Protocol: "tcp"},
+			{Service: "student", HostPort: studentPort, TargetPort: studentPort, Protocol: "tcp"},
+			{Service: "api", HostPort: apiPort, TargetPort: apiPort, Protocol: "tcp"},
 		}, nil
 	}
 
@@ -69,12 +75,14 @@ func TestHandleSpotlightApplyComposePorts_ForwardsDiscoveredPorts(t *testing.T) 
 
 func TestHandleSpotlightApplyComposePorts_ReportsCollisionsPerPort(t *testing.T) {
 	mgr := spotlight.NewManager()
+	busyPort := freeTCPPort(t)
+	apiPort := freeTCPPort(t)
 
 	_, err := mgr.Expose(context.Background(), spotlight.ExposeSpec{
 		WorkspaceID: "ws-other",
 		Service:     "busy",
 		RemotePort:  8000,
-		LocalPort:   5173,
+		LocalPort:   busyPort,
 	})
 	if err != nil {
 		t.Fatalf("seed forward: %v", err)
@@ -85,8 +93,8 @@ func TestHandleSpotlightApplyComposePorts_ReportsCollisionsPerPort(t *testing.T)
 	t.Cleanup(func() { discoverPublishedPorts = orig })
 	discoverPublishedPorts = func(_ context.Context, _ string) ([]compose.PublishedPort, error) {
 		return []compose.PublishedPort{
-			{Service: "student", HostPort: 5173, TargetPort: 5173, Protocol: "tcp"},
-			{Service: "api", HostPort: 8000, TargetPort: 8000, Protocol: "tcp"},
+			{Service: "student", HostPort: busyPort, TargetPort: busyPort, Protocol: "tcp"},
+			{Service: "api", HostPort: apiPort, TargetPort: apiPort, Protocol: "tcp"},
 		}, nil
 	}
 
@@ -100,8 +108,8 @@ func TestHandleSpotlightApplyComposePorts_ReportsCollisionsPerPort(t *testing.T)
 	if len(res.Errors) != 1 {
 		t.Fatalf("expected 1 error, got %d", len(res.Errors))
 	}
-	if res.Errors[0].HostPort != 5173 {
-		t.Fatalf("expected collision on 5173, got %+v", res.Errors[0])
+	if res.Errors[0].HostPort != busyPort {
+		t.Fatalf("expected collision on %d, got %+v", busyPort, res.Errors[0])
 	}
 }
 
@@ -122,4 +130,18 @@ func TestHandleSpotlightApplyComposePorts_NoComposeFileReturnsEmpty(t *testing.T
 	if len(res.Forwards) != 0 || len(res.Errors) != 0 {
 		t.Fatalf("expected empty result, got forwards=%d errors=%d", len(res.Forwards), len(res.Errors))
 	}
+}
+
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("allocate free tcp port: %v", err)
+	}
+	defer ln.Close()
+	addr, ok := ln.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatal("expected tcp address")
+	}
+	return addr.Port
 }

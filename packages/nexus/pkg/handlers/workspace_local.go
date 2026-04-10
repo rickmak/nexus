@@ -47,6 +47,18 @@ func HandleWorkspaceSetLocalWorktree(
 		return nil, &rpckit.RPCError{Code: -32603, Message: "failed to update workspace: " + err.Error()}
 	}
 
+	if params.MutagenSessionID != "" {
+		existing := mgr.List()
+		for _, candidate := range existing {
+			if candidate == nil || candidate.ID == params.ID {
+				continue
+			}
+			if candidate.MutagenSessionID == params.MutagenSessionID {
+				_ = mgr.SetLocalWorktree(candidate.ID, candidate.LocalWorktreePath, "")
+			}
+		}
+	}
+
 	ws, _ := mgr.Get(params.ID)
 	return map[string]interface{}{"ok": true, "workspace": ws}, nil
 }

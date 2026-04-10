@@ -13,12 +13,21 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/inizio/nexus/packages/nexus/pkg/config"
+	"github.com/inizio/nexus/packages/nexus/pkg/store"
 )
 
 type Manager struct {
-	root       string
-	mu         sync.RWMutex
-	workspaces map[string]*Workspace
+	root          string
+	workspaceRepo workspaceStore
+	mu            sync.RWMutex
+	workspaces    map[string]*Workspace
+}
+
+type workspaceStore interface {
+	store.WorkspaceRepository
+	store.SpotlightRepository
 }
 
 func NewManager(root string) *Manager {
@@ -26,38 +35,55 @@ func NewManager(root string) *Manager {
 		root:       root,
 		workspaces: make(map[string]*Workspace),
 	}
+	storePath := nodeStorePathForRoot(root, config.NodeDBPath())
+	if st, err := store.Open(storePath); err == nil {
+		m.workspaceRepo = st
+	} else {
+		fmt.Fprintf(os.Stderr, "workspacemgr: warning: sqlite store disabled (%v)\n", err)
+	}
 	_ = m.loadAll()
 	return m
 }
 
-func (m *Manager) workspacesDir() string {
-	return filepath.Join(m.root, "workspaces")
-}
+func nodeStorePathForRoot(root string, defaultPath string) string {
+	cleanRoot := filepath.Clean(root)
+	if cleanRoot == "" || defaultPath == "" {
+		return defaultPath
+	}
 
-func (m *Manager) recordPath(id string) string {
-	return filepath.Join(m.workspacesDir(), id+".json")
+	resolvedRoot := cleanRoot
+	if real, err := filepath.EvalSymlinks(cleanRoot); err == nil {
+		resolvedRoot = filepath.Clean(real)
+	}
+
+	resolvedTemp := filepath.Clean(os.TempDir())
+	if real, err := filepath.EvalSymlinks(resolvedTemp); err == nil {
+		resolvedTemp = filepath.Clean(real)
+	}
+
+	tmpPrefix := resolvedTemp + string(filepath.Separator)
+	if strings.HasPrefix(resolvedRoot+string(filepath.Separator), tmpPrefix) {
+		return filepath.Join(cleanRoot, ".nexus", "state", "node.db")
+	}
+
+	return defaultPath
 }
 
 func (m *Manager) loadAll() error {
-	dir := m.workspacesDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
-		}
-		return fmt.Errorf("read workspaces dir: %w", err)
+	if m.workspaceRepo == nil {
+		return nil
 	}
-	for _, entry := range entries {
-		if entry.IsDir() || filepath.Ext(entry.Name()) != ".json" {
-			continue
-		}
-		id := entry.Name()[:len(entry.Name())-5]
-		data, err := os.ReadFile(filepath.Join(dir, entry.Name()))
-		if err != nil {
+
+	all, err := m.workspaceRepo.ListWorkspaceRows()
+	if err != nil {
+		return fmt.Errorf("list sqlite workspaces: %w", err)
+	}
+	for _, row := range all {
+		if len(row.Payload) == 0 {
 			continue
 		}
 		var ws Workspace
-		if err := json.Unmarshal(data, &ws); err != nil {
+		if err := json.Unmarshal(row.Payload, &ws); err != nil {
 			continue
 		}
 		if ws.RepoID == "" {
@@ -73,27 +99,37 @@ func (m *Manager) loadAll() error {
 				ws.LineageRootID = ws.ParentWorkspaceID
 			}
 		}
-		m.workspaces[id] = &ws
+		copy := ws
+		m.workspaces[ws.ID] = &copy
 	}
 	return nil
 }
 
 func (m *Manager) persistWorkspace(ws *Workspace) error {
-	if err := os.MkdirAll(m.workspacesDir(), 0o755); err != nil {
-		return fmt.Errorf("create workspaces dir: %w", err)
+	if m.workspaceRepo == nil {
+		return fmt.Errorf("sqlite workspace store unavailable")
 	}
-	data, err := json.Marshal(ws)
+
+	payload, err := json.Marshal(ws)
 	if err != nil {
-		return fmt.Errorf("marshal workspace: %w", err)
+		return fmt.Errorf("marshal sqlite workspace payload: %w", err)
 	}
-	if err := os.WriteFile(m.recordPath(ws.ID), data, 0o644); err != nil {
-		return fmt.Errorf("write workspace record: %w", err)
+	if err := m.workspaceRepo.UpsertWorkspaceRow(store.WorkspaceRow{
+		ID:        ws.ID,
+		Payload:   payload,
+		CreatedAt: ws.CreatedAt,
+		UpdatedAt: ws.UpdatedAt,
+	}); err != nil {
+		return fmt.Errorf("upsert sqlite workspace: %w", err)
 	}
+
 	return nil
 }
 
 func (m *Manager) deleteRecord(id string) {
-	_ = os.Remove(m.recordPath(id))
+	if m.workspaceRepo != nil {
+		_ = m.workspaceRepo.DeleteWorkspace(id)
+	}
 }
 
 func (m *Manager) Create(_ context.Context, spec CreateSpec) (*Workspace, error) {
@@ -152,6 +188,11 @@ func (m *Manager) Create(_ context.Context, spec CreateSpec) (*Workspace, error)
 	m.mu.Unlock()
 
 	if err := m.persistWorkspace(ws); err != nil {
+		m.mu.Lock()
+		delete(m.workspaces, id)
+		m.mu.Unlock()
+		_ = os.RemoveAll(rootPath)
+		cleanupCreatedWorktree(spec.Repo, localWorktreePath)
 		return nil, fmt.Errorf("persist workspace: %w", err)
 	}
 
@@ -424,6 +465,13 @@ func (m *Manager) Root() string {
 	return m.root
 }
 
+func (m *Manager) SpotlightRepository() store.SpotlightRepository {
+	if m == nil {
+		return nil
+	}
+	return m.workspaceRepo
+}
+
 func cloneWorkspace(in *Workspace) *Workspace {
 	if in == nil {
 		return nil
@@ -612,13 +660,18 @@ func resolveForkBasePath(parent *Workspace) string {
 
 	if localPath := strings.TrimSpace(parent.LocalWorktreePath); localPath != "" {
 		candidate := filepath.Clean(localPath)
-		if looksLikeRepoRoot(candidate) {
-			nested := filepath.Join(candidate, ".worktrees", sanitizeWorktreeName(parent.WorkspaceName))
-			if pathExists(nested) {
-				return nested
-			}
+		if !looksLikeWorktree(candidate) {
+			candidate = ""
 		}
-		return candidate
+		if candidate != "" {
+			if looksLikeRepoRoot(candidate) {
+				nested := filepath.Join(candidate, ".worktrees", sanitizeWorktreeName(parent.WorkspaceName))
+				if pathExists(nested) {
+					return nested
+				}
+			}
+			return candidate
+		}
 	}
 
 	if isLikelyLocalPath(parent.Repo) {
@@ -629,6 +682,16 @@ func resolveForkBasePath(parent *Workspace) string {
 	}
 
 	return ""
+}
+
+func looksLikeWorktree(path string) bool {
+	if path == "" {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(path, ".git")); err == nil {
+		return true
+	}
+	return false
 }
 
 func looksLikeRepoRoot(path string) bool {
@@ -701,4 +764,30 @@ func uniqueWorktreePath(desired string) string {
 		}
 	}
 	return fmt.Sprintf("%s-%d", desired, time.Now().Unix())
+}
+
+func cleanupCreatedWorktree(repoPath, worktreePath string) {
+	if !isSafeWorktreeCleanupPath(repoPath, worktreePath) {
+		return
+	}
+
+	cleanRepo := filepath.Clean(repoPath)
+	cleanWorktree := filepath.Clean(worktreePath)
+	cmd := exec.Command("git", "-C", cleanRepo, "worktree", "remove", "--force", cleanWorktree)
+	_ = cmd.Run()
+	_ = os.RemoveAll(cleanWorktree)
+}
+
+func isSafeWorktreeCleanupPath(repoPath, worktreePath string) bool {
+	if strings.TrimSpace(repoPath) == "" || strings.TrimSpace(worktreePath) == "" {
+		return false
+	}
+	cleanRepo := filepath.Clean(repoPath)
+	cleanWorktree := filepath.Clean(worktreePath)
+	worktreesRoot := filepath.Join(cleanRepo, ".worktrees")
+	prefix := worktreesRoot + string(filepath.Separator)
+	if cleanWorktree == worktreesRoot || !strings.HasPrefix(cleanWorktree+string(filepath.Separator), prefix) {
+		return false
+	}
+	return true
 }

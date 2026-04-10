@@ -10,6 +10,7 @@ import { FSOperations } from './fs';
 import { ExecOperations } from './exec';
 import { SpotlightOperations } from './spotlight';
 import { WorkspaceManager } from './workspace-manager';
+import { PTYOperations } from './pty';
 
 export class WorkspaceClient {
   private ws: WebSocket | null = null;
@@ -29,10 +30,12 @@ export class WorkspaceClient {
   private messageQueue: RPCRequest[] = [];
   private reconnectEnabled = true;
   private requestId = 0;
+  private notificationCallbacks: Map<string, Array<(params: unknown) => void>> = new Map();
 
   public readonly fs: FSOperations;
   public readonly exec: ExecOperations;
   public readonly spotlight: SpotlightOperations;
+  public readonly pty: PTYOperations;
   public readonly workspace: WorkspaceManager;
 
   constructor(config: WorkspaceClientConfig) {
@@ -48,6 +51,7 @@ export class WorkspaceClient {
     this.fs = new FSOperations(this, this.config.workspaceId ? { workspaceId: this.config.workspaceId } : {});
     this.exec = new ExecOperations(this, this.config.workspaceId ? { workspaceId: this.config.workspaceId } : {});
     this.spotlight = new SpotlightOperations(this, this.config.workspaceId ? { workspaceId: this.config.workspaceId } : {});
+    this.pty = new PTYOperations(this);
     this.workspace = new WorkspaceManager(this);
   }
 
@@ -134,6 +138,22 @@ export class WorkspaceClient {
     this.disconnectCallbacks.push(callback);
   }
 
+  onNotification(method: string, callback: (params: unknown) => void): () => void {
+    const existing = this.notificationCallbacks.get(method) ?? [];
+    existing.push(callback);
+    this.notificationCallbacks.set(method, existing);
+
+    return () => {
+      const callbacks = this.notificationCallbacks.get(method) ?? [];
+      const next = callbacks.filter((cb) => cb !== callback);
+      if (next.length === 0) {
+        this.notificationCallbacks.delete(method);
+        return;
+      }
+      this.notificationCallbacks.set(method, next);
+    };
+  }
+
   async request<T = unknown>(method: string, params?: Record<string, unknown>): Promise<T> {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
       throw new Error('Not connected to workspace');
@@ -179,6 +199,13 @@ export class WorkspaceClient {
           } else {
             pending.resolve(response.result);
           }
+        }
+      }
+
+      if (!response.id && response.method) {
+        const callbacks = this.notificationCallbacks.get(response.method) ?? [];
+        for (const cb of callbacks) {
+          cb(response.params);
         }
       }
     } catch (error) {

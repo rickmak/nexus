@@ -2,15 +2,54 @@ package workspacemgr
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
 
+func TestNodeStorePathForRoot_UsesTempScopedDBForTmpSymlinkPath(t *testing.T) {
+	defaultPath := filepath.Join(t.TempDir(), "state-home", "nexus", "node.db")
+	target := t.TempDir()
+
+	link := filepath.Join("/tmp", fmt.Sprintf("nexus-link-%d", time.Now().UnixNano()))
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlink setup unavailable: %v", err)
+	}
+	t.Cleanup(func() { _ = os.Remove(link) })
+
+	cleanLink := filepath.Clean(link)
+	cleanTemp := filepath.Clean(os.TempDir())
+	if strings.HasPrefix(cleanLink+string(filepath.Separator), cleanTemp+string(filepath.Separator)) {
+		t.Skip("raw path already under tempdir; canonicalization case not applicable")
+	}
+
+	resolvedLink, err := filepath.EvalSymlinks(cleanLink)
+	if err != nil {
+		t.Skipf("cannot resolve link path: %v", err)
+	}
+	resolvedTemp, err := filepath.EvalSymlinks(cleanTemp)
+	if err != nil {
+		t.Skipf("cannot resolve tempdir path: %v", err)
+	}
+	if !strings.HasPrefix(resolvedLink+string(filepath.Separator), resolvedTemp+string(filepath.Separator)) {
+		t.Skip("resolved link path is not under resolved tempdir on this host")
+	}
+
+	got := nodeStorePathForRoot(link, defaultPath)
+	want := filepath.Join(cleanLink, ".nexus", "state", "node.db")
+	if got != want {
+		t.Fatalf("expected temp-scoped db path %q, got %q", want, got)
+	}
+}
+
 func newTestManager(t *testing.T) *Manager {
 	t.Helper()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state-home"))
 	return NewManager(t.TempDir())
 }
 
@@ -140,6 +179,106 @@ func TestManager_RemovePersistsRecordDeletion(t *testing.T) {
 	_, ok := m2.Get(id)
 	if ok {
 		t.Fatal("expected workspace to be gone after remove and reload")
+	}
+}
+
+func TestManager_LoadAll_IgnoresLegacyJSON(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state-home"))
+
+	if err := os.WriteFile(filepath.Join(root, ".nexus"), []byte("block sqlite dir"), 0o644); err != nil {
+		t.Fatalf("write sqlite blocker file: %v", err)
+	}
+
+	legacyDir := filepath.Join(root, "workspaces")
+	if err := os.MkdirAll(legacyDir, 0o755); err != nil {
+		t.Fatalf("mkdir legacy dir: %v", err)
+	}
+
+	legacy := Workspace{
+		ID:            "ws-legacy",
+		Repo:          "git@example/legacy.git",
+		WorkspaceName: "legacy",
+		AgentProfile:  "default",
+		State:         StateCreated,
+		RootPath:      filepath.Join(root, "instances", "ws-legacy"),
+		CreatedAt:     time.Now().UTC(),
+		UpdatedAt:     time.Now().UTC(),
+	}
+	data, err := json.Marshal(legacy)
+	if err != nil {
+		t.Fatalf("marshal legacy workspace: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(legacyDir, "ws-legacy.json"), data, 0o644); err != nil {
+		t.Fatalf("write legacy workspace json: %v", err)
+	}
+
+	m := NewManager(root)
+	if _, ok := m.Get("ws-legacy"); ok {
+		t.Fatal("expected manager to ignore legacy workspace json files")
+	}
+}
+
+func TestManager_CreateFailsWhenSQLiteStoreUnavailable(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state-home"))
+
+	if err := os.WriteFile(filepath.Join(root, ".nexus"), []byte("block sqlite dir"), 0o644); err != nil {
+		t.Fatalf("write sqlite blocker file: %v", err)
+	}
+
+	m := NewManager(root)
+
+	_, err := m.Create(context.Background(), CreateSpec{
+		Repo:          "git@example/repo.git",
+		WorkspaceName: "alpha",
+		AgentProfile:  "default",
+	})
+	if err == nil {
+		t.Fatal("expected create to fail when sqlite store is unavailable")
+	}
+}
+
+func TestManager_CreateRollbackOnPersistFailure_RemovesCreateSideEffects(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("XDG_STATE_HOME", filepath.Join(t.TempDir(), "state-home"))
+
+	if err := os.WriteFile(filepath.Join(root, ".nexus"), []byte("block sqlite dir"), 0o644); err != nil {
+		t.Fatalf("write sqlite blocker file: %v", err)
+	}
+
+	m := NewManager(root)
+	repoRoot := initGitRepoForWorktreeTests(t)
+
+	_, err := m.Create(context.Background(), CreateSpec{
+		Repo:          repoRoot,
+		Ref:           "main",
+		WorkspaceName: "alpha",
+		AgentProfile:  "default",
+	})
+	if err == nil {
+		t.Fatal("expected create to fail when sqlite store is unavailable")
+	}
+
+	if got := len(m.List()); got != 0 {
+		t.Fatalf("expected no workspaces in manager after failed create, got %d", got)
+	}
+
+	instancesDir := filepath.Join(root, "instances")
+	entries, readErr := os.ReadDir(instancesDir)
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("read instances dir: %v", readErr)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected no workspace roots after failed create, got %d entries", len(entries))
+	}
+
+	worktreeEntries, readErr := os.ReadDir(filepath.Join(repoRoot, ".worktrees"))
+	if readErr != nil && !os.IsNotExist(readErr) {
+		t.Fatalf("read local worktrees dir: %v", readErr)
+	}
+	if len(worktreeEntries) != 0 {
+		t.Fatalf("expected no local worktrees after failed create, got %d entries", len(worktreeEntries))
 	}
 }
 
@@ -633,5 +772,69 @@ func TestDeriveRepoKind_DetectsExistingRelativeDirectoryAsLocal(t *testing.T) {
 
 	if got := deriveRepoKind("hanlun-lms"); got != "local" {
 		t.Fatalf("expected repo kind local, got %q", got)
+	}
+}
+
+func TestManager_ForkFallsBackWhenLocalWorktreePathIsStale(t *testing.T) {
+	m := newTestManager(t)
+	repoRoot := initGitRepoForWorktreeTests(t)
+
+	parent, err := m.Create(context.Background(), CreateSpec{
+		Repo:          repoRoot,
+		Ref:           "parent-base",
+		WorkspaceName: "alpha",
+		AgentProfile:  "default",
+		Backend:       "local",
+	})
+	if err != nil {
+		t.Fatalf("create parent returned error: %v", err)
+	}
+
+	stalePath := filepath.Join(t.TempDir(), "missing-worktree")
+	if err := m.SetLocalWorktree(parent.ID, stalePath, ""); err != nil {
+		t.Fatalf("set stale local worktree path: %v", err)
+	}
+
+	child, err := m.Fork(parent.ID, "alpha-child", "child-ref")
+	if err != nil {
+		t.Fatalf("fork should recover from stale local worktree path: %v", err)
+	}
+	if child.LocalWorktreePath == "" {
+		t.Fatal("expected child local worktree path to be set")
+	}
+	if _, statErr := os.Stat(child.LocalWorktreePath); statErr != nil {
+		t.Fatalf("expected child local worktree path to exist: %v", statErr)
+	}
+	if gotBase := filepath.Dir(child.LocalWorktreePath); gotBase != filepath.Join(repoRoot, ".worktrees") {
+		t.Fatalf("expected child worktree under %q, got %q", filepath.Join(repoRoot, ".worktrees"), child.LocalWorktreePath)
+	}
+}
+
+func initGitRepoForWorktreeTests(t *testing.T) string {
+	t.Helper()
+
+	repoRoot := t.TempDir()
+	runGitForWorktreeTests(t, repoRoot, "init")
+	runGitForWorktreeTests(t, repoRoot, "config", "user.email", "nexus-tests@example.com")
+	runGitForWorktreeTests(t, repoRoot, "config", "user.name", "Nexus Tests")
+
+	readmePath := filepath.Join(repoRoot, "README.md")
+	if err := os.WriteFile(readmePath, []byte("# test repo\n"), 0o644); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	runGitForWorktreeTests(t, repoRoot, "add", "README.md")
+	runGitForWorktreeTests(t, repoRoot, "commit", "-m", "initial commit")
+
+	return repoRoot
+}
+
+func runGitForWorktreeTests(t *testing.T, dir string, args ...string) {
+	t.Helper()
+
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
 	}
 }

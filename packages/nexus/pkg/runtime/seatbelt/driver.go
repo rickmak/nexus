@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -107,7 +106,7 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 	if d.prepareWorkspaceFS != nil {
 		if err := d.prepareWorkspaceFS(ctx, instance, req.ProjectRoot); err != nil {
 			if strings.TrimSpace(instance) == "nexus-seatbelt" {
-				fallbackCandidates := []string{"mvm", "default", "nexus-firecracker"}
+				fallbackCandidates := []string{"nexus-firecracker", "mvm", "default"}
 				for _, fallback := range fallbackCandidates {
 					if fallbackErr := d.prepareWorkspaceFS(ctx, fallback, req.ProjectRoot); fallbackErr != nil {
 						continue
@@ -318,7 +317,7 @@ func (d *Driver) serveShellProtocol(ctx context.Context, workspaceID string, con
 				_ = writeJSON(map[string]any{"id": id, "type": "result", "exit_code": 1, "stderr": err.Error()})
 				continue
 			}
-			_ = writeJSON(map[string]any{"id": id, "type": "result", "exit_code": 0})
+			_ = writeJSON(map[string]any{"id": id, "type": "ack", "ok": true})
 
 		case "shell.resize":
 			if session == nil {
@@ -331,11 +330,11 @@ func (d *Driver) serveShellProtocol(ctx context.Context, workspaceID string, con
 				_ = writeJSON(map[string]any{"id": id, "type": "result", "exit_code": 1, "stderr": err.Error()})
 				continue
 			}
-			_ = writeJSON(map[string]any{"id": id, "type": "result", "exit_code": 0})
+			_ = writeJSON(map[string]any{"id": id, "type": "ack", "ok": true})
 
 		case "shell.close":
 			closeSession()
-			_ = writeJSON(map[string]any{"id": id, "type": "result", "exit_code": 0})
+			_ = writeJSON(map[string]any{"id": id, "type": "ack", "ok": true})
 			return
 
 		default:
@@ -516,7 +515,13 @@ func ensureLimaInstanceRunning(ctx context.Context, instance string) error {
 
 	out, err := limactlOutputFn(ctx, "list", "--json", instance)
 	if err != nil {
-		return fmt.Errorf("lima list failed for %s: %w", instance, err)
+		if startOut, startErr := limactlCombinedOutputFn(ctx, "start", "--yes", "--name", instance, "template:default"); startErr != nil {
+			return fmt.Errorf(
+				"lima list failed for %s: %w; lima start failed for %s: %s",
+				instance, err, instance, strings.TrimSpace(string(startOut)),
+			)
+		}
+		return nil
 	}
 	trimmed := strings.TrimSpace(string(out))
 
@@ -542,44 +547,25 @@ func ensureLimaInstanceRunning(ctx context.Context, instance string) error {
 }
 
 func buildSeatbeltBootstrapScript(hostHome string, hostCLI hostCLIAvailability) string {
+	_ = hostCLI
 	parts := []string{
 		"set -e",
 		"unset DOCKER_HOST DOCKER_CONTEXT",
-		"if command -v docker >/dev/null 2>&1 && (docker info >/dev/null 2>&1 || sudo -n docker info >/dev/null 2>&1) && (docker compose version >/dev/null 2>&1 || docker-compose version >/dev/null 2>&1) && command -v make >/dev/null 2>&1; then exit 0; fi",
-		"sudo -n apt-get update",
-		"sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose-v2 make curl ca-certificates gnupg nodejs npm || sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose make curl ca-certificates gnupg nodejs npm",
-		"sudo -n systemctl enable docker >/dev/null 2>&1 || true",
-		"sudo -n systemctl start docker >/dev/null 2>&1 || sudo -n service docker start >/dev/null 2>&1 || true",
-		"sudo -n usermod -aG docker $USER >/dev/null 2>&1 || true",
+		"if ! (command -v docker >/dev/null 2>&1 && (docker info >/dev/null 2>&1 || sudo -n docker info >/dev/null 2>&1) && (docker compose version >/dev/null 2>&1 || docker-compose version >/dev/null 2>&1) && command -v make >/dev/null 2>&1); then sudo -n apt-get update; sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose-v2 make curl ca-certificates gnupg nodejs npm || sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose make curl ca-certificates gnupg nodejs npm; sudo -n systemctl enable docker >/dev/null 2>&1 || true; sudo -n systemctl start docker >/dev/null 2>&1 || sudo -n service docker start >/dev/null 2>&1 || true; sudo -n usermod -aG docker $USER >/dev/null 2>&1 || true; fi",
 		"(docker info >/dev/null 2>&1 || sudo -n docker info >/dev/null 2>&1)",
 		"(docker compose version >/dev/null 2>&1 || docker-compose version >/dev/null 2>&1)",
 		"command -v make >/dev/null 2>&1",
 	}
 
-	pkgs := make([]string, 0, 3)
-	if hostCLI.Opencode {
-		pkgs = append(pkgs, "opencode-ai")
-	}
-	if hostCLI.Codex {
-		pkgs = append(pkgs, "@openai/codex")
-	}
-	if hostCLI.Claude {
-		pkgs = append(pkgs, "@anthropic-ai/claude-code")
-	}
+	pkgs := []string{"opencode-ai", "@openai/codex", "@anthropic-ai/claude-code"}
 	if len(pkgs) > 0 {
 		parts = append(parts,
-			"if command -v npm >/dev/null 2>&1; then npm i -g "+strings.Join(pkgs, " ")+" >/dev/null 2>&1 || true; fi",
+			"if command -v npm >/dev/null 2>&1; then cd /tmp >/dev/null 2>&1 || true; npm i -g "+strings.Join(pkgs, " ")+" >/dev/null 2>&1 || sudo -n npm i -g "+strings.Join(pkgs, " ")+" >/dev/null 2>&1 || true; fi",
 		)
 	}
-	if hostCLI.Opencode {
-		parts = append(parts, "if command -v opencode >/dev/null 2>&1; then opencode --version >/dev/null 2>&1 || true; fi")
-	}
-	if hostCLI.Codex {
-		parts = append(parts, "if command -v codex >/dev/null 2>&1; then codex --version >/dev/null 2>&1 || true; fi")
-	}
-	if hostCLI.Claude {
-		parts = append(parts, "if command -v claude >/dev/null 2>&1; then claude --version >/dev/null 2>&1 || true; fi")
-	}
+	parts = append(parts, "if command -v opencode >/dev/null 2>&1; then opencode --version >/dev/null 2>&1 || true; fi")
+	parts = append(parts, "if command -v codex >/dev/null 2>&1; then codex --version >/dev/null 2>&1 || true; fi")
+	parts = append(parts, "if command -v claude >/dev/null 2>&1; then claude --version >/dev/null 2>&1 || true; fi")
 
 	hostHome = strings.TrimSpace(hostHome)
 	if hostHome != "" {
@@ -591,7 +577,7 @@ func buildSeatbeltBootstrapScript(hostHome string, hostCLI hostCLIAvailability) 
 			"if [ -d "+host+"/.codex ]; then ln -sfn "+host+"/.codex ~/.codex; fi",
 			"if [ -d "+host+"/.config/openai ]; then ln -sfn "+host+"/.config/openai ~/.config/openai; fi",
 			"if [ -d "+host+"/.claude ]; then ln -sfn "+host+"/.claude ~/.claude; fi",
-			"if command -v npm >/dev/null 2>&1; then NPM_BIN=$(npm bin -g 2>/dev/null || true); if [ -n \"$NPM_BIN\" ] && [ -d \"$NPM_BIN\" ]; then export PATH=\"$NPM_BIN:$PATH\"; fi; fi",
+			"if command -v npm >/dev/null 2>&1; then cd /tmp >/dev/null 2>&1 || true; NPM_BIN=$(npm bin -g 2>/dev/null || true); if [ -n \"$NPM_BIN\" ] && [ -d \"$NPM_BIN\" ]; then export PATH=\"$NPM_BIN:$PATH\"; fi; fi",
 		)
 	}
 
@@ -635,15 +621,7 @@ func filterCandidatesByAvailability(candidates []string, available []string) []s
 	if len(filtered) > 0 {
 		return filtered
 	}
-
-	fallback := make([]string, 0, len(availableSet))
-	for name := range availableSet {
-		if name != "" {
-			fallback = append(fallback, name)
-		}
-	}
-	sort.Strings(fallback)
-	return fallback
+	return candidates
 }
 
 func instanceCandidates(instanceName string) []string {

@@ -1,4 +1,5 @@
 # @nexus/sdk
+
 # Nexus SDK (`packages/sdk/js`)
 
 TypeScript SDK for talking to the Nexus workspace daemon.
@@ -30,6 +31,7 @@ await client.disconnect()
 
 - `client.fs.readFile`, `client.fs.writeFile`, `client.fs.readdir`
 - `client.exec(command, args, options)`
+- `client.pty.open/write/resize/close`, `client.pty.onData/onExit`
 - `client.spotlight.expose/list/close/applyDefaults/applyComposePorts`
 - `client.workspace.create/open/list/start/stop/restore/pause/resume/fork/remove`
 

@@ -3,9 +3,13 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -13,8 +17,30 @@ import (
 
 	rpckit "github.com/inizio/nexus/packages/nexus/pkg/rpcerrors"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
+	"github.com/inizio/nexus/packages/nexus/pkg/spotlight"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspacemgr"
 )
+
+func TestNewServer_FallsBackToInMemorySpotlightManagerOnRepositoryInitError(t *testing.T) {
+	originalFactory := newSpotlightManagerForServer
+	t.Cleanup(func() {
+		newSpotlightManagerForServer = originalFactory
+	})
+
+	newSpotlightManagerForServer = func(_ *workspacemgr.Manager) (*spotlight.Manager, error) {
+		return nil, fmt.Errorf("forced spotlight hydration failure")
+	}
+
+	srv, err := NewServer(0, t.TempDir(), "secret-token")
+	if err != nil {
+		t.Fatalf("expected NewServer to succeed when spotlight repository hydration fails, got err: %v", err)
+	}
+
+	forwards := srv.spotlightMgr.List("")
+	if len(forwards) != 0 {
+		t.Fatalf("expected empty in-memory spotlight manager after fallback, got %d forwards", len(forwards))
+	}
+}
 
 type serverTestDriver struct {
 	backend string
@@ -103,6 +129,10 @@ func (d *serverTestConnectorDriver) AgentConn(ctx context.Context, workspaceID s
 					_ = enc.Encode(map[string]any{"id": sessionID, "type": "result", "exit_code": 0})
 					return
 				}
+				if typ == "shell.write" || typ == "shell.resize" {
+					_ = enc.Encode(map[string]any{"id": sessionID, "type": "ack", "ok": true})
+					continue
+				}
 				_ = enc.Encode(map[string]any{"id": sessionID, "type": "result", "exit_code": 0})
 			default:
 				_ = enc.Encode(map[string]any{"id": sessionID, "type": "result", "exit_code": 1, "stderr": "unknown request"})
@@ -171,6 +201,60 @@ func TestPTYOpenFirecrackerAliasFallsBackToDriverReportedBackend(t *testing.T) {
 	}
 	if openWorkdir != "/workspace" {
 		t.Fatalf("expected remote shell workdir /workspace, got %q", openWorkdir)
+	}
+}
+
+func TestPTYOpenSeatbeltUsesSeatbeltDriver(t *testing.T) {
+	srv, err := NewServer(0, t.TempDir(), "secret-token")
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	firecrackerDriver := &serverTestConnectorDriver{
+		serverTestDriver: serverTestDriver{backend: "firecracker"},
+		writeSignal:      make(chan struct{}, 1),
+		resizeSignal:     make(chan struct{}, 1),
+	}
+	seatbeltDriver := &serverTestConnectorDriver{
+		serverTestDriver: serverTestDriver{backend: "seatbelt"},
+		writeSignal:      make(chan struct{}, 1),
+		resizeSignal:     make(chan struct{}, 1),
+	}
+
+	factory := runtime.NewFactory(
+		[]runtime.Capability{
+			{Name: "runtime.firecracker", Available: true},
+			{Name: "runtime.seatbelt", Available: true},
+		},
+		map[string]runtime.Driver{
+			"firecracker": firecrackerDriver,
+			"seatbelt":    seatbeltDriver,
+		},
+	)
+	srv.SetRuntimeFactory(factory)
+
+	ws := createWorkspaceForPTYTest(t, srv.workspaceMgr, "seatbelt")
+	if err := srv.workspaceMgr.Start(ws.ID); err != nil {
+		t.Fatalf("start workspace: %v", err)
+	}
+
+	conn := &Connection{send: make(chan []byte, 16), clientID: "test", pty: map[string]*ptySession{}}
+	payload, _ := json.Marshal(map[string]any{
+		"workspaceId": ws.ID,
+		"cols":        80,
+		"rows":        24,
+	})
+
+	_, rpcErr := srv.handlePTYOpen(payload, conn, srv.ws)
+	if rpcErr != nil {
+		t.Fatalf("pty.open rpc error: %+v", rpcErr)
+	}
+
+	if called, _, _ := firecrackerDriver.openDetails(ws.ID); called {
+		t.Fatalf("expected firecracker connector not to be used for seatbelt workspace %s", ws.ID)
+	}
+	if called, _, _ := seatbeltDriver.openDetails(ws.ID); !called {
+		t.Fatalf("expected seatbelt connector to be used for workspace %s", ws.ID)
 	}
 }
 
@@ -546,5 +630,76 @@ func TestPortalSummaryEndpointRemoved(t *testing.T) {
 	body := rr.Body.String()
 	if !strings.Contains(body, "Nexus Admin") && !strings.Contains(body, "Nexus Workspace Control") {
 		t.Fatalf("expected portal UI content fallback, got: %s", body)
+	}
+}
+
+func TestServer_IgnoresLegacySpotlightJSON(t *testing.T) {
+	workspaceDir := t.TempDir()
+	statePath := filepath.Join(workspaceDir, ".nexus", "state", "spotlight-forwards.json")
+	if err := os.MkdirAll(filepath.Dir(statePath), 0o755); err != nil {
+		t.Fatalf("mkdir state dir: %v", err)
+	}
+
+	seed := []map[string]any{{
+		"id":          "spot-seed-1",
+		"workspaceId": "ws-seed-1",
+		"service":     "api",
+		"remotePort":  8000,
+		"localPort":   18000,
+		"host":        "127.0.0.1",
+		"createdAt":   "2026-04-09T12:00:00Z",
+	}}
+	data, _ := json.Marshal(seed)
+	if err := os.WriteFile(statePath, data, 0o644); err != nil {
+		t.Fatalf("write spotlight state: %v", err)
+	}
+
+	srv, err := NewServer(0, workspaceDir, "secret-token")
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	forwards := srv.spotlightMgr.List("ws-seed-1")
+	if len(forwards) != 0 {
+		t.Fatalf("expected legacy JSON spotlight file to be ignored, got %d forwards", len(forwards))
+	}
+}
+
+func TestServer_ShutdownDoesNotWriteSpotlightJSON(t *testing.T) {
+	workspaceDir := t.TempDir()
+	srv, err := NewServer(0, workspaceDir, "secret-token")
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	_, exposeErr := srv.spotlightMgr.Expose(context.Background(), spotlight.ExposeSpec{
+		WorkspaceID: "ws-1",
+		Service:     "api",
+		RemotePort:  8000,
+		LocalPort:   18000,
+	})
+	if exposeErr != nil {
+		t.Fatalf("expose spotlight forward: %v", exposeErr)
+	}
+
+	srv.Shutdown()
+
+	statePath := filepath.Join(workspaceDir, ".nexus", "state", "spotlight-forwards.json")
+	_, readErr := os.ReadFile(statePath)
+	if !errors.Is(readErr, os.ErrNotExist) {
+		t.Fatalf("expected spotlight json state file to not exist, got err=%v", readErr)
+	}
+
+	resumed, err := NewServer(0, workspaceDir, "secret-token")
+	if err != nil {
+		t.Fatalf("new resumed server: %v", err)
+	}
+
+	forwards := resumed.spotlightMgr.List("ws-1")
+	if len(forwards) != 1 {
+		t.Fatalf("expected sqlite-backed spotlight persistence with 1 forward, got %d", len(forwards))
+	}
+	if forwards[0].LocalPort != 18000 {
+		t.Fatalf("expected persisted local port 18000, got %d", forwards[0].LocalPort)
 	}
 }

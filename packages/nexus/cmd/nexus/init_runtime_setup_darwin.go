@@ -9,13 +9,23 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
+
+	nexusruntime "github.com/inizio/nexus/packages/nexus/pkg/runtime"
 )
 
-//go:embed templates/lima/firecracker.yaml
-var embeddedLimaTemplate string
+//go:embed templates/lima/firecracker-arm64.yaml
+var embeddedLimaTemplateArm64 string
+
+//go:embed templates/lima/firecracker-x86_64.yaml
+var embeddedLimaTemplateX8664 string
 
 var initRuntimeBootstrapRunner func(projectRoot, runtimeName string) error = runInitRuntimeBootstrapDarwin
+
+var darwinInitPreflightRunner = func(projectRoot string) nexusruntime.FirecrackerPreflightResult {
+	return nexusruntime.RunFirecrackerPreflight(projectRoot, nexusruntime.PreflightOptions{})
+}
 
 var (
 	initRuntimeBootstrapIsRootFn                   = func() bool { return os.Geteuid() == 0 }
@@ -45,10 +55,20 @@ func runInitRuntimeBootstrapDarwin(projectRoot, runtimeName string) error {
 		return nil
 	}
 
+	_ = nexusruntime.MaybeAutoinstallPreflightHostTools()
+
 	if _, err := limactlLookPathFn("limactl"); err != nil {
 		if _, brewErr := limactlLookPathFn("brew"); brewErr == nil {
 			_ = limactlRunFn("brew", "install", "lima")
 		}
+	}
+
+	pf := darwinInitPreflightRunner(projectRoot)
+	if pf.Status == nexusruntime.PreflightUnsupportedNested {
+		_ = writeNexusInitEnv(projectRoot, map[string]string{
+			"NEXUS_RUNTIME_BACKEND": "seatbelt",
+		})
+		return nil
 	}
 
 	if _, err := limactlLookPathFn("limactl"); err != nil {
@@ -124,7 +144,14 @@ func writeLimaTemplate(content string) (string, func(), error) {
 }
 
 func writeEmbeddedLimaTemplate() (string, func(), error) {
-	return writeLimaTemplate(embeddedLimaTemplate)
+	switch goruntime.GOARCH {
+	case "arm64":
+		return writeLimaTemplate(embeddedLimaTemplateArm64)
+	case "amd64":
+		return writeLimaTemplate(embeddedLimaTemplateX8664)
+	default:
+		return "", func() {}, fmt.Errorf("unsupported darwin arch for lima template: %s", goruntime.GOARCH)
+	}
 }
 
 func writeNexusInitEnv(projectRoot string, kvPairs map[string]string) error {
