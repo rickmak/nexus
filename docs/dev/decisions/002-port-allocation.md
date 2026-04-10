@@ -31,11 +31,11 @@ feature-payment (SSH: 32781):
 
 ### Commands
 ```bash
-# Check ports for a workspace
-nexus workspace ports feature-auth
+# Start compose-driven local forwards for a workspace
+nexus tunnel <workspace-id>
 
-# List all workspaces with ports
-nexus workspace list
+# List all workspaces
+nexus list
 ```
 
 ### Conflict Resolution

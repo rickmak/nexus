@@ -19,8 +19,9 @@ Use git worktrees to create isolated branches for each workspace, mounted to sep
 
 ### Commands
 ```bash
-# Create workspace with branch
-nexus workspace create feature-auth
+# Create workspace from a feature repo directory
+cd ~/src/feature-auth
+nexus create
 # → Creates branch nexus/feature-auth
 # → Creates worktree at .nexus/worktrees/feature-auth/
 

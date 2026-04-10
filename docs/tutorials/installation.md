@@ -1,56 +1,46 @@
 # Installation
 
-## Prerequisites
+## Fast Path
 
-- Go 1.24+
-- Node.js 18+
-- pnpm
-- task (Taskfile runner)
-
-## Install from Source
+Install the CLI in one line:
 
 ```bash
-# Clone the repository
+curl -fsSL https://raw.githubusercontent.com/inizio/nexus/main/install.sh | bash
+```
+
+Verify:
+
+```bash
+nexus --help
+```
+
+## Binary Install
+
+If you do not want to use `go install`, download a release archive from [GitHub releases](https://github.com/IniZio/nexus/releases), extract it, and place the `nexus` binary on your `PATH`.
+
+## First Run
+
+```bash
+cd /path/to/project
+nexus init
+nexus create
+nexus list
+nexus start <workspace-id>
+```
+
+Use the workspace id printed by `nexus create` when running `start`, `ssh`, `tunnel`, `stop`, or `remove`.
+
+## Install From Source (contributors)
+
+```bash
 git clone https://github.com/inizio/nexus
 cd nexus
-
-# Install dependencies
 pnpm install
-
-# Verify Go module state
-go mod download
-
-# Build core packages
 task build
 ```
 
-## Verify Installation
+## Next
 
-```bash
-# Run core verification
-cd packages/nexus && go test ./...
-cd ../sdk/js && pnpm exec tsc --noEmit && pnpm exec jest --runInBand
-
-# Build nexus CLI
-cd ../nexus && go build ./cmd/nexus/...
-```
-
-## Dogfood in this repo
-
-Nexus is configured to dogfood itself in this repository via `.nexus/workspace.json`.
-
-```bash
-repo_root="$(pwd)"
-
-# Initialize local workspace metadata/scripts (safe to rerun)
-go run ./packages/nexus/cmd/nexus init --project-root "$repo_root" --runtime local --force
-
-# Run project-level checks
-bash .nexus/e2e/run.sh
-```
-
-## Next Steps
-
-- [CLI and Daemon Reference](../reference/cli.md)
+- [CLI Reference](../reference/cli.md)
 - [SDK Reference](../reference/sdk.md)
 - [Workspace Config Reference](../reference/workspace-config.md)

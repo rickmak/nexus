@@ -4,9 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"net"
-	"os"
-	"path/filepath"
-	"strconv"
 	"testing"
 
 	"github.com/inizio/nexus/packages/nexus/pkg/compose"
@@ -15,25 +12,6 @@ import (
 
 func TestHandleSpotlightApplyDefaults(t *testing.T) {
 	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".nexus"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-
-	studentPort := freeTCPPort(t)
-	apiPort := freeTCPPort(t)
-	configJSON := `{
-  "version": 1,
-  "spotlight": {
-    "defaults": [
-      {"service":"student-portal","remotePort":` + strconv.Itoa(studentPort) + `,"localPort":` + strconv.Itoa(studentPort) + `},
-      {"service":"api","remotePort":` + strconv.Itoa(apiPort) + `,"localPort":` + strconv.Itoa(apiPort) + `}
-    ]
-  }
-}`
-	if err := os.WriteFile(filepath.Join(root, ".nexus", "workspace.json"), []byte(configJSON), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
 	mgr := spotlight.NewManager()
 	params, _ := json.Marshal(SpotlightApplyDefaultsParams{WorkspaceID: "ws-1", RootPath: root})
 
@@ -41,8 +19,8 @@ func TestHandleSpotlightApplyDefaults(t *testing.T) {
 	if rpcErr != nil {
 		t.Fatalf("unexpected rpc error: %+v", rpcErr)
 	}
-	if len(res.Forwards) != 2 {
-		t.Fatalf("expected 2 forwards, got %d", len(res.Forwards))
+	if len(res.Forwards) != 0 {
+		t.Fatalf("expected 0 forwards, got %d", len(res.Forwards))
 	}
 }
 

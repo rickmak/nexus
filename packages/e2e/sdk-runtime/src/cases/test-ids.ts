@@ -21,10 +21,16 @@ export const toolsAuthForwardingCaseIds = [
   'tools-auth-forwarding/mint-exec-revoke',
 ] as const;
 
+export const cliRuntimeCaseIds = [
+  'cli-runtime/workspace-lifecycle-and-tunnel-flow',
+  'cli-runtime/failure-paths-and-usage-validation',
+] as const;
+
 export const implementedCaseIds = [
   ...runtimeSelectionCaseIds,
   ...worktreeSyncCaseIds,
   ...lifecycleHooksCaseIds,
   ...spotlightComposeCaseIds,
   ...toolsAuthForwardingCaseIds,
+  ...cliRuntimeCaseIds,
 ] as const;

@@ -6,7 +6,6 @@ import (
 	"errors"
 
 	"github.com/inizio/nexus/packages/nexus/pkg/compose"
-	"github.com/inizio/nexus/packages/nexus/pkg/config"
 
 	rpckit "github.com/inizio/nexus/packages/nexus/pkg/rpcerrors"
 	"github.com/inizio/nexus/packages/nexus/pkg/spotlight"
@@ -105,6 +104,8 @@ func HandleSpotlightClose(_ context.Context, params json.RawMessage, mgr *spotli
 }
 
 func HandleSpotlightApplyDefaults(ctx context.Context, params json.RawMessage, mgr *spotlight.Manager) (*SpotlightApplyDefaultsResult, *rpckit.RPCError) {
+	_ = ctx
+	_ = mgr
 	var p SpotlightApplyDefaultsParams
 	if err := json.Unmarshal(params, &p); err != nil {
 		return nil, rpckit.ErrInvalidParams
@@ -112,28 +113,7 @@ func HandleSpotlightApplyDefaults(ctx context.Context, params json.RawMessage, m
 	if p.WorkspaceID == "" || p.RootPath == "" {
 		return nil, rpckit.ErrInvalidParams
 	}
-
-	cfg, _, err := config.LoadWorkspaceConfig(p.RootPath)
-	if err != nil {
-		return nil, rpckit.ErrInvalidParams
-	}
-
-	forwards := make([]*spotlight.Forward, 0, len(cfg.Spotlight.Defaults))
-	for _, d := range cfg.Spotlight.Defaults {
-		fwd, exposeErr := mgr.Expose(ctx, spotlight.ExposeSpec{
-			WorkspaceID: p.WorkspaceID,
-			Service:     d.Service,
-			RemotePort:  d.RemotePort,
-			LocalPort:   d.LocalPort,
-			Host:        d.Host,
-		})
-		if exposeErr != nil {
-			continue
-		}
-		forwards = append(forwards, fwd)
-	}
-
-	return &SpotlightApplyDefaultsResult{Forwards: forwards}, nil
+	return &SpotlightApplyDefaultsResult{Forwards: []*spotlight.Forward{}}, nil
 }
 
 func HandleSpotlightApplyComposePorts(ctx context.Context, params json.RawMessage, mgr *spotlight.Manager) (*SpotlightApplyComposePortsResult, *rpckit.RPCError) {

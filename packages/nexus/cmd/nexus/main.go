@@ -67,8 +67,29 @@ func main() {
 	case "exec":
 		runExecCommand(args)
 		return
-	case "workspace", "ws":
-		runWorkspaceCommand(args)
+	case "list":
+		runWorkspaceListCommand(args)
+		return
+	case "create":
+		runWorkspaceCreateCommand(args)
+		return
+	case "start":
+		runWorkspaceStartCommand(args)
+		return
+	case "stop":
+		runWorkspaceStopCommand(args)
+		return
+	case "remove":
+		runWorkspaceRemoveCommand(args)
+		return
+	case "fork":
+		runWorkspaceForkCommand(args)
+		return
+	case "ssh":
+		runWorkspaceSSHCommand(args)
+		return
+	case "tunnel":
+		runWorkspaceTunnelCommand(args)
 		return
 	case "doctor":
 		// handled below
@@ -119,27 +140,44 @@ func main() {
 func printUsage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
 	fmt.Fprintln(os.Stderr, "  nexus doctor --project-root <abs-path> --suite <name> [--compose-file docker-compose.yml] [--required-host-ports 5173,5174,8000] [--report-json path]")
-	fmt.Fprintln(os.Stderr, "  nexus init --project-root <abs-path> [--force]")
+	fmt.Fprintln(os.Stderr, "  nexus init [project-root] [--force]")
 	fmt.Fprintln(os.Stderr, "  nexus exec --project-root <abs-path> [--timeout 10m] -- <command> [args...]")
-	fmt.Fprintln(os.Stderr, "  nexus workspace <list|create|stop|remove|fork|portal>")
+	fmt.Fprintln(os.Stderr, "  nexus <list|create|start|stop|remove|fork|ssh|tunnel>")
 }
 
 func runInitCommand(args []string) {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	projectRoot := fs.String("project-root", "", "absolute path to project repository")
+	projectRootFlag := fs.String("project-root", "", "project repository path (defaults to current directory)")
 	force := fs.Bool("force", false, "overwrite existing .nexus files")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
 
-	if *projectRoot == "" {
-		fmt.Fprintln(os.Stderr, "--project-root is required")
+	rest := fs.Args()
+	if len(rest) > 1 {
+		fmt.Fprintln(os.Stderr, "usage: nexus init [project-root] [--force]")
+		os.Exit(2)
+	}
+	projectRoot := strings.TrimSpace(*projectRootFlag)
+	if len(rest) == 1 {
+		if projectRoot != "" {
+			fmt.Fprintln(os.Stderr, "nexus init: use either --project-root or positional project-root")
+			os.Exit(2)
+		}
+		projectRoot = strings.TrimSpace(rest[0])
+	}
+	if projectRoot == "" {
+		projectRoot = "."
+	}
+	absProjectRoot, err := filepath.Abs(projectRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve project root: %v\n", err)
 		os.Exit(2)
 	}
 
 	if err := runInit(initOptions{
-		projectRoot: *projectRoot,
+		projectRoot: absProjectRoot,
 		force:       *force,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -190,22 +228,7 @@ func runInit(opts initOptions) error {
 	}
 
 	workspaceCfg := config.WorkspaceConfig{
-		Schema:  "https://raw.githubusercontent.com/IniZio/nexus/main/schemas/workspace.v1.schema.json",
 		Version: 1,
-		Doctor: config.DoctorConfig{
-			Probes: []config.DoctorCommandProbe{{
-				Name:     "runtime-backend",
-				Command:  "bash",
-				Args:     []string{".nexus/probe/01-runtime-backend.sh"},
-				Required: true,
-			}},
-			Tests: []config.DoctorCommandCheck{{
-				Name:     "tooling-runtime",
-				Command:  "bash",
-				Args:     []string{".nexus/check/20-tooling-runtime.sh"},
-				Required: true,
-			}},
-		},
 	}
 
 	workspaceJSON, err := json.MarshalIndent(workspaceCfg, "", "  ")
@@ -377,12 +400,7 @@ func run(opts options) error {
 		return err
 	}
 
-	workspaceConfig, _, err := config.LoadWorkspaceConfig(opts.projectRoot)
-	if err != nil {
-		return fmt.Errorf("invalid workspace config: %w", err)
-	}
-
-	probesToRun, testsToRun, warnings, err := resolveDoctorChecks(opts.projectRoot, workspaceConfig.Doctor.Probes, workspaceConfig.Doctor.Tests)
+	probesToRun, testsToRun, warnings, err := resolveDoctorChecks(opts.projectRoot)
 	if err != nil {
 		return err
 	}
@@ -422,8 +440,6 @@ func run(opts options) error {
 	if err := doctorLifecycleStartRunner(opts.projectRoot, execCtx); err != nil {
 		return err
 	}
-
-	opts = applyDoctorConfigDefaults(opts, workspaceConfig.Doctor)
 
 	publishedPorts := make([]compose.PublishedPort, 0)
 	composePath := filepath.Join(opts.projectRoot, opts.composeFile)
@@ -492,13 +508,6 @@ func verifyFirecrackerGuestDockerRuntime() error {
 	}
 
 	return fmt.Errorf("firecracker verification requires docker runtime inside guest workspace; host docker is not used. guest docker check failed: %s", detail)
-}
-
-func applyDoctorConfigDefaults(opts options, doctorCfg config.DoctorConfig) options {
-	if len(opts.requiredHostPorts) == 0 && len(doctorCfg.RequiredHostPorts) > 0 {
-		opts.requiredHostPorts = append([]int(nil), doctorCfg.RequiredHostPorts...)
-	}
-	return opts
 }
 
 type checkResult struct {
@@ -771,7 +780,7 @@ func validateFirecrackerTapHelper() error {
 	path, err := firecrackerHostBinaryLookup(tapHelper)
 	if err != nil {
 		return fmt.Errorf(
-			"%s not found in PATH\n\nRun `nexus init --project-root <abs-path> --force` to provision host prerequisites",
+			"%s not found in PATH\n\nRun `nexus init --force` to provision host prerequisites",
 			tapHelper,
 		)
 	}
@@ -784,7 +793,7 @@ func validateFirecrackerTapHelper() error {
 	}
 	if !strings.Contains(string(out), "cap_net_admin") {
 		return fmt.Errorf(
-			"%s at %s lacks cap_net_admin\n\nRun `nexus init --project-root <abs-path> --force` to refresh host prerequisites",
+			"%s at %s lacks cap_net_admin\n\nRun `nexus init --force` to refresh host prerequisites",
 			tapHelper, path,
 		)
 	}
@@ -799,13 +808,13 @@ func validateFirecrackerBridge() error {
 	out, err := exec.Command("ip", "link", "show", bridge).CombinedOutput()
 	if err != nil {
 		return fmt.Errorf(
-			"bridge %s not found\n\nRun `nexus init --project-root <abs-path> --force` to provision host prerequisites",
+			"bridge %s not found\n\nRun `nexus init --force` to provision host prerequisites",
 			bridge,
 		)
 	}
 	if !strings.Contains(string(out), "UP") {
 		return fmt.Errorf(
-			"bridge %s exists but is not UP\n\nRun `nexus init --project-root <abs-path> --force` to refresh host prerequisites",
+			"bridge %s exists but is not UP\n\nRun `nexus init --force` to refresh host prerequisites",
 			bridge,
 		)
 	}
@@ -816,7 +825,7 @@ func validateFirecrackerBridge() error {
 	}
 	if !strings.Contains(string(addrOut), "172.26.0.1/") {
 		return fmt.Errorf(
-			"bridge %s is missing gateway IP %s\n\nRun `nexus init --project-root <abs-path> --force` to refresh host prerequisites",
+			"bridge %s is missing gateway IP %s\n\nRun `nexus init --force` to refresh host prerequisites",
 			bridge, gatewayCIDR,
 		)
 	}
@@ -931,7 +940,7 @@ func verifyFirecrackerWorkspaceReady() error {
 	}
 
 	if strings.Contains(detail, "chdir /workspace: no such file or directory") {
-		return fmt.Errorf("firecracker guest is missing /workspace; re-run `nexus init --project-root <abs-path> --force` to refresh the runtime and then retry")
+		return fmt.Errorf("firecracker guest is missing /workspace; re-run `nexus init --force` to refresh the runtime and then retry")
 	}
 
 	return fmt.Errorf("firecracker guest workspace verification failed: %s", detail)
@@ -1928,19 +1937,12 @@ func validateLifecycleEntrypoints(projectRoot string) error {
 	return nil
 }
 
-func resolveDoctorChecks(projectRoot string, cfgProbes []config.DoctorCommandProbe, cfgTests []config.DoctorCommandCheck) ([]config.DoctorCommandProbe, []config.DoctorCommandCheck, []string, error) {
+func resolveDoctorChecks(projectRoot string) ([]config.DoctorCommandProbe, []config.DoctorCommandCheck, []string, error) {
 	probes, tests, warnings, err := discoverDoctorScripts(projectRoot)
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	if len(probes) > 0 || len(tests) > 0 {
-		return probes, tests, warnings, nil
-	}
-
-	fallbackWarnings := append([]string{}, warnings...)
-	fallbackWarnings = append(fallbackWarnings, "no discovery scripts found under .nexus/probe or .nexus/check; falling back to workspace.json doctor.probes/tests")
-
-	return cfgProbes, cfgTests, fallbackWarnings, nil
+	return probes, tests, warnings, nil
 }
 
 func discoverDoctorScripts(projectRoot string) ([]config.DoctorCommandProbe, []config.DoctorCommandCheck, []string, error) {

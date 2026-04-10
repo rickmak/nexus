@@ -1200,7 +1200,7 @@ func TestRuntimeSetupRunner_InteractiveSessionAttemptsSetup(t *testing.T) {
 }
 
 func TestLoadRuntimeSelectionFromRepoConfig_Succeeds(t *testing.T) {
-	repo := setupRepoWithWorkspaceConfig(t, `{"version":1,"capabilities":{"required":["spotlight.tunnel"]}}`)
+	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
 	required, caps, err := loadRuntimeSelectionFromRepoConfig(repo)
 	if err != nil {
@@ -1209,8 +1209,8 @@ func TestLoadRuntimeSelectionFromRepoConfig_Succeeds(t *testing.T) {
 	if len(required) != 2 || required[0] != "darwin" || required[1] != "linux" {
 		t.Fatalf("expected runtime.required [darwin linux], got %v", required)
 	}
-	if len(caps) != 1 || caps[0] != "spotlight.tunnel" {
-		t.Fatalf("expected capabilities [spotlight.tunnel], got %v", caps)
+	if len(caps) != 0 {
+		t.Fatalf("expected no required capabilities, got %v", caps)
 	}
 }
 

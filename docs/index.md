@@ -1,20 +1,33 @@
-# Nexus
+# Nexus Docs
 
-Nexus is the remote workspace core for this repository:
+Nexus gives you isolated VM workspaces with fast local iteration.
 
-- `packages/nexus` (Go): daemon runtime + `nexus` CLI (`init`, `doctor`, `exec`)
-- `packages/sdk/js` (TypeScript): `@nexus/sdk` client library
+## Start in 2 Minutes
 
-## Core capabilities
+```bash
+curl -fsSL https://raw.githubusercontent.com/inizio/nexus/main/install.sh | bash
+cd /path/to/project
+nexus init
+nexus create
+nexus list
+nexus start <workspace-id>
+```
 
-- Firecracker-first isolated runtime workflow
-- Project-level workspace config via `.nexus/workspace.json`
-- Probe/test orchestration through `nexus doctor`
-- SDK + daemon RPC contract for workspace automation
+`nexus create` prints the workspace id used by `start`, `ssh`, `tunnel`, and `stop`.
 
-## Start here
+## Most Important Capabilities
 
-- `docs/reference/cli.md`
-- `docs/reference/sdk.md`
-- `docs/reference/workspace-config.md`
-- `docs/tutorials/installation.md`
+- Firecracker-first isolation for stronger workspace boundaries.
+- Docker inside the workspace VM by default.
+- Mutagen sync keeps host work safe even if a VM is reset or corrupted.
+- `nexus tunnel` provides quick manual testing of forwarded compose ports.
+- Auth-forward and tooling bootstrap for opencode/codex/claude workflows.
+- On macOS hosts without nested virtualization, runtime falls back to seatbelt.
+
+## Read By Goal
+
+- Install and verify: `docs/tutorials/installation.md`
+- Learn CLI quickly: `docs/reference/cli.md`
+- Automate with JS/TS: `docs/reference/sdk.md`
+- Customize project behavior: `docs/reference/workspace-config.md`
+- Understand architecture: `docs/explanation/architecture.md`
