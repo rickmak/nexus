@@ -198,4 +198,4 @@ jobs:
           if [[ "${RUNNER_OS}" == "macOS" ]]; then
             export NEXUS_RUNTIME_SEATBELT_INSTANCE=nexus-seatbelt
           fi
-          pnpm --filter @nexus/e2e-sdk-runtime exec jest --runInBand --ci src/cases/runtime-selection.e2e.test.ts
+          pnpm --filter @nexus/e2e-sdk-runtime test:ci -- src/cases/runtime-selection.e2e.test.ts
