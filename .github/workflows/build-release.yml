@@ -97,9 +97,6 @@ jobs:
           - os: macos-latest
             target: darwin-arm64
             artifact: nexus-darwin-arm64
-          - os: windows-latest
-            target: windows-amd64
-            artifact: nexus-windows-amd64
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
