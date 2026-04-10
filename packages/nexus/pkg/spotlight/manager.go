@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"sort"
 	"sync"
 	"time"
@@ -33,6 +35,7 @@ type Manager struct {
 	mu        sync.RWMutex
 	forwards  map[string]*Forward
 	localToID map[int]string
+	listeners map[string]net.Listener
 	repo      spotlightRepository
 }
 
@@ -46,6 +49,7 @@ func NewManager() *Manager {
 	return &Manager{
 		forwards:  make(map[string]*Forward),
 		localToID: make(map[int]string),
+		listeners: make(map[string]net.Listener),
 	}
 }
 
@@ -150,14 +154,27 @@ func (m *Manager) Expose(_ context.Context, spec ExposeSpec) (*Forward, error) {
 		CreatedAt:   now,
 	}
 
+	listener, err := net.Listen("tcp", fmt.Sprintf("%s:%d", host, spec.LocalPort))
+	if err != nil {
+		m.mu.Unlock()
+		return nil, fmt.Errorf("bind local spotlight port: %w", err)
+	}
+
 	m.forwards[id] = fwd
 	m.localToID[spec.LocalPort] = id
+	m.listeners[id] = listener
+	targetAddr := fmt.Sprintf("%s:%d", host, spec.RemotePort)
+	go serveForward(listener, targetAddr)
 
 	if m.repo != nil {
 		payload, err := json.Marshal(fwd)
 		if err != nil {
 			delete(m.forwards, id)
 			delete(m.localToID, spec.LocalPort)
+			if l, ok := m.listeners[id]; ok {
+				_ = l.Close()
+				delete(m.listeners, id)
+			}
 			m.mu.Unlock()
 			return nil, fmt.Errorf("marshal spotlight forward: %w", err)
 		}
@@ -170,6 +187,10 @@ func (m *Manager) Expose(_ context.Context, spec ExposeSpec) (*Forward, error) {
 		}); err != nil {
 			delete(m.forwards, id)
 			delete(m.localToID, spec.LocalPort)
+			if l, ok := m.listeners[id]; ok {
+				_ = l.Close()
+				delete(m.listeners, id)
+			}
 			m.mu.Unlock()
 			return nil, fmt.Errorf("persist spotlight forward: %w", err)
 		}
@@ -206,21 +227,52 @@ func (m *Manager) Close(id string) bool {
 		m.mu.Unlock()
 		return false
 	}
-
-	delete(m.forwards, id)
-	delete(m.localToID, fwd.LocalPort)
+	listener := m.listeners[id]
 
 	if m.repo != nil {
 		if err := m.repo.DeleteSpotlightForwardRow(id); err != nil {
-			// If repository persistence fails, restore in-memory state so close remains all-or-nothing.
-			copy := *fwd
-			m.forwards[id] = &copy
-			m.localToID[fwd.LocalPort] = id
 			m.mu.Unlock()
 			return false
 		}
 	}
 
+	delete(m.forwards, id)
+	delete(m.localToID, fwd.LocalPort)
+	delete(m.listeners, id)
 	m.mu.Unlock()
+	if listener != nil {
+		_ = listener.Close()
+	}
 	return true
+}
+
+func serveForward(listener net.Listener, targetAddr string) {
+	for {
+		clientConn, err := listener.Accept()
+		if err != nil {
+			return
+		}
+		go proxyTCP(clientConn, targetAddr)
+	}
+}
+
+func proxyTCP(clientConn net.Conn, targetAddr string) {
+	upstreamConn, err := net.DialTimeout("tcp", targetAddr, 5*time.Second)
+	if err != nil {
+		_ = clientConn.Close()
+		return
+	}
+
+	done := make(chan struct{}, 2)
+	go func() {
+		_, _ = io.Copy(upstreamConn, clientConn)
+		done <- struct{}{}
+	}()
+	go func() {
+		_, _ = io.Copy(clientConn, upstreamConn)
+		done <- struct{}{}
+	}()
+	<-done
+	_ = clientConn.Close()
+	_ = upstreamConn.Close()
 }

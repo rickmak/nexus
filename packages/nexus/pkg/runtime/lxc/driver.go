@@ -288,7 +288,7 @@ func (d *Driver) serveShellProtocol(ctx context.Context, workspaceID string, con
 				_ = writeJSON(map[string]any{"id": id, "type": "result", "exit_code": 1, "stderr": err.Error()})
 				continue
 			}
-			_ = writeJSON(map[string]any{"id": id, "type": "result", "exit_code": 0})
+			_ = writeJSON(map[string]any{"id": id, "type": "ack", "ok": true})
 
 		case "shell.resize":
 			if session == nil {
@@ -301,11 +301,11 @@ func (d *Driver) serveShellProtocol(ctx context.Context, workspaceID string, con
 				_ = writeJSON(map[string]any{"id": id, "type": "result", "exit_code": 1, "stderr": err.Error()})
 				continue
 			}
-			_ = writeJSON(map[string]any{"id": id, "type": "result", "exit_code": 0})
+			_ = writeJSON(map[string]any{"id": id, "type": "ack", "ok": true})
 
 		case "shell.close":
 			closeSession()
-			_ = writeJSON(map[string]any{"id": id, "type": "result", "exit_code": 0})
+			_ = writeJSON(map[string]any{"id": id, "type": "ack", "ok": true})
 			return
 
 		default:

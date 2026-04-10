@@ -847,10 +847,6 @@ func (s *Server) streamRemoteShellOutput(conn *Connection, session *ptySession) 
 			continue
 		}
 		if typeStr == "result" {
-			if !session.closing.Load() {
-				continue
-			}
-
 			exitCode := 0
 			if v, ok := msg["exit_code"].(float64); ok {
 				exitCode = int(v)

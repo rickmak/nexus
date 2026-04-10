@@ -588,7 +588,10 @@ func HandleWorkspaceFork(ctx context.Context, params json.RawMessage, mgr *works
 
 	child, err := mgr.Fork(p.ID, p.ChildWorkspaceName, p.ChildRef)
 	if err != nil {
-		return nil, rpckit.ErrWorkspaceNotFound
+		if strings.Contains(strings.ToLower(err.Error()), "workspace not found") {
+			return nil, rpckit.ErrWorkspaceNotFound
+		}
+		return nil, &rpckit.RPCError{Code: rpckit.ErrInvalidParams.Code, Message: err.Error()}
 	}
 
 	if factory != nil {
@@ -646,14 +649,15 @@ func ensureLocalRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace
 		return &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
 	}
 
-	err = driver.Create(ctx, runtime.CreateRequest{
+	req := runtime.CreateRequest{
 		WorkspaceID:   ws.ID,
 		WorkspaceName: ws.WorkspaceName,
 		ProjectRoot:   ws.RootPath,
 		Options: map[string]string{
 			"host_cli_sync": "true",
 		},
-	})
+	}
+	err = driver.Create(ctx, req)
 	if err != nil && !strings.Contains(err.Error(), "already exists") {
 		return &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("runtime create failed: %v", err)}
 	}

@@ -6,7 +6,6 @@ import (
 	"flag"
 	"fmt"
 	"log"
-	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/firecracker"
+	"github.com/inizio/nexus/packages/nexus/pkg/runtime/limafirecracker"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/seatbelt"
 	"github.com/inizio/nexus/packages/nexus/pkg/server"
 )
@@ -28,58 +28,6 @@ var firecrackerProbeOutputFn = func(name string, args ...string) ([]byte, error)
 }
 
 type CommandRunner struct{}
-
-type backendAliasDriver struct {
-	alias string
-	inner runtime.Driver
-}
-
-type backendAliasConnectorDriver struct {
-	backendAliasDriver
-}
-
-func (d *backendAliasConnectorDriver) AgentConn(ctx context.Context, workspaceID string) (net.Conn, error) {
-	if connector, ok := d.inner.(interface {
-		AgentConn(context.Context, string) (net.Conn, error)
-	}); ok {
-		return connector.AgentConn(ctx, workspaceID)
-	}
-	return nil, fmt.Errorf("%s runtime does not support agent connection", d.alias)
-}
-
-func (d *backendAliasDriver) Backend() string { return d.alias }
-
-func (d *backendAliasDriver) Create(ctx context.Context, req runtime.CreateRequest) error {
-	return d.inner.Create(ctx, req)
-}
-
-func (d *backendAliasDriver) Start(ctx context.Context, workspaceID string) error {
-	return d.inner.Start(ctx, workspaceID)
-}
-
-func (d *backendAliasDriver) Stop(ctx context.Context, workspaceID string) error {
-	return d.inner.Stop(ctx, workspaceID)
-}
-
-func (d *backendAliasDriver) Restore(ctx context.Context, workspaceID string) error {
-	return d.inner.Restore(ctx, workspaceID)
-}
-
-func (d *backendAliasDriver) Pause(ctx context.Context, workspaceID string) error {
-	return d.inner.Pause(ctx, workspaceID)
-}
-
-func (d *backendAliasDriver) Resume(ctx context.Context, workspaceID string) error {
-	return d.inner.Resume(ctx, workspaceID)
-}
-
-func (d *backendAliasDriver) Fork(ctx context.Context, workspaceID, childWorkspaceID string) error {
-	return d.inner.Fork(ctx, workspaceID, childWorkspaceID)
-}
-
-func (d *backendAliasDriver) Destroy(ctx context.Context, workspaceID string) error {
-	return d.inner.Destroy(ctx, workspaceID)
-}
 
 func (r *CommandRunner) Run(ctx context.Context, dir string, cmd string, args ...string) error {
 	c := exec.CommandContext(ctx, cmd, args...)
@@ -136,6 +84,10 @@ func runServer(port int, workspaceDir string, token string) error {
 	// Create runtime drivers.
 	firecrackerDriver := firecracker.NewDriver(runner, firecracker.WithManager(fcManager))
 	seatbeltDriver := seatbelt.NewDriver()
+	firecrackerRuntimeDriver := runtime.Driver(firecrackerDriver)
+	if firecrackerProbeGOOS == "darwin" {
+		firecrackerRuntimeDriver = limafirecracker.NewDriver(seatbeltDriver)
+	}
 
 	firecrackerAvailable := probeFirecrackerTooling(exec.LookPath)
 	seatbeltAvailable := firecrackerProbeGOOS == "darwin"
@@ -157,7 +109,7 @@ func runServer(port int, workspaceDir string, token string) error {
 	}
 
 	drivers := map[string]runtime.Driver{
-		"firecracker": firecrackerDriver,
+		"firecracker": firecrackerRuntimeDriver,
 		"seatbelt":    seatbeltDriver,
 	}
 

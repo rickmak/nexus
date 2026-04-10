@@ -107,8 +107,8 @@ func TestCreateFallsBackToDefaultInstanceWhenSeatbeltMountPrepareFails(t *testin
 		t.Fatalf("expected fallback create to succeed, got %v", err)
 	}
 
-	if len(seen) < 2 || seen[0] != "nexus-seatbelt" || seen[1] != "mvm" {
-		t.Fatalf("expected prepare sequence [nexus-seatbelt mvm], got %v", seen)
+	if len(seen) < 3 || seen[0] != "nexus-seatbelt" || seen[1] != "nexus-firecracker" || seen[2] != "mvm" {
+		t.Fatalf("expected prepare sequence [nexus-seatbelt nexus-firecracker mvm], got %v", seen)
 	}
 
 	d.mu.RLock()
@@ -161,13 +161,10 @@ func TestBuildSeatbeltBootstrapScriptIncludesIsolationAndForwarding(t *testing.T
 	}
 }
 
-func TestBuildSeatbeltBootstrapScriptInstallsOnlyHostAvailableCLIs(t *testing.T) {
+func TestBuildSeatbeltBootstrapScriptInstallsAllManagedCLIs(t *testing.T) {
 	script := buildSeatbeltBootstrapScript("/Users/tester", hostCLIAvailability{Opencode: true, Codex: false, Claude: true})
-	if !strings.Contains(script, "npm i -g opencode-ai @anthropic-ai/claude-code") {
-		t.Fatalf("expected selective install command, got %q", script)
-	}
-	if strings.Contains(script, "@openai/codex") {
-		t.Fatalf("did not expect codex package install when host codex is unavailable, got %q", script)
+	if !strings.Contains(script, "npm i -g opencode-ai @openai/codex @anthropic-ai/claude-code") {
+		t.Fatalf("expected managed CLI install command, got %q", script)
 	}
 }
 

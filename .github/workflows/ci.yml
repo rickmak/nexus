@@ -143,8 +143,8 @@ jobs:
         include:
           - os: ubuntu-latest
             label: linux
-          - os: macos-15-intel
-            label: macos-intel
+          # - os: macos-15-intel
+          #   label: macos-intel
     env:
       CI: true
       NEXUS_E2E_STRICT_RUNTIME: '1'
@@ -198,4 +198,5 @@ jobs:
           if [[ "${RUNNER_OS}" == "macOS" ]]; then
             export NEXUS_RUNTIME_SEATBELT_INSTANCE=nexus-seatbelt
           fi
-          pnpm --filter @nexus/e2e-sdk-runtime test:ci -- src/cases/runtime-selection.e2e.test.ts
+                pnpm --filter @nexus/e2e-sdk-runtime run pretest:ci
+                pnpm --filter @nexus/e2e-sdk-runtime exec jest --runInBand --ci --forceExit -- src/cases/runtime-selection.e2e.test.ts

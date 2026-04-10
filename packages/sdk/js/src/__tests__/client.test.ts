@@ -59,6 +59,7 @@ describe('WorkspaceClient', () => {
       expect(client.fs).toBeDefined();
       expect(client.exec).toBeDefined();
       expect(client.spotlight).toBeDefined();
+      expect(client.pty).toBeDefined();
       expect(client.workspace).toBeDefined();
     });
 
@@ -221,6 +222,39 @@ describe('WorkspaceClient', () => {
       })));
 
       await expect(requestPromise).rejects.toThrow('Invalid request');
+    });
+  });
+
+  describe('notifications', () => {
+    it('dispatches pty notifications to subscribers', async () => {
+      client = new WorkspaceClient({
+        endpoint: 'ws://localhost:8080',
+        workspaceId: 'test-workspace',
+        token: 'test-token',
+        reconnect: false,
+      });
+
+      await connectClient();
+
+      const onData = jest.fn();
+      const unsubscribe = client.onNotification('pty.data', onData);
+
+      emitEvent('message', Buffer.from(JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'pty.data',
+        params: { sessionId: 'pty-1', data: 'hello' },
+      })));
+
+      expect(onData).toHaveBeenCalledWith({ sessionId: 'pty-1', data: 'hello' });
+
+      unsubscribe();
+      emitEvent('message', Buffer.from(JSON.stringify({
+        jsonrpc: '2.0',
+        method: 'pty.data',
+        params: { sessionId: 'pty-1', data: 'world' },
+      })));
+
+      expect(onData).toHaveBeenCalledTimes(1);
     });
   });
 

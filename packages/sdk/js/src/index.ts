@@ -7,5 +7,6 @@ export { ExecOperations } from './exec';
 export { WorkspaceManager } from './workspace-manager';
 export { WorkspaceHandle } from './workspace-handle';
 export { SpotlightOperations } from './spotlight';
+export { PTYOperations } from './pty';
 
 export * from './types';

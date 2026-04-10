@@ -41,6 +41,8 @@ export interface RPCResponse {
   id: string;
   result?: unknown;
   error?: RPCError;
+  method?: string;
+  params?: unknown;
 }
 
 export interface RPCError {
@@ -271,6 +273,39 @@ export interface WorkspaceStopResult {
 
 export interface WorkspaceStartResult {
   started: boolean;
+}
+
+export interface PTYOpenParams {
+  workspaceId: string;
+  shell?: string;
+  cols?: number;
+  rows?: number;
+}
+
+export interface PTYOpenResult {
+  sessionId: string;
+}
+
+export interface PTYWriteResult {
+  ok: boolean;
+}
+
+export interface PTYResizeResult {
+  ok: boolean;
+}
+
+export interface PTYCloseResult {
+  closed: boolean;
+}
+
+export interface PTYDataEvent {
+  sessionId: string;
+  data: string;
+}
+
+export interface PTYExitEvent {
+  sessionId: string;
+  exitCode: number;
 }
 
 export interface WorkspaceRestoreResult {
