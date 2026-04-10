@@ -7,7 +7,6 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -213,20 +212,24 @@ func runWorkspaceListCommand(_ []string) {
 // ── workspace create ──────────────────────────────────────────────────────────
 
 func runWorkspaceCreateCommand(args []string) {
-	fs := flag.NewFlagSet("workspace create", flag.ExitOnError)
+	fs := flag.NewFlagSet("workspace create", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	repo := fs.String("repo", "", "repository URL (required)")
-	ref := fs.String("ref", "", "branch / ref (default: repo default branch)")
-	name := fs.String("name", "", "workspace name (required)")
-	profile := fs.String("profile", "default", "agent profile")
 	backend := fs.String("backend", "", "runtime backend override (firecracker)")
-	_ = fs.Parse(args)
-
-	if *repo == "" || *name == "" {
-		fmt.Fprintf(os.Stderr, "nexus workspace create: --repo and --name are required\n")
+	if err := fs.Parse(args); err != nil {
+		os.Exit(2)
+	}
+	if len(fs.Args()) > 0 {
+		fmt.Fprintln(os.Stderr, "nexus workspace create: this command does not take positional arguments")
 		fs.Usage()
 		os.Exit(2)
 	}
+
+	repoPath, err := normalizeLocalRepoPath(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nexus workspace create: %v\n", err)
+		os.Exit(2)
+	}
+	workspaceName := deriveWorkspaceName(repoPath)
 
 	conn, err := ensureDaemon()
 	if err != nil {
@@ -235,13 +238,11 @@ func runWorkspaceCreateCommand(args []string) {
 	}
 	defer conn.Close()
 
-	repoValue := normalizeRepoForCreate(*repo)
-
 	spec := workspacemgr.CreateSpec{
-		Repo:          repoValue,
-		Ref:           *ref,
-		WorkspaceName: *name,
-		AgentProfile:  *profile,
+		Repo:          repoPath,
+		Ref:           "",
+		WorkspaceName: workspaceName,
+		AgentProfile:  "default",
 		Backend:       strings.TrimSpace(*backend),
 	}
 	var result struct {
@@ -294,38 +295,51 @@ func runWorkspaceCreateCommand(args []string) {
 	}
 }
 
-func normalizeRepoForCreate(repo string) string {
-	repo = strings.TrimSpace(repo)
-	if repo == "" || looksLikeRemoteRepo(repo) {
-		return repo
+func normalizeLocalRepoPath(pathValue string) (string, error) {
+	pathValue = strings.TrimSpace(pathValue)
+	if pathValue == "" {
+		pathValue = "."
 	}
-
-	if filepath.IsAbs(repo) {
-		return filepath.Clean(repo)
+	absolutePath, err := filepath.Abs(pathValue)
+	if err != nil {
+		return "", fmt.Errorf("resolve path %q: %w", pathValue, err)
 	}
-
-	if strings.HasPrefix(repo, "./") || strings.HasPrefix(repo, "../") {
-		if abs, err := filepath.Abs(repo); err == nil {
-			return abs
-		}
-		return repo
+	info, err := os.Stat(absolutePath)
+	if err != nil {
+		return "", fmt.Errorf("invalid path %q: %w", absolutePath, err)
 	}
-
-	if info, err := os.Stat(repo); err == nil && info.IsDir() {
-		if abs, absErr := filepath.Abs(repo); absErr == nil {
-			return abs
-		}
+	if !info.IsDir() {
+		return "", fmt.Errorf("path %q is not a directory", absolutePath)
 	}
-
-	return repo
+	return absolutePath, nil
 }
 
-func looksLikeRemoteRepo(repo string) bool {
-	if strings.HasPrefix(repo, "git@") || strings.HasPrefix(repo, "ssh://") {
-		return true
+func deriveWorkspaceName(repoPath string) string {
+	base := filepath.Base(filepath.Clean(repoPath))
+	if base == "" || base == "." || base == string(filepath.Separator) {
+		base = "workspace"
 	}
-	u, err := url.Parse(repo)
-	return err == nil && u.Scheme != "" && u.Host != ""
+	base = strings.ToLower(base)
+	var b strings.Builder
+	lastDash := false
+	for _, r := range base {
+		isLetter := r >= 'a' && r <= 'z'
+		isNumber := r >= '0' && r <= '9'
+		if isLetter || isNumber {
+			b.WriteRune(r)
+			lastDash = false
+			continue
+		}
+		if !lastDash {
+			b.WriteByte('-')
+			lastDash = true
+		}
+	}
+	name := strings.Trim(b.String(), "-")
+	if name == "" {
+		return "workspace"
+	}
+	return name
 }
 
 // ── workspace stop ────────────────────────────────────────────────────────────
@@ -399,6 +413,7 @@ func runWorkspaceSSHCommand(args []string) {
 		Params: map[string]any{
 			"workspaceId": workspaceID,
 			"shell":       strings.TrimSpace(*shell),
+			"workdir":     "/workspace",
 			"cols":        120,
 			"rows":        40,
 		},
@@ -630,7 +645,7 @@ func printWorkspaceUsage() {
 
 subcommands:
   list                  list all workspaces
-  create --repo <url|path> --name <name> [--ref <ref>] [--profile <profile>] [--backend <backend>]
+  create [--backend <backend>]
   start <id>            start a workspace and make it accessible
   ssh <id>              open interactive shell via daemon PTY
   stop <id>             stop a running workspace

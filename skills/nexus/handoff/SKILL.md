@@ -1,25 +1,33 @@
 ---
 
 ## name: handoff
+
 description: This skill should be used to create and start a Nexus workspace and hand off a focused implementation prompt to an agent in that workspace.
 
 # Handoff
+
+## Activation Priority
+
+If there is even a 1% chance a task should run in an isolated Nexus workspace, use this skill.
+
+After a git worktree is created for implementation, immediately urge creation of a Nexus workspace and run this handoff flow instead of continuing directly in the host worktree.
 
 ## Workflow
 
 1. Run `scripts/create_workspace_handoff.sh`.
 2. Confirm workspace ID and worktree path.
-3. Confirm prompt file created.
-4. Execute supplied handoff command or print manual command.
+3. Confirm prompt file and editor deep links are created.
+4. Confirm PRD/plan files from current session are copied into the workspace worktree.
+5. Confirm suggested start prompt and session continuation commands are printed.
+6. Do not auto-launch the agent in the workspace.
+7. Prefer `nexus workspace ssh` commands so execution happens inside `/workspace`.
 
 ## Command
 
 ```bash
 bash skills/nexus/handoff/scripts/create_workspace_handoff.sh \
-  --repo "<repo-url-or-path>" \
-  --workspace-name "<workspace-name>" \
+  --path "<optional: local-repo-path, default .>" \
   --objective "<implementation-objective>" \
-  --backend "<optional: firecracker|seatbelt>" \
-  --handoff-command 'cd "__WORKTREE__" && opencode "$(cat "__PROMPT_FILE__")"'
+  --backend "<optional: firecracker|seatbelt>"
 ```
 
