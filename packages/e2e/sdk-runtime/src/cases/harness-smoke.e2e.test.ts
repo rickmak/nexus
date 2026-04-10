@@ -1,4 +1,5 @@
 import { connectSDKClient, getDaemonEnvConfig } from '../harness/daemon';
+import { startSession } from '../harness/session';
 import { assertCapabilitiesArray, skipTest } from '../harness/assertions';
 
 const hasDaemonEnv = (): boolean => getDaemonEnvConfig() !== null;
@@ -9,17 +10,29 @@ const maybeIt = hasDaemonEnv() || runningInCI() ? it : it.skip;
 
 describe('sdk-runtime e2e harness', () => {
   maybeIt('connects to daemon using @nexus/sdk', async () => {
-    if (!hasDaemonEnv()) {
+    const env = getDaemonEnvConfig();
+    if (env) {
+      const client = await connectSDKClient(env);
+      try {
+        const caps = await client.workspace.capabilities();
+        assertCapabilitiesArray(caps);
+      } finally {
+        await client.disconnect();
+      }
+      return;
+    }
+
+    if (!runningInCI()) {
       skipTest('daemon env not configured (NEXUS_DAEMON_WS/NEXUS_DAEMON_TOKEN); skipping harness connectivity check');
       return;
     }
 
-    const client = await connectSDKClient();
+    const session = await startSession({ forceManaged: true });
     try {
-      const caps = await client.workspace.capabilities();
+      const caps = await session.client.workspace.capabilities();
       assertCapabilitiesArray(caps);
     } finally {
-      await client.disconnect();
+      await session.stop();
     }
   });
 });

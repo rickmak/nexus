@@ -160,5 +160,14 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Build nexus CLI, runtime tools, and seed nexus init
+        run: ./scripts/ci/sdk-runtime-e2e-setup.sh
+
       - name: Run consolidated SDK runtime E2E suite
-        run: pnpm --filter @nexus/e2e-sdk-runtime test:ci
+        shell: bash
+        run: |
+          set -euo pipefail
+          set -a
+          source "${GITHUB_WORKSPACE}/.nexus-e2e-env.sh"
+          set +a
+          pnpm --filter @nexus/e2e-sdk-runtime test:ci

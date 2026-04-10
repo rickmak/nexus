@@ -337,6 +337,18 @@ func internalPreflightOverrideEnabled() bool {
 }
 
 func resolveNexusBinaryPath() (string, error) {
+	if p := strings.TrimSpace(os.Getenv("NEXUS_CLI_PATH")); p != "" {
+		clean := filepath.Clean(p)
+		st, err := os.Stat(clean)
+		if err != nil {
+			return "", fmt.Errorf("resolve nexus binary: NEXUS_CLI_PATH %q: %w", clean, err)
+		}
+		if st.IsDir() {
+			return "", fmt.Errorf("resolve nexus binary: NEXUS_CLI_PATH %q is a directory", clean)
+		}
+		return clean, nil
+	}
+
 	exe, exeErr := os.Executable()
 	if exeErr == nil {
 		name := "nexus"

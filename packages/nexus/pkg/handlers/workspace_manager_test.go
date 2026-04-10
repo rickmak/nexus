@@ -65,11 +65,7 @@ func TestHandleWorkspaceCreate(t *testing.T) {
 }
 
 func TestHandleWorkspaceCreate_WithFactory(t *testing.T) {
-	setPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{{Status: runtime.PreflightPass}})
-	t.Cleanup(func() {
-		resetPreflightRunnerForTest()
-		resetRuntimeSetupRunnerForTest()
-	})
+	t.Cleanup(resetRuntimeSetupRunnerForTest)
 
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
@@ -116,11 +112,7 @@ func TestHandleWorkspaceCreate_WithFactory(t *testing.T) {
 }
 
 func TestHandleWorkspaceCreate_ConfigRequiredBackendHonored(t *testing.T) {
-	setPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{{Status: runtime.PreflightPass}})
-	t.Cleanup(func() {
-		resetPreflightRunnerForTest()
-		resetRuntimeSetupRunnerForTest()
-	})
+	t.Cleanup(resetRuntimeSetupRunnerForTest)
 
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
@@ -195,11 +187,7 @@ func TestHandleWorkspaceCreate_FactoryWithUnavailableCapability(t *testing.T) {
 }
 
 func TestHandleWorkspaceCreate_MissingRuntimeRequiredUsesDefaultLinux(t *testing.T) {
-	setPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{{Status: runtime.PreflightPass}})
-	t.Cleanup(func() {
-		resetPreflightRunnerForTest()
-		resetRuntimeSetupRunnerForTest()
-	})
+	t.Cleanup(resetRuntimeSetupRunnerForTest)
 
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
@@ -866,11 +854,7 @@ func TestHandleWorkspacePause_WithFactoryLinuxBackendAfterRestartLikeState(t *te
 }
 
 func TestHandleWorkspaceCreate_WithFactoryFirecrackerBootstrapsRuntime(t *testing.T) {
-	setPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{{Status: runtime.PreflightPass}})
-	t.Cleanup(func() {
-		resetPreflightRunnerForTest()
-		resetRuntimeSetupRunnerForTest()
-	})
+	t.Cleanup(resetRuntimeSetupRunnerForTest)
 
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
@@ -1104,11 +1088,7 @@ func TestHandleWorkspaceCreate_IgnoresInternalPreflightOverrideWhenDisabled(t *t
 	t.Setenv("NEXUS_INTERNAL_ENABLE_PREFLIGHT_OVERRIDE", "0")
 	t.Setenv("NEXUS_INTERNAL_PREFLIGHT_OVERRIDE", "hard_fail")
 
-	setPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{{Status: runtime.PreflightPass}})
-	t.Cleanup(func() {
-		resetPreflightRunnerForTest()
-		resetRuntimeSetupRunnerForTest()
-	})
+	t.Cleanup(resetRuntimeSetupRunnerForTest)
 
 	factory := runtime.NewFactory(
 		[]runtime.Capability{{Name: "runtime.firecracker", Available: true}},
