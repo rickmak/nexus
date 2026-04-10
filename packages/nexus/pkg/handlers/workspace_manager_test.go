@@ -65,6 +65,12 @@ func TestHandleWorkspaceCreate(t *testing.T) {
 }
 
 func TestHandleWorkspaceCreate_WithFactory(t *testing.T) {
+	setPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{{Status: runtime.PreflightPass}})
+	t.Cleanup(func() {
+		resetPreflightRunnerForTest()
+		resetRuntimeSetupRunnerForTest()
+	})
+
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
 	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
@@ -110,6 +116,12 @@ func TestHandleWorkspaceCreate_WithFactory(t *testing.T) {
 }
 
 func TestHandleWorkspaceCreate_ConfigRequiredBackendHonored(t *testing.T) {
+	setPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{{Status: runtime.PreflightPass}})
+	t.Cleanup(func() {
+		resetPreflightRunnerForTest()
+		resetRuntimeSetupRunnerForTest()
+	})
+
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
 	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
@@ -183,6 +195,12 @@ func TestHandleWorkspaceCreate_FactoryWithUnavailableCapability(t *testing.T) {
 }
 
 func TestHandleWorkspaceCreate_MissingRuntimeRequiredUsesDefaultLinux(t *testing.T) {
+	setPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{{Status: runtime.PreflightPass}})
+	t.Cleanup(func() {
+		resetPreflightRunnerForTest()
+		resetRuntimeSetupRunnerForTest()
+	})
+
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
 	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
@@ -848,6 +866,12 @@ func TestHandleWorkspacePause_WithFactoryLinuxBackendAfterRestartLikeState(t *te
 }
 
 func TestHandleWorkspaceCreate_WithFactoryFirecrackerBootstrapsRuntime(t *testing.T) {
+	setPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{{Status: runtime.PreflightPass}})
+	t.Cleanup(func() {
+		resetPreflightRunnerForTest()
+		resetRuntimeSetupRunnerForTest()
+	})
+
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
 	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
