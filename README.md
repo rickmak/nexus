@@ -1,34 +1,29 @@
 # Nexus
 
-Nexus is a remote workspace daemon and SDK for running, checking, and automating project workspaces across local and VM-backed runtimes.
+Nexus is a remote workspace runtime for strong VM isolation with fast local development loops.
 
-## Install
+## Key Capabilities
 
-Use a published release binary from:
+- Firecracker microVM isolation for a stronger boundary than typical process sandboxes.
+- Docker inside the workspace VM by default for service-based app stacks.
+- Mutagen-based sync between host and VM so local work survives VM failure/corruption.
+- `nexus tunnel <workspace-id>` for manual testing against forwarded compose ports.
+- Auto-install/runtime bootstrap and auth-forward flows for opencode/codex/claude tooling.
+- On macOS without nested virtualization support (common on some Apple Silicon hosts), automatic seatbelt fallback.
 
-- https://github.com/IniZio/nexus/releases
-
-Pick the archive for your platform:
-
-- `linux-amd64`
-- `linux-arm64`
-- `darwin-amd64`
-- `darwin-arm64`
-- `windows-amd64`
-
-Example (macOS arm64):
+## Install (one line)
 
 ```bash
-tar -xzf nexus-<version>-darwin-arm64.tar.gz
-chmod +x nexus-darwin-arm64
-mv nexus-darwin-arm64 /usr/local/bin/nexus
+curl -fsSL https://raw.githubusercontent.com/inizio/nexus/main/install.sh | bash
 ```
 
-Verify:
+Then verify:
 
 ```bash
 nexus --help
 ```
+
+Prefer binaries instead? Use [GitHub releases](https://github.com/IniZio/nexus/releases).
 
 ## Quick Start
 
@@ -36,31 +31,36 @@ From your project root:
 
 ```bash
 nexus init
-nexus exec -- echo "hello from nexus"
-nexus doctor
+nexus create
+nexus list
+nexus start <workspace-id>
 ```
 
-Common runtime override:
+`nexus create` prints the workspace id (for example: `created workspace my-repo (id: ws-...)`).
+
+Common operations:
 
 ```bash
-NEXUS_RUNTIME_BACKEND=firecracker nexus doctor
+nexus start <workspace-id>
+nexus tunnel <workspace-id>
+nexus ssh <workspace-id>
+nexus stop <workspace-id>
+nexus remove <workspace-id>
 ```
+
+Other operations:
+
+```bash
+nexus fork --id <workspace-id> --name <child-name>
+```
+
+`tunnel` is blocking; press Ctrl-C to close created tunnels.
 
 ## Docs
 
-- Documentation index: `docs/index.md`
-- Workspace daemon package docs: `packages/nexus/README.md`
-- JavaScript SDK docs: `packages/sdk/js/README.md`
-- CLI and daemon reference: `docs/reference/cli.md`
+- Start here: `docs/index.md`
+- Installation details: `docs/tutorials/installation.md`
+- CLI reference: `docs/reference/cli.md`
 - SDK reference: `docs/reference/sdk.md`
+- Workspace config: `docs/reference/workspace-config.md`
 
-## Development
-
-Use the repository tasks:
-
-```bash
-task ci
-task test
-task lint
-task build
-```

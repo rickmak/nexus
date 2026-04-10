@@ -11,7 +11,7 @@ func TestLoader_LoadsWorkspaceJSON(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(root, ".nexus"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	data := []byte(`{"version":1,"readiness":{"profiles":{"default-services":[{"name":"api","type":"service","serviceName":"api"}]}}}`)
+	data := []byte(`{"version":1}`)
 	if err := os.WriteFile(filepath.Join(root, ".nexus", "workspace.json"), data, 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -65,9 +65,23 @@ func TestLoader_IgnoresLegacyLifecycleWhenWorkspaceMissing(t *testing.T) {
 	if len(warnings) != 0 {
 		t.Fatalf("expected no warnings, got %v", warnings)
 	}
-	if len(cfg.Lifecycle.OnSetup) != 0 || len(cfg.Lifecycle.OnStart) != 0 || len(cfg.Lifecycle.OnTeardown) != 0 {
-		t.Fatalf("expected empty lifecycle hooks, got setup=%v start=%v teardown=%v",
-			cfg.Lifecycle.OnSetup, cfg.Lifecycle.OnStart, cfg.Lifecycle.OnTeardown)
+}
+
+func TestLoader_EmptyWorkspaceJSONDefaultsVersionToOne(t *testing.T) {
+	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".nexus"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".nexus", "workspace.json"), []byte(`{}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cfg, _, err := LoadWorkspaceConfig(root)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	if cfg.Version != 1 {
+		t.Fatalf("expected version 1, got %d", cfg.Version)
 	}
 }
 
@@ -103,27 +117,3 @@ func TestLoader_UnknownFieldInWorkspaceJSON_ReturnsError(t *testing.T) {
 	}
 }
 
-func TestLoadWorkspaceConfig_DoctorTests(t *testing.T) {
-	root := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(root, ".nexus"), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	data := []byte(`{"version":1,"doctor":{"tests":[{"name":"tooling","command":"bash"}]}}`)
-	if err := os.WriteFile(filepath.Join(root, ".nexus", "workspace.json"), data, 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	cfg, _, err := LoadWorkspaceConfig(root)
-	if err != nil {
-		t.Fatalf("unexpected err: %v", err)
-	}
-	if len(cfg.Doctor.Tests) != 1 {
-		t.Fatalf("expected 1 doctor test, got %d", len(cfg.Doctor.Tests))
-	}
-	if cfg.Doctor.Tests[0].Name != "tooling" {
-		t.Fatalf("expected test name 'tooling', got %q", cfg.Doctor.Tests[0].Name)
-	}
-	if cfg.Doctor.Tests[0].Command != "bash" {
-		t.Fatalf("expected test command 'bash', got %q", cfg.Doctor.Tests[0].Command)
-	}
-}

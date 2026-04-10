@@ -10,8 +10,6 @@ import (
 	goruntime "runtime"
 	"strings"
 
-	"github.com/inizio/nexus/packages/nexus/pkg/config"
-
 	rpckit "github.com/inizio/nexus/packages/nexus/pkg/rpcerrors"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspacemgr"
@@ -323,11 +321,6 @@ func HandleWorkspaceCreate(ctx context.Context, params json.RawMessage, mgr *wor
 		return nil, rpcErr
 	}
 
-	cfg, _, cfgErr := config.LoadWorkspaceConfig(ws.RootPath)
-	if cfgErr == nil {
-		applyAuthDefaults(&ws.Policy, cfg.Auth.Defaults)
-	}
-
 	return &WorkspaceCreateResult{Workspace: ws}, nil
 }
 
@@ -369,25 +362,6 @@ func resolveNexusBinaryPath() (string, error) {
 		return "", fmt.Errorf("resolve nexus binary: nexus not found next to %s or in PATH", exe)
 	}
 	return path, nil
-}
-
-func applyAuthDefaults(policy *workspacemgr.Policy, defaults config.AuthDefaults) {
-	if policy == nil {
-		return
-	}
-	if len(policy.AuthProfiles) == 0 && len(defaults.AuthProfiles) > 0 {
-		profiles := make([]workspacemgr.AuthProfile, 0, len(defaults.AuthProfiles))
-		for _, p := range defaults.AuthProfiles {
-			profiles = append(profiles, workspacemgr.AuthProfile(p))
-		}
-		policy.AuthProfiles = profiles
-	}
-	if !policy.SSHAgentForward && defaults.SSHAgentForward != nil {
-		policy.SSHAgentForward = *defaults.SSHAgentForward
-	}
-	if policy.GitCredentialMode == "" && defaults.GitCredentialMode != "" {
-		policy.GitCredentialMode = workspacemgr.GitCredentialMode(defaults.GitCredentialMode)
-	}
 }
 
 func HandleWorkspaceOpen(_ context.Context, params json.RawMessage, mgr *workspacemgr.Manager) (*WorkspaceOpenResult, *rpckit.RPCError) {
@@ -632,11 +606,7 @@ func loadRuntimeSelectionFromRepoConfig(repo string) ([]string, []string, error)
 		return nil, nil, fmt.Errorf("repo must be a local directory with .nexus/workspace.json: %s", repo)
 	}
 
-	cfg, _, err := config.LoadWorkspaceConfig(repoPath)
-	if err != nil {
-		return nil, nil, fmt.Errorf("load repo workspace config: %w", err)
-	}
-	return []string{"darwin", "linux"}, cfg.Capabilities.Required, nil
+	return []string{"darwin", "linux"}, nil, nil
 }
 
 func ensureLocalRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace, factory *runtime.Factory, mgr *workspacemgr.Manager) *rpckit.RPCError {

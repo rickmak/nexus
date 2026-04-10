@@ -4,10 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"os/exec"
-	"path/filepath"
 	"time"
 
-	"github.com/inizio/nexus/packages/nexus/pkg/config"
 	rpckit "github.com/inizio/nexus/packages/nexus/pkg/rpcerrors"
 	"github.com/inizio/nexus/packages/nexus/pkg/services"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspace"
@@ -210,39 +208,9 @@ func readinessProfiles() map[string][]WorkspaceReadyCheck {
 }
 
 func readinessProfileForWorkspace(root, profile string) ([]WorkspaceReadyCheck, bool) {
-	if root != "" {
-		cfg, _, err := config.LoadWorkspaceConfig(root)
-		if err == nil {
-			if checks, ok := cfg.Readiness.Profiles[profile]; ok {
-				return mapConfigChecks(checks), true
-			}
-		}
-
-		cfg2, _, err := config.LoadWorkspaceConfig(filepath.Clean(root))
-		if err == nil {
-			if checks, ok := cfg2.Readiness.Profiles[profile]; ok {
-				return mapConfigChecks(checks), true
-			}
-		}
-	}
-
+	_ = root
 	checks, ok := readinessProfiles()[profile]
 	return checks, ok
-}
-
-func mapConfigChecks(in []config.ReadinessCheck) []WorkspaceReadyCheck {
-	out := make([]WorkspaceReadyCheck, 0, len(in))
-	for _, c := range in {
-		out = append(out, WorkspaceReadyCheck{
-			Name:          c.Name,
-			Type:          c.Type,
-			Command:       c.Command,
-			Args:          c.Args,
-			ServiceName:   c.ServiceName,
-			ExpectRunning: c.ExpectRunning,
-		})
-	}
-	return out
 }
 
 func mustJSON(v any) json.RawMessage {

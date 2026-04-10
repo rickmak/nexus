@@ -902,36 +902,30 @@ func TestDiscoverDoctorScriptsOrdersNumericThenLexical(t *testing.T) {
 	}
 }
 
-func TestResolveDoctorChecksFallsBackToWorkspaceConfigWhenNoDiscoveredScripts(t *testing.T) {
+func TestResolveDoctorChecksReturnsDiscoveredScriptsOnly(t *testing.T) {
 	root := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(root, ".nexus", "probe"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(root, ".nexus", "check"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	mustWriteExec(t, filepath.Join(root, ".nexus", "probe", "01-runtime.sh"), "#!/usr/bin/env bash\nexit 0\n")
+	mustWriteExec(t, filepath.Join(root, ".nexus", "check", "20-tooling.sh"), "#!/usr/bin/env bash\nexit 0\n")
 
-	cfgProbes := []config.DoctorCommandProbe{{
-		Name:     "cfg-probe",
-		Command:  "bash",
-		Args:     []string{"-lc", "exit 0"},
-		Required: true,
-	}}
-	cfgTests := []config.DoctorCommandCheck{{
-		Name:     "cfg-test",
-		Command:  "bash",
-		Args:     []string{"-lc", "exit 0"},
-		Required: true,
-	}}
-
-	probes, tests, warnings, err := resolveDoctorChecks(root, cfgProbes, cfgTests)
+	probes, tests, warnings, err := resolveDoctorChecks(root)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(warnings) == 0 {
-		t.Fatal("expected warnings when discovery folders are absent")
+	if len(warnings) != 0 {
+		t.Fatalf("expected no warnings, got %v", warnings)
 	}
-	if len(probes) != 1 || probes[0].Name != "cfg-probe" {
+	if len(probes) != 1 || probes[0].Name != "runtime" {
 		t.Fatalf("unexpected probes: %+v", probes)
 	}
-	if len(tests) != 1 || tests[0].Name != "cfg-test" {
+	if len(tests) != 1 || tests[0].Name != "tooling" {
 		t.Fatalf("unexpected tests: %+v", tests)
 	}
-
 }
 
 func TestRunInitCreatesNexusWorkspaceFiles(t *testing.T) {
@@ -1040,7 +1034,7 @@ func TestRunInitFirecrackerReturnsManualStepsInNonInteractiveMode(t *testing.T) 
 	origRunner := initRuntimeBootstrapRunner
 	t.Cleanup(func() { initRuntimeBootstrapRunner = origRunner })
 	initRuntimeBootstrapRunner = func(projectRoot, runtimeName string) error {
-		return fmt.Errorf("firecracker runtime setup failed: bootstrap setup failed\n\nmanual next steps:\n  sudo -E nexus init --project-root %s", projectRoot)
+		return fmt.Errorf("firecracker runtime setup failed: bootstrap setup failed\n\nmanual next steps:\n  cd %s\n  sudo -E nexus init --force", projectRoot)
 	}
 
 	err := runInit(initOptions{projectRoot: t.TempDir()})
@@ -1131,7 +1125,15 @@ func setupDoctorTestWorkspace(t *testing.T, doctorConfig config.DoctorConfig) st
 	root := t.TempDir()
 	nexusDir := filepath.Join(root, ".nexus")
 	lifecycleDir := filepath.Join(nexusDir, "lifecycles")
+	probeDir := filepath.Join(nexusDir, "probe")
+	checkDir := filepath.Join(nexusDir, "check")
 	if err := os.MkdirAll(lifecycleDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(probeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(checkDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, name := range []string{"setup.sh", "start.sh", "teardown.sh"} {
@@ -1140,15 +1142,27 @@ func setupDoctorTestWorkspace(t *testing.T, doctorConfig config.DoctorConfig) st
 			t.Fatal(err)
 		}
 	}
-	wsCfg := config.WorkspaceConfig{
-		Version: 1,
-		Doctor:  doctorConfig,
+	for i, probe := range doctorConfig.Probes {
+		name := probe.Name
+		if strings.TrimSpace(name) == "" {
+			name = fmt.Sprintf("probe-%d", i+1)
+		}
+		path := filepath.Join(probeDir, fmt.Sprintf("%02d-%s.sh", i+1, name))
+		if err := os.WriteFile(path, []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
-	cfgData, err := json.Marshal(wsCfg)
-	if err != nil {
-		t.Fatal(err)
+	for i, test := range doctorConfig.Tests {
+		name := test.Name
+		if strings.TrimSpace(name) == "" {
+			name = fmt.Sprintf("test-%d", i+1)
+		}
+		path := filepath.Join(checkDir, fmt.Sprintf("%02d-%s.sh", i+1, name))
+		if err := os.WriteFile(path, []byte("#!/usr/bin/env bash\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
-	if err := os.WriteFile(filepath.Join(nexusDir, "workspace.json"), cfgData, 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(nexusDir, "workspace.json"), []byte(`{"version":1}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	return root
@@ -1187,8 +1201,10 @@ func TestDoctor_StillRunsTestsWhenRequiredProbeFails(t *testing.T) {
 		}
 	}
 	firecrackerCheckCommandRunner = func(ctx context.Context, projectRoot, command string, args []string) (string, error) {
-		if command == "bash" && len(args) >= 2 && args[0] == "-lc" && strings.Contains(args[1], "exit 1") {
-			return "", errors.New("simulated failure")
+		for _, arg := range args {
+			if strings.Contains(arg, "failing-probe.sh") || strings.Contains(arg, "still-runs-and-fails.sh") {
+				return "", errors.New("simulated failure")
+			}
 		}
 		return "ok", nil
 	}
@@ -1362,8 +1378,10 @@ func TestDoctor_RequiredTestFailureReturnsError(t *testing.T) {
 		}
 	}
 	firecrackerCheckCommandRunner = func(ctx context.Context, projectRoot, command string, args []string) (string, error) {
-		if command == "bash" && len(args) >= 2 && args[0] == "-lc" && strings.Contains(args[1], "exit 1") {
-			return "", errors.New("simulated failure")
+		for _, arg := range args {
+			if strings.Contains(arg, "failing-test.sh") {
+				return "", errors.New("simulated failure")
+			}
 		}
 		return "ok", nil
 	}
@@ -1754,7 +1772,7 @@ func TestVerifyFirecrackerWorkspaceReadyProvidesSetupGuidanceOnMissingWorkspace(
 	if err == nil {
 		t.Fatal("expected workspace verification error")
 	}
-	if !strings.Contains(err.Error(), "nexus init --project-root <abs-path> --force") {
+	if !strings.Contains(err.Error(), "nexus init --force") {
 		t.Fatalf("expected setup guidance, got %v", err)
 	}
 }
@@ -2476,7 +2494,7 @@ func TestSetupFirecrackerNonInteractivePrintsAndErrors(t *testing.T) {
 		t.Fatalf("expected error to mention manual steps, got: %v", err)
 	}
 	out := buf.String()
-	if !strings.Contains(out, "sudo") || !strings.Contains(out, "nexus init --project-root") {
+	if !strings.Contains(out, "sudo") || !strings.Contains(out, "nexus init --force") {
 		t.Fatalf("expected output to contain sudo nexus init guidance, got: %q", out)
 	}
 	if !sudoCalled {

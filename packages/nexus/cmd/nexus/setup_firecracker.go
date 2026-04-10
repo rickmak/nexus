@@ -610,7 +610,8 @@ func runSetupFirecracker(w io.Writer) error {
 		fmt.Fprintln(w, "")
 		fmt.Fprintln(w, "Run the following command to prepare firecracker prerequisites:")
 		fmt.Fprintln(w, "")
-		fmt.Fprintln(w, "  sudo -E nexus init --project-root <absolute-repo-path>")
+		fmt.Fprintln(w, "  cd <repo-path>")
+		fmt.Fprintln(w, "  sudo -E nexus init --force")
 		fmt.Fprintln(w, "")
 		return fmt.Errorf("manual privileged step required — run the sudo nexus init command above")
 	}
@@ -641,7 +642,8 @@ func runSetupFirecracker(w io.Writer) error {
 			fmt.Fprintln(w, "")
 			fmt.Fprintln(w, "Run the following command to prepare firecracker prerequisites:")
 			fmt.Fprintln(w, "")
-			fmt.Fprintln(w, "  sudo -E nexus init --project-root <absolute-repo-path>")
+			fmt.Fprintln(w, "  cd <repo-path>")
+			fmt.Fprintln(w, "  sudo -E nexus init --force")
 			fmt.Fprintln(w, "")
 			return fmt.Errorf("manual privileged step required — run the sudo nexus init command above")
 		}

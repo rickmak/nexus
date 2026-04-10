@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"os/exec"
+	"os/signal"
 	"path/filepath"
-	"runtime"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -55,7 +55,7 @@ func renderPreflightCreateError(err error) bool {
 		return false
 	}
 
-	fmt.Fprintln(os.Stderr, "nexus workspace create: runtime preflight failed")
+	fmt.Fprintln(os.Stderr, "nexus create: runtime preflight failed")
 	fmt.Fprintf(os.Stderr, "status: %s\n", payload.Status)
 	if payload.SetupAttempted {
 		if strings.TrimSpace(payload.SetupOutcome) != "" {
@@ -172,13 +172,14 @@ func daemonRPC(conn *websocket.Conn, method string, params interface{}, out inte
 
 var ensureDaemonFn = ensureDaemon
 var daemonRPCFn = daemonRPC
+var waitForInterruptFn = waitForInterrupt
 
 // ── workspace list ────────────────────────────────────────────────────────────
 
 func runWorkspaceListCommand(_ []string) {
 	conn, err := ensureDaemon()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "nexus workspace list: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nexus list: %v\n", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
@@ -187,7 +188,7 @@ func runWorkspaceListCommand(_ []string) {
 		Workspaces []workspacemgr.Workspace `json:"workspaces"`
 	}
 	if err := daemonRPC(conn, "workspace.list", map[string]any{}, &result); err != nil {
-		fmt.Fprintf(os.Stderr, "nexus workspace list: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nexus list: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -219,21 +220,21 @@ func runWorkspaceCreateCommand(args []string) {
 		os.Exit(2)
 	}
 	if len(fs.Args()) > 0 {
-		fmt.Fprintln(os.Stderr, "nexus workspace create: this command does not take positional arguments")
+		fmt.Fprintln(os.Stderr, "nexus create: this command does not take positional arguments")
 		fs.Usage()
 		os.Exit(2)
 	}
 
 	repoPath, err := normalizeLocalRepoPath(".")
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "nexus workspace create: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nexus create: %v\n", err)
 		os.Exit(2)
 	}
 	workspaceName := deriveWorkspaceName(repoPath)
 
 	conn, err := ensureDaemon()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "nexus workspace create: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nexus create: %v\n", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
@@ -252,7 +253,7 @@ func runWorkspaceCreateCommand(args []string) {
 		if renderPreflightCreateError(err) {
 			os.Exit(1)
 		}
-		fmt.Fprintf(os.Stderr, "nexus workspace create: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nexus create: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -265,7 +266,7 @@ func runWorkspaceCreateCommand(args []string) {
 	// up the local worktree; we just skip the sync.
 	lwMgr, lwErr := localws.NewManager(localws.Config{})
 	if lwErr != nil {
-		fmt.Fprintf(os.Stderr, "nexus workspace create: warning: cannot init localws manager: %v\n", lwErr)
+		fmt.Fprintf(os.Stderr, "nexus create: warning: cannot init localws manager: %v\n", lwErr)
 	} else {
 		setupSpec := localws.SetupSpec{
 			WorkspaceID:   ws.ID,
@@ -276,7 +277,7 @@ func runWorkspaceCreateCommand(args []string) {
 		}
 		setupResult, setupErr := lwMgr.Setup(context.Background(), setupSpec)
 		if setupErr != nil {
-			fmt.Fprintf(os.Stderr, "nexus workspace create: warning: local worktree setup failed: %v\n", setupErr)
+			fmt.Fprintf(os.Stderr, "nexus create: warning: local worktree setup failed: %v\n", setupErr)
 		} else {
 			// Persist worktree info back on the daemon record.
 			setParams := map[string]any{
@@ -285,7 +286,7 @@ func runWorkspaceCreateCommand(args []string) {
 				"mutagenSessionId":  setupResult.MutagenSessionID,
 			}
 			if rpcErr := daemonRPC(conn, "workspace.setLocalWorktree", setParams, nil); rpcErr != nil {
-				fmt.Fprintf(os.Stderr, "nexus workspace create: warning: setLocalWorktree RPC failed: %v\n", rpcErr)
+				fmt.Fprintf(os.Stderr, "nexus create: warning: setLocalWorktree RPC failed: %v\n", rpcErr)
 			}
 			fmt.Printf("local worktree:   %s\n", setupResult.WorktreePath)
 			if setupResult.MutagenSessionID != "" {
@@ -346,18 +347,18 @@ func deriveWorkspaceName(repoPath string) string {
 
 func runWorkspaceStopCommand(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: nexus workspace stop <id>")
+		fmt.Fprintln(os.Stderr, "usage: nexus stop <id>")
 		os.Exit(2)
 	}
 	conn, err := ensureDaemon()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "nexus workspace stop: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nexus stop: %v\n", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
 
 	if err := daemonRPC(conn, "workspace.stop", map[string]any{"id": args[0]}, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "nexus workspace stop: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nexus stop: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Printf("stopped workspace %s\n", args[0])
@@ -367,12 +368,12 @@ func runWorkspaceStopCommand(args []string) {
 
 func runWorkspaceStartCommand(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: nexus workspace start <id>")
+		fmt.Fprintln(os.Stderr, "usage: nexus start <id>")
 		os.Exit(2)
 	}
 	conn, err := ensureDaemonFn()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "nexus workspace start: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nexus start: %v\n", err)
 		os.Exit(1)
 	}
 	if conn != nil {
@@ -380,7 +381,7 @@ func runWorkspaceStartCommand(args []string) {
 	}
 
 	if err := daemonRPCFn(conn, "workspace.start", map[string]any{"id": args[0]}, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "nexus workspace start: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nexus start: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Printf("started workspace %s\n", args[0])
@@ -388,7 +389,7 @@ func runWorkspaceStartCommand(args []string) {
 
 func runWorkspaceSSHCommand(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: nexus workspace ssh <id> [--shell <shell>] [--command <cmd>]")
+		fmt.Fprintln(os.Stderr, "usage: nexus ssh <id> [--shell <shell>] [--command <cmd>]")
 		os.Exit(2)
 	}
 	workspaceID := strings.TrimSpace(args[0])
@@ -400,7 +401,7 @@ func runWorkspaceSSHCommand(args []string) {
 
 	conn, err := ensureDaemon()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "nexus workspace ssh: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nexus ssh: %v\n", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
@@ -418,7 +419,7 @@ func runWorkspaceSSHCommand(args []string) {
 			"rows":        40,
 		},
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "nexus workspace ssh: pty.open send failed: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nexus ssh: pty.open send failed: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -426,21 +427,21 @@ func runWorkspaceSSHCommand(args []string) {
 	for {
 		var msg rpcResponse
 		if err := conn.ReadJSON(&msg); err != nil {
-			fmt.Fprintf(os.Stderr, "nexus workspace ssh: pty.open recv failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "nexus ssh: pty.open recv failed: %v\n", err)
 			os.Exit(1)
 		}
 		if msg.ID != openID {
 			continue
 		}
 		if msg.Error != nil {
-			fmt.Fprintf(os.Stderr, "nexus workspace ssh: pty.open rpc error %d: %s\n", msg.Error.Code, msg.Error.Message)
+			fmt.Fprintf(os.Stderr, "nexus ssh: pty.open rpc error %d: %s\n", msg.Error.Code, msg.Error.Message)
 			os.Exit(1)
 		}
 		var open struct {
 			SessionID string `json:"sessionId"`
 		}
 		if err := json.Unmarshal(msg.Result, &open); err != nil {
-			fmt.Fprintf(os.Stderr, "nexus workspace ssh: invalid pty.open result: %v\n", err)
+			fmt.Fprintf(os.Stderr, "nexus ssh: invalid pty.open result: %v\n", err)
 			os.Exit(1)
 		}
 		sessionID = strings.TrimSpace(open.SessionID)
@@ -461,7 +462,7 @@ func runWorkspaceSSHCommand(args []string) {
 	if strings.TrimSpace(*command) != "" {
 		payload := "cd /workspace >/dev/null 2>&1 || true\n" + *command + "\nexit\n"
 		if err := send("pty.write", map[string]any{"sessionId": sessionID, "data": payload}); err != nil {
-			fmt.Fprintf(os.Stderr, "nexus workspace ssh: command send failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "nexus ssh: command send failed: %v\n", err)
 			os.Exit(1)
 		}
 	} else {
@@ -489,7 +490,7 @@ func runWorkspaceSSHCommand(args []string) {
 	for {
 		var msg rpcResponse
 		if err := conn.ReadJSON(&msg); err != nil {
-			fmt.Fprintf(os.Stderr, "nexus workspace ssh: read failed: %v\n", err)
+			fmt.Fprintf(os.Stderr, "nexus ssh: read failed: %v\n", err)
 			os.Exit(1)
 		}
 
@@ -525,18 +526,18 @@ func runWorkspaceSSHCommand(args []string) {
 
 func runWorkspaceRemoveCommand(args []string) {
 	if len(args) == 0 {
-		fmt.Fprintln(os.Stderr, "usage: nexus workspace remove <id>")
+		fmt.Fprintln(os.Stderr, "usage: nexus remove <id>")
 		os.Exit(2)
 	}
 	conn, err := ensureDaemon()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "nexus workspace remove: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nexus remove: %v\n", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
 
 	if err := daemonRPC(conn, "workspace.remove", map[string]any{"id": args[0]}, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "nexus workspace remove: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nexus remove: %v\n", err)
 		os.Exit(1)
 	}
 	fmt.Printf("removed workspace %s\n", args[0])
@@ -553,7 +554,7 @@ func runWorkspaceForkCommand(args []string) {
 	_ = fs.Parse(args)
 
 	if *id == "" || *childName == "" {
-		fmt.Fprintf(os.Stderr, "nexus workspace fork: --id and --name are required\n")
+		fmt.Fprintf(os.Stderr, "nexus fork: --id and --name are required\n")
 		fs.Usage()
 		os.Exit(2)
 	}
@@ -564,7 +565,7 @@ func runWorkspaceForkCommand(args []string) {
 
 	conn, err := ensureDaemon()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "nexus workspace fork: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nexus fork: %v\n", err)
 		os.Exit(1)
 	}
 	defer conn.Close()
@@ -575,7 +576,7 @@ func runWorkspaceForkCommand(args []string) {
 	if err := daemonRPC(conn, "workspace.fork", map[string]any{
 		"id": *id, "childWorkspaceName": *childName, "childRef": ref,
 	}, &result); err != nil {
-		fmt.Fprintf(os.Stderr, "nexus workspace fork: %v\n", err)
+		fmt.Fprintf(os.Stderr, "nexus fork: %v\n", err)
 		os.Exit(1)
 	}
 
@@ -587,87 +588,74 @@ func runWorkspaceForkCommand(args []string) {
 	}
 }
 
-// ── workspace portal ─────────────────────────────────────────────────────────
-
-func runWorkspacePortalCommand(_ []string) {
-	port := daemonPort()
-	token, err := daemonToken()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "nexus workspace portal: %v\n", err)
-		os.Exit(1)
-	}
-	if err := daemonclient.EnsureRunning(port, token, ""); err != nil {
-		fmt.Fprintf(os.Stderr, "nexus workspace portal: %v\n", err)
-		os.Exit(1)
-	}
-	url := fmt.Sprintf("http://localhost:%d/portal", port)
-	fmt.Printf("portal: %s\n", url)
-	// Attempt to open in browser (best-effort).
-	_ = openBrowser(url)
-}
-
-// ── top-level workspace dispatcher ───────────────────────────────────────────
-
-// runWorkspaceCommand dispatches nexus workspace <sub> args.
-func runWorkspaceCommand(args []string) {
+func runWorkspaceTunnelCommand(args []string) {
 	if len(args) == 0 {
-		printWorkspaceUsage()
+		fmt.Fprintln(os.Stderr, "usage: nexus tunnel <workspace-id>")
 		os.Exit(2)
 	}
-	sub := args[0]
-	rest := args[1:]
-	switch sub {
-	case "list", "ls":
-		runWorkspaceListCommand(rest)
-	case "create":
-		runWorkspaceCreateCommand(rest)
-	case "start":
-		runWorkspaceStartCommand(rest)
-	case "stop":
-		runWorkspaceStopCommand(rest)
-	case "remove", "rm", "delete":
-		runWorkspaceRemoveCommand(rest)
-	case "fork":
-		runWorkspaceForkCommand(rest)
-	case "portal":
-		runWorkspacePortalCommand(rest)
-	case "ssh":
-		runWorkspaceSSHCommand(rest)
-	default:
-		printWorkspaceUsage()
-		fmt.Fprintf(os.Stderr, "\nunknown workspace subcommand: %s\n", sub)
+	workspaceID := strings.TrimSpace(args[0])
+	if workspaceID == "" {
+		fmt.Fprintln(os.Stderr, "usage: nexus tunnel <workspace-id>")
 		os.Exit(2)
+	}
+	conn, err := ensureDaemonFn()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nexus tunnel: %v\n", err)
+		os.Exit(1)
+	}
+	if conn != nil {
+		defer conn.Close()
+	}
+	var result struct {
+		Forwards []struct {
+			ID         string `json:"id"`
+			Service    string `json:"service"`
+			Host       string `json:"host"`
+			LocalPort  int    `json:"localPort"`
+			RemotePort int    `json:"remotePort"`
+		} `json:"forwards"`
+		Errors []struct {
+			Service    string `json:"service"`
+			HostPort   int    `json:"hostPort"`
+			TargetPort int    `json:"targetPort"`
+			Message    string `json:"message"`
+		} `json:"errors"`
+	}
+	if err := daemonRPCFn(conn, "spotlight.applyComposePorts", map[string]any{"workspaceId": workspaceID}, &result); err != nil {
+		fmt.Fprintf(os.Stderr, "nexus tunnel: %v\n", err)
+		os.Exit(1)
+	}
+	if len(result.Forwards) == 0 {
+		fmt.Printf("no compose ports spotlighted for workspace %s\n", workspaceID)
+		return
+	}
+	for _, fwd := range result.Forwards {
+		host := strings.TrimSpace(fwd.Host)
+		if host == "" {
+			host = "127.0.0.1"
+		}
+		fmt.Printf("tunnel active %s %s:%d -> %d (%s)\n", fwd.Service, host, fwd.LocalPort, fwd.RemotePort, fwd.ID)
+	}
+	if len(result.Errors) > 0 {
+		for _, e := range result.Errors {
+			fmt.Fprintf(os.Stderr, "spotlight error %s %d->%d: %s\n", e.Service, e.HostPort, e.TargetPort, e.Message)
+		}
+		os.Exit(1)
+	}
+	fmt.Fprintln(os.Stdout, "press Ctrl-C to close tunnels")
+	waitForInterruptFn()
+	for _, fwd := range result.Forwards {
+		if err := daemonRPCFn(conn, "spotlight.close", map[string]any{"id": fwd.ID}, nil); err != nil {
+			fmt.Fprintf(os.Stderr, "nexus tunnel: close warning for %s: %v\n", fwd.ID, err)
+		} else {
+			fmt.Printf("closed tunnel %s\n", fwd.ID)
+		}
 	}
 }
 
-func printWorkspaceUsage() {
-	fmt.Fprint(os.Stderr, `usage: nexus workspace <subcommand> [options]
-
-subcommands:
-  list                  list all workspaces
-  create [--backend <backend>]
-  start <id>            start a workspace and make it accessible
-  ssh <id>              open interactive shell via daemon PTY
-  stop <id>             stop a running workspace
-  remove <id>           remove a workspace
-  fork --id <id> --name <child-name> [--ref <child-ref>]
-  portal                open the admin portal in your browser
-
-`)
-}
-
-// openBrowser attempts to open url in the user's default browser.
-func openBrowser(url string) error {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "linux":
-		cmd = exec.Command("xdg-open", url)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	default:
-		return fmt.Errorf("unsupported platform %s", runtime.GOOS)
-	}
-	return cmd.Start()
+func waitForInterrupt() {
+	ch := make(chan os.Signal, 1)
+	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
+	<-ch
+	signal.Stop(ch)
 }
