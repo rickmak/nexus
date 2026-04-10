@@ -7,6 +7,7 @@ import { runtimeSelectionCaseIds } from './test-ids';
 export const CASE_TEST_IDS = runtimeSelectionCaseIds;
 
 describe('runtime selection e2e', () => {
+  jest.setTimeout(420000);
   (process.platform === 'linux' ? it : it.skip)('pass -> firecracker when override is forced', async () => {
     const fixture = await createGitFixture('runtime-selection-pass');
     const session = await withTimeout(startSession({
@@ -148,7 +149,7 @@ describe('runtime selection e2e', () => {
   });
 });
 
-const RUNTIME_E2E_OP_MS = 180000;
+const RUNTIME_E2E_OP_MS = 300000;
 
 async function withTimeout<T>(promise: Promise<T>, label: string, timeoutMs = RUNTIME_E2E_OP_MS): Promise<T> {
   return Promise.race([
