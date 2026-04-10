@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	nexusruntime "github.com/inizio/nexus/packages/nexus/pkg/runtime"
 )
 
 //go:embed templates/lima/firecracker.yaml
@@ -44,6 +46,8 @@ func runInitRuntimeBootstrapDarwin(projectRoot, runtimeName string) error {
 	if runtimeName != "firecracker" {
 		return nil
 	}
+
+	_ = nexusruntime.MaybeAutoinstallPreflightHostTools()
 
 	if _, err := limactlLookPathFn("limactl"); err != nil {
 		if _, brewErr := limactlLookPathFn("brew"); brewErr == nil {

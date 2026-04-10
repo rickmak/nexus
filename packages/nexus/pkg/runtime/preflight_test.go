@@ -98,6 +98,7 @@ func TestRunFirecrackerPreflight_OverrideHardFail(t *testing.T) {
 
 func TestRunFirecrackerPreflight_OverrideDisabledByOptions(t *testing.T) {
 	t.Setenv("NEXUS_INTERNAL_PREFLIGHT_OVERRIDE", "pass")
+	t.Setenv("NEXUS_PREFLIGHT_SKIP_AUTOINSTALL", "1")
 
 	res := RunFirecrackerPreflight(t.TempDir())
 	if res.Override != "" {

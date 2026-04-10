@@ -59,6 +59,8 @@ func RunFirecrackerPreflight(_ string, opts ...PreflightOptions) FirecrackerPref
 		}
 	}
 
+	_ = MaybeAutoinstallPreflightHostTools()
+
 	checks := make([]PreflightCheck, 0, 4)
 	macNestedVirtContext := false
 
