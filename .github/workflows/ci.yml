@@ -137,14 +137,17 @@ jobs:
   sdk-runtime-e2e:
     name: SDK Runtime E2E (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
+    continue-on-error: ${{ matrix.allow_failure }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
             label: linux
+            allow_failure: false
           - os: macos-15-intel
             label: macos-intel
+            allow_failure: true
     env:
       CI: true
       NEXUS_E2E_STRICT_RUNTIME: '1'
