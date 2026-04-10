@@ -132,8 +132,12 @@ jobs:
         run: node --test test/*.test.js
 
   sdk-runtime-e2e:
-    name: SDK Runtime E2E
-    runs-on: ubuntu-latest
+    name: SDK Runtime E2E (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
 
     steps:
       - name: Checkout code
