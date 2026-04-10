@@ -2,7 +2,7 @@ import { WorkspaceHandle } from '@nexus/sdk';
 import { createGitFixture, cleanupFixture } from '../harness/fixtures';
 import { rpcRequest } from '../harness/rpc';
 import { startSession, type DaemonSession } from '../harness/session';
-import { isRuntimeUnavailable, skipTest } from '../harness/assertions';
+import { onDaemonStartError, onWorkspaceCreateRuntimeError } from '../harness/assertions';
 import { toolsAuthForwardingCaseIds } from './test-ids';
 
 export const CASE_TEST_IDS = toolsAuthForwardingCaseIds;
@@ -15,7 +15,7 @@ describe('tools auth forwarding e2e', () => {
       session = await startSession();
     } catch (error) {
       await cleanupFixture(fixture);
-      skipTest(`unable to start daemon session: ${(error as Error).message}`);
+      onDaemonStartError(error, 'unable to start daemon session');
       return;
     }
 
@@ -34,8 +34,7 @@ describe('tools auth forwarding e2e', () => {
           },
         });
       } catch (error) {
-        if (isRuntimeUnavailable(error)) {
-          skipTest('tools auth forwarding runtime path unavailable in this environment');
+        if (onWorkspaceCreateRuntimeError(error, 'tools auth forwarding runtime path unavailable in this environment')) {
           return;
         }
         throw error;

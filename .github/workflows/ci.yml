@@ -131,13 +131,23 @@ jobs:
         working-directory: packages/opencode-nexus
         run: node --test test/*.test.js
 
+  # macOS: GitHub-hosted arm64 runners cannot use Apple Hypervisor Framework inside the VM (HV_UNSUPPORTED);
+  # see https://github.com/abiosoft/colima/issues/970 — use the hosted Intel image (nested virt) or slower QEMU/lima
+  # workarounds on arm64. We use macos-15-intel (x86_64) for Lima + Firecracker strict E2E without self-hosted runners.
   sdk-runtime-e2e:
-    name: SDK Runtime E2E (${{ matrix.os }})
+    name: SDK Runtime E2E (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        include:
+          - os: ubuntu-latest
+            label: linux
+          - os: macos-15-intel
+            label: macos-intel
+    env:
+      CI: true
+      NEXUS_E2E_STRICT_RUNTIME: '1'
 
     steps:
       - name: Checkout code
@@ -159,6 +169,13 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Allow Firecracker to use KVM on hosted Linux runners
+        if: runner.os == 'Linux'
+        run: |
+          if [[ -e /dev/kvm ]]; then
+            sudo chmod 666 /dev/kvm || true
+          fi
 
       - name: Build nexus CLI, runtime tools, and seed nexus init
         run: ./scripts/ci/sdk-runtime-e2e-setup.sh

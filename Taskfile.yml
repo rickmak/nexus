@@ -125,7 +125,9 @@ tasks:
       - ./scripts/ci/coverage.sh
 
   ci:sdk-runtime-e2e:
-    desc: Run consolidated SDK runtime E2E package
+    desc: Run consolidated SDK runtime E2E package (strict when CI=true; set NEXUS_E2E_STRICT_RUNTIME=0 to allow soft skips locally)
+    env:
+      CI: true
     cmds:
       - ./scripts/ci/sdk-runtime-e2e-setup.sh
       - bash -lc 'set -euo pipefail; set -a; source "$(git rev-parse --show-toplevel)/.nexus-e2e-env.sh"; set +a; pnpm --filter @nexus/e2e-sdk-runtime test:ci'

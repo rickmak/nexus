@@ -2,7 +2,12 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createGitFixture, cleanupFixture } from '../harness/fixtures';
 import { startSession } from '../harness/session';
-import { isRuntimeUnavailable, skipTest } from '../harness/assertions';
+import {
+  assertCapabilityOrSkip,
+  e2eStrictRuntime,
+  onWorkspaceCreateRuntimeError,
+  skipTest,
+} from '../harness/assertions';
 import { spotlightComposeCaseIds } from './test-ids';
 
 export const CASE_TEST_IDS = spotlightComposeCaseIds;
@@ -27,9 +32,7 @@ describe('spotlight compose e2e', () => {
     let workspaceId = '';
     try {
       const caps = await session.client.workspace.capabilities();
-      const spotlightCap = caps.find((cap) => cap.name === 'spotlight.tunnel');
-      if (!spotlightCap?.available) {
-        skipTest('spotlight.tunnel capability unavailable on this daemon');
+      if (!assertCapabilityOrSkip(caps, 'spotlight.tunnel', 'spotlight.tunnel capability unavailable on this daemon')) {
         return;
       }
 
@@ -41,8 +44,7 @@ describe('spotlight compose e2e', () => {
           agentProfile: 'default',
         });
       } catch (error) {
-        if (isRuntimeUnavailable(error)) {
-          skipTest('spotlight compose runtime path unavailable in this environment');
+        if (onWorkspaceCreateRuntimeError(error, 'spotlight compose runtime path unavailable in this environment')) {
           return;
         }
         throw error;
@@ -51,7 +53,11 @@ describe('spotlight compose e2e', () => {
 
       const applied = await handle.spotlight.applyComposePorts();
       if (applied.forwards.length === 0 && applied.errors.length > 0) {
-        skipTest(`compose discovery unavailable in environment: ${applied.errors[0].message}`);
+        const detail = applied.errors[0].message;
+        if (e2eStrictRuntime()) {
+          throw new Error(`E2E strict: compose discovery failed: ${detail}`);
+        }
+        skipTest(`compose discovery unavailable in environment: ${detail}`);
         return;
       }
 

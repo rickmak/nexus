@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { createGitFixture, cleanupFixture, runCmd } from '../harness/fixtures';
 import { startSession } from '../harness/session';
-import { isRuntimeUnavailable, skipTest } from '../harness/assertions';
+import { onWorkspaceCreateRuntimeError } from '../harness/assertions';
 import { worktreeSyncCaseIds } from './test-ids';
 
 export const CASE_TEST_IDS = worktreeSyncCaseIds;
@@ -25,8 +25,7 @@ describe('worktree sync e2e', () => {
           agentProfile: 'default',
         });
       } catch (error) {
-        if (isRuntimeUnavailable(error)) {
-          skipTest('worktree sync runtime path unavailable in this environment');
+        if (onWorkspaceCreateRuntimeError(error, 'worktree sync runtime path unavailable in this environment')) {
           return;
         }
         throw error;

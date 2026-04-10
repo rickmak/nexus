@@ -1,7 +1,7 @@
-import { WorkspaceHandle, type Capability } from '@nexus/sdk';
+import { WorkspaceHandle } from '@nexus/sdk';
 import { createGitFixture, cleanupFixture } from '../harness/fixtures';
 import { startSession } from '../harness/session';
-import { isRuntimeUnavailable, skipTest } from '../harness/assertions';
+import { assertCapabilityOrSkip, onWorkspaceCreateRuntimeError } from '../harness/assertions';
 import { runtimeSelectionCaseIds } from './test-ids';
 
 export const CASE_TEST_IDS = runtimeSelectionCaseIds;
@@ -22,8 +22,7 @@ describe('runtime selection e2e', () => {
     let ws: WorkspaceHandle | null = null;
     try {
       const caps = await session.client.workspace.capabilities();
-      if (!capabilityAvailable(caps, 'runtime.firecracker')) {
-        skipTest('runtime.firecracker capability unavailable on this host');
+      if (!assertCapabilityOrSkip(caps, 'runtime.firecracker', 'runtime.firecracker capability unavailable on this host')) {
         return;
       }
 
@@ -34,8 +33,7 @@ describe('runtime selection e2e', () => {
           agentProfile: 'default',
         }), 'workspace.create(pass)');
       } catch (error) {
-        if (isRuntimeUnavailable(error)) {
-          skipTest('firecracker runtime path unavailable in this environment');
+        if (onWorkspaceCreateRuntimeError(error, 'firecracker runtime path unavailable in this environment')) {
           return;
         }
         throw error;
@@ -53,7 +51,7 @@ describe('runtime selection e2e', () => {
     }
   });
 
-  it('unsupported_nested_virt -> seatbelt', async () => {
+  (process.platform === 'darwin' ? it : it.skip)('unsupported_nested_virt -> seatbelt', async () => {
     const fixture = await createGitFixture('runtime-selection-nested');
     const session = await withTimeout(startSession({
       forceManaged: true,
@@ -68,8 +66,7 @@ describe('runtime selection e2e', () => {
     let ws: WorkspaceHandle | null = null;
     try {
       const caps = await session.client.workspace.capabilities();
-      if (!capabilityAvailable(caps, 'runtime.seatbelt')) {
-        skipTest('runtime.seatbelt capability unavailable on this host');
+      if (!assertCapabilityOrSkip(caps, 'runtime.seatbelt', 'runtime.seatbelt capability unavailable on this host')) {
         return;
       }
 
@@ -80,8 +77,7 @@ describe('runtime selection e2e', () => {
           agentProfile: 'default',
         }), 'workspace.create(unsupported_nested_virt)');
       } catch (error) {
-        if (isRuntimeUnavailable(error)) {
-          skipTest('seatbelt runtime path unavailable in this environment');
+        if (onWorkspaceCreateRuntimeError(error, 'seatbelt runtime path unavailable in this environment')) {
           return;
         }
         throw error;
@@ -152,12 +148,9 @@ describe('runtime selection e2e', () => {
   });
 });
 
-function capabilityAvailable(caps: Capability[], name: string): boolean {
-  const found = caps.find((cap) => cap.name === name);
-  return Boolean(found?.available);
-}
+const RUNTIME_E2E_OP_MS = 180000;
 
-async function withTimeout<T>(promise: Promise<T>, label: string, timeoutMs = 30000): Promise<T> {
+async function withTimeout<T>(promise: Promise<T>, label: string, timeoutMs = RUNTIME_E2E_OP_MS): Promise<T> {
   return Promise.race([
     promise,
     new Promise<T>((_, reject) => {
