@@ -9,13 +9,17 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 
 	nexusruntime "github.com/inizio/nexus/packages/nexus/pkg/runtime"
 )
 
-//go:embed templates/lima/firecracker.yaml
-var embeddedLimaTemplate string
+//go:embed templates/lima/firecracker-arm64.yaml
+var embeddedLimaTemplateArm64 string
+
+//go:embed templates/lima/firecracker-x86_64.yaml
+var embeddedLimaTemplateX8664 string
 
 var initRuntimeBootstrapRunner func(projectRoot, runtimeName string) error = runInitRuntimeBootstrapDarwin
 
@@ -140,7 +144,14 @@ func writeLimaTemplate(content string) (string, func(), error) {
 }
 
 func writeEmbeddedLimaTemplate() (string, func(), error) {
-	return writeLimaTemplate(embeddedLimaTemplate)
+	switch goruntime.GOARCH {
+	case "arm64":
+		return writeLimaTemplate(embeddedLimaTemplateArm64)
+	case "amd64":
+		return writeLimaTemplate(embeddedLimaTemplateX8664)
+	default:
+		return "", func() {}, fmt.Errorf("unsupported darwin arch for lima template: %s", goruntime.GOARCH)
+	}
 }
 
 func writeNexusInitEnv(projectRoot string, kvPairs map[string]string) error {

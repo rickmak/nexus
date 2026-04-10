@@ -7,7 +7,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -635,15 +634,7 @@ func filterCandidatesByAvailability(candidates []string, available []string) []s
 	if len(filtered) > 0 {
 		return filtered
 	}
-
-	fallback := make([]string, 0, len(availableSet))
-	for name := range availableSet {
-		if name != "" {
-			fallback = append(fallback, name)
-		}
-	}
-	sort.Strings(fallback)
-	return fallback
+	return candidates
 }
 
 func instanceCandidates(instanceName string) []string {
