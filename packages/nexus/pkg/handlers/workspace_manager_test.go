@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
+	"github.com/inizio/nexus/packages/nexus/pkg/runtime/selection"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspacemgr"
 )
 
@@ -65,7 +66,7 @@ func TestHandleWorkspaceCreate(t *testing.T) {
 }
 
 func TestHandleWorkspaceCreate_WithFactory(t *testing.T) {
-	t.Cleanup(resetRuntimeSetupRunnerForTest)
+	t.Cleanup(selection.ResetRuntimeSetupRunnerForTest)
 
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
@@ -112,7 +113,7 @@ func TestHandleWorkspaceCreate_WithFactory(t *testing.T) {
 }
 
 func TestHandleWorkspaceCreate_ConfigRequiredBackendHonored(t *testing.T) {
-	t.Cleanup(resetRuntimeSetupRunnerForTest)
+	t.Cleanup(selection.ResetRuntimeSetupRunnerForTest)
 
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
@@ -187,7 +188,7 @@ func TestHandleWorkspaceCreate_FactoryWithUnavailableCapability(t *testing.T) {
 }
 
 func TestHandleWorkspaceCreate_MissingRuntimeRequiredUsesDefaultLinux(t *testing.T) {
-	t.Cleanup(resetRuntimeSetupRunnerForTest)
+	t.Cleanup(selection.ResetRuntimeSetupRunnerForTest)
 
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
@@ -854,7 +855,7 @@ func TestHandleWorkspacePause_WithFactoryLinuxBackendAfterRestartLikeState(t *te
 }
 
 func TestHandleWorkspaceCreate_WithFactoryFirecrackerBootstrapsRuntime(t *testing.T) {
-	t.Cleanup(resetRuntimeSetupRunnerForTest)
+	t.Cleanup(selection.ResetRuntimeSetupRunnerForTest)
 
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
@@ -902,7 +903,7 @@ func TestHandleWorkspaceCreate_WithFactoryFirecrackerBootstrapsRuntime(t *testin
 }
 
 func TestHandleWorkspaceCreate_PassesHostAuthBundleToRuntime(t *testing.T) {
-	t.Cleanup(resetRuntimeSetupRunnerForTest)
+	t.Cleanup(selection.ResetRuntimeSetupRunnerForTest)
 
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
@@ -948,18 +949,18 @@ func TestHandleWorkspaceCreate_InstallableMissingRetriesSetupOnce(t *testing.T) 
 	mgr := workspacemgr.NewManager(t.TempDir())
 	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
-	setPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{
+	selection.SetPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{
 		{Status: runtime.PreflightInstallableMissing, Checks: []runtime.PreflightCheck{{Name: "lima", OK: false, Installable: true}}},
 		{Status: runtime.PreflightPass},
 	})
 	setupCalls := 0
-	setRuntimeSetupRunnerForTest(func(_ context.Context, _ string, _ string) error {
+	selection.SetRuntimeSetupRunnerForTest(func(_ context.Context, _ string, _ string) error {
 		setupCalls++
 		return nil
 	})
 	t.Cleanup(func() {
-		resetRuntimeSetupRunnerForTest()
-		resetPreflightRunnerForTest()
+		selection.ResetRuntimeSetupRunnerForTest()
+		selection.ResetPreflightRunnerForTest()
 	})
 
 	factory := runtime.NewFactory(
@@ -985,21 +986,21 @@ func TestHandleWorkspaceCreate_InstallableMissingSetupFailureReturnsPreflightErr
 	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
 	preflightCalls := 0
-	firecrackerPreflightRunner = func(_ string, _ runtime.PreflightOptions) runtime.FirecrackerPreflightResult {
+	selection.SetFirecrackerPreflightRunnerForTest(func(_ string, _ runtime.PreflightOptions) runtime.FirecrackerPreflightResult {
 		preflightCalls++
 		return runtime.FirecrackerPreflightResult{
 			Status: runtime.PreflightInstallableMissing,
 			Checks: []runtime.PreflightCheck{{Name: "lima", OK: false, Installable: true}},
 		}
-	}
+	})
 	setupCalls := 0
-	setRuntimeSetupRunnerForTest(func(_ context.Context, _ string, _ string) error {
+	selection.SetRuntimeSetupRunnerForTest(func(_ context.Context, _ string, _ string) error {
 		setupCalls++
 		return fmt.Errorf("bootstrap failed")
 	})
 	t.Cleanup(func() {
-		resetRuntimeSetupRunnerForTest()
-		resetPreflightRunnerForTest()
+		selection.ResetRuntimeSetupRunnerForTest()
+		selection.ResetPreflightRunnerForTest()
 	})
 
 	factory := runtime.NewFactory(
@@ -1030,15 +1031,15 @@ func TestHandleWorkspaceCreate_UnsupportedNestedVirtFallsBackToSeatbelt(t *testi
 	mgr := workspacemgr.NewManager(t.TempDir())
 	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
-	setPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{{Status: runtime.PreflightUnsupportedNested}})
+	selection.SetPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{{Status: runtime.PreflightUnsupportedNested}})
 	setupCalls := 0
-	setRuntimeSetupRunnerForTest(func(_ context.Context, _ string, _ string) error {
+	selection.SetRuntimeSetupRunnerForTest(func(_ context.Context, _ string, _ string) error {
 		setupCalls++
 		return nil
 	})
 	t.Cleanup(func() {
-		resetRuntimeSetupRunnerForTest()
-		resetPreflightRunnerForTest()
+		selection.ResetRuntimeSetupRunnerForTest()
+		selection.ResetPreflightRunnerForTest()
 	})
 
 	factory := runtime.NewFactory(
@@ -1069,13 +1070,13 @@ func TestHandleWorkspaceCreate_HardFailReturnsStructuredPreflightError(t *testin
 	mgr := workspacemgr.NewManager(t.TempDir())
 	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
-	setPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{{
+	selection.SetPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{{
 		Status: runtime.PreflightHardFail,
 		Checks: []runtime.PreflightCheck{{Name: "kvm", OK: false, Message: "kvm unavailable"}},
 	}})
 	t.Cleanup(func() {
-		resetRuntimeSetupRunnerForTest()
-		resetPreflightRunnerForTest()
+		selection.ResetRuntimeSetupRunnerForTest()
+		selection.ResetPreflightRunnerForTest()
 	})
 
 	factory := runtime.NewFactory(
@@ -1131,7 +1132,7 @@ func TestHandleWorkspaceCreate_IgnoresInternalPreflightOverrideWhenDisabled(t *t
 	t.Setenv("NEXUS_INTERNAL_ENABLE_PREFLIGHT_OVERRIDE", "0")
 	t.Setenv("NEXUS_INTERNAL_PREFLIGHT_OVERRIDE", "hard_fail")
 
-	t.Cleanup(resetRuntimeSetupRunnerForTest)
+	t.Cleanup(selection.ResetRuntimeSetupRunnerForTest)
 
 	factory := runtime.NewFactory(
 		[]runtime.Capability{{Name: "runtime.firecracker", Available: true}},
@@ -1145,100 +1146,6 @@ func TestHandleWorkspaceCreate_IgnoresInternalPreflightOverrideWhenDisabled(t *t
 	}
 	if result.Workspace.Backend != "firecracker" {
 		t.Fatalf("expected firecracker backend when override disabled, got %q", result.Workspace.Backend)
-	}
-}
-
-func TestRuntimeSetupRunner_FailsFastInNonInteractiveWithoutPasswordlessSudo(t *testing.T) {
-	originalGOOS := runtimeSetupGOOS
-	originalIsRoot := runtimeSetupIsRootFn
-	originalSudoN := runtimeSetupSudoNOKFn
-	originalIsTTY := runtimeSetupIsTTYFn
-	originalResolveBinary := runtimeSetupResolveBinaryFn
-	originalRunCommand := runtimeSetupRunCommandFn
-	t.Cleanup(func() {
-		runtimeSetupGOOS = originalGOOS
-		runtimeSetupIsRootFn = originalIsRoot
-		runtimeSetupSudoNOKFn = originalSudoN
-		runtimeSetupIsTTYFn = originalIsTTY
-		runtimeSetupResolveBinaryFn = originalResolveBinary
-		runtimeSetupRunCommandFn = originalRunCommand
-	})
-
-	runtimeSetupGOOS = "linux"
-	runtimeSetupIsRootFn = func() bool { return false }
-	runtimeSetupSudoNOKFn = func() bool { return false }
-	runtimeSetupIsTTYFn = func(*os.File) bool { return false }
-
-	resolveCalls := 0
-	runtimeSetupResolveBinaryFn = func() (string, error) {
-		resolveCalls++
-		return "/tmp/nexus", nil
-	}
-
-	runCalls := 0
-	runtimeSetupRunCommandFn = func(context.Context, string, ...string) ([]byte, error) {
-		runCalls++
-		return nil, nil
-	}
-
-	err := runtimeSetupRunner(context.Background(), "/tmp/repo", "firecracker")
-	if err == nil {
-		t.Fatal("expected fail-fast error")
-	}
-	if !strings.Contains(strings.ToLower(err.Error()), "non-interactive") {
-		t.Fatalf("expected non-interactive fast-fail message, got %q", err.Error())
-	}
-	if !strings.Contains(err.Error(), "manual next steps") {
-		t.Fatalf("expected manual next steps in error, got %q", err.Error())
-	}
-	if !strings.Contains(err.Error(), "sudo -E nexus init --project-root /tmp/repo") {
-		t.Fatalf("expected sudo manual command in error, got %q", err.Error())
-	}
-	if resolveCalls != 0 {
-		t.Fatalf("expected no binary resolution on fast-fail path, got %d", resolveCalls)
-	}
-	if runCalls != 0 {
-		t.Fatalf("expected no command execution on fast-fail path, got %d", runCalls)
-	}
-}
-
-func TestRuntimeSetupRunner_InteractiveSessionAttemptsSetup(t *testing.T) {
-	originalGOOS := runtimeSetupGOOS
-	originalIsRoot := runtimeSetupIsRootFn
-	originalSudoN := runtimeSetupSudoNOKFn
-	originalIsTTY := runtimeSetupIsTTYFn
-	originalResolveBinary := runtimeSetupResolveBinaryFn
-	originalRunCommand := runtimeSetupRunCommandFn
-	t.Cleanup(func() {
-		runtimeSetupGOOS = originalGOOS
-		runtimeSetupIsRootFn = originalIsRoot
-		runtimeSetupSudoNOKFn = originalSudoN
-		runtimeSetupIsTTYFn = originalIsTTY
-		runtimeSetupResolveBinaryFn = originalResolveBinary
-		runtimeSetupRunCommandFn = originalRunCommand
-	})
-
-	runtimeSetupGOOS = "linux"
-	runtimeSetupIsRootFn = func() bool { return false }
-	runtimeSetupSudoNOKFn = func() bool { return false }
-	runtimeSetupIsTTYFn = func(*os.File) bool { return true }
-
-	runtimeSetupResolveBinaryFn = func() (string, error) {
-		return "/tmp/nexus", nil
-	}
-
-	runCalls := 0
-	runtimeSetupRunCommandFn = func(context.Context, string, ...string) ([]byte, error) {
-		runCalls++
-		return nil, nil
-	}
-
-	err := runtimeSetupRunner(context.Background(), "/tmp/repo", "firecracker")
-	if err != nil {
-		t.Fatalf("expected setup attempt to proceed in interactive session, got %v", err)
-	}
-	if runCalls != 1 {
-		t.Fatalf("expected one setup command run, got %d", runCalls)
 	}
 }
 
