@@ -20,7 +20,9 @@ type CreateSpec struct {
 	AgentProfile  string            `json:"agentProfile"`
 	Policy        Policy            `json:"policy"`
 	Backend       string            `json:"backend,omitempty"`
-	AuthBinding   map[string]string `json:"authBinding,omitempty"`
+	AuthBinding             map[string]string `json:"authBinding,omitempty"`
+	HostAuthBundleBase64    string            `json:"hostAuthBundle,omitempty"`
+	UseDaemonHostAuthBundle bool              `json:"useDaemonHostAuthBundle,omitempty"`
 }
 
 type Workspace struct {
