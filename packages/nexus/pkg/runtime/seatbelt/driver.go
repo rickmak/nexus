@@ -113,13 +113,10 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 					return nil
 				}
 			}
-			if strings.Contains(strings.ToLower(err.Error()), "prepare /workspace mount failed") {
-				return nil
-			}
 			d.mu.Lock()
 			delete(d.workspaces, req.WorkspaceID)
 			d.mu.Unlock()
-			return err
+			return fmt.Errorf("%w: %v", runtime.ErrWorkspaceMountFailed, err)
 		}
 	}
 

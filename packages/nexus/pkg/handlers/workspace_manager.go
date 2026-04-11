@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -628,7 +629,13 @@ func ensureLocalRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace
 		},
 	}
 	err = driver.Create(ctx, req)
-	if err != nil && !strings.Contains(err.Error(), "already exists") {
+	if err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			return nil
+		}
+		if errors.Is(err, runtime.ErrWorkspaceMountFailed) {
+			return nil
+		}
 		return &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("runtime create failed: %v", err)}
 	}
 

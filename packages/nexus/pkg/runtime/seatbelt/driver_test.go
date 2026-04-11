@@ -311,6 +311,29 @@ func TestEnsureLimaInstanceRunningCreatesMissingInstance(t *testing.T) {
 	}
 }
 
+func TestCreateReturnsErrWorkspaceMountFailedWhenAllMountsFail(t *testing.T) {
+	d := NewDriver()
+	oldLookPath := seatbeltLookPath
+	t.Cleanup(func() { seatbeltLookPath = oldLookPath })
+	seatbeltLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
+
+	d.bootstrapInstance = func(ctx context.Context, instance, hostHome string) error { return nil }
+	d.prepareWorkspaceFS = func(ctx context.Context, instance, localPath string) error {
+		return errors.New("prepare /workspace mount failed: instance unreachable")
+	}
+
+	err := d.Create(context.Background(), runtime.CreateRequest{
+		WorkspaceID: "ws-mount-fail",
+		ProjectRoot: t.TempDir(),
+	})
+	if err == nil {
+		t.Fatal("expected error when all mount candidates fail")
+	}
+	if !errors.Is(err, runtime.ErrWorkspaceMountFailed) {
+		t.Fatalf("expected ErrWorkspaceMountFailed sentinel, got: %v", err)
+	}
+}
+
 func TestIsTransientLimaShellError(t *testing.T) {
 	tests := []struct {
 		name    string

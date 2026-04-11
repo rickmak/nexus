@@ -2,7 +2,10 @@ package runtime
 
 import (
 	"context"
+	"errors"
 )
+
+var ErrWorkspaceMountFailed = errors.New("workspace mount not available")
 
 type Driver interface {
 	Backend() string
