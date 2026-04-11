@@ -12,12 +12,13 @@ nexus init && nexus create && nexus list && nexus start <workspace-id>
 
 `nexus create` prints the workspace id used by `start`, `ssh`, `tunnel`, `stop`, `remove`.
 
-**Create and host auth bundle:** `nexus create` runs `authbundle.BuildFromHome()` on **the machine running the CLI**, then sends it as `hostAuthBundle`. It only packs **registry-allowed** files under fixed tool roots (e.g. `.config/opencode`, `.config/codex`, `.codex`, `.config/openai`, `.claude`): mostly `.json`/`.yaml`/`.yml`, up to **512KiB per file**, skips symlinks and `.claude/projects/**`. Total gzip payload still capped at **4MiB** before base64. The daemon never reads its own `$HOME` to build this. SDK `workspace.create` without `hostAuthBundle` sends no tarball (see [`sdk.md`](sdk.md)).
+**Create and host auth bundle:** `nexus create` runs `authbundle.BuildFromHome()` on **the machine running the CLI**, then sends it as `hostAuthBundle`. Same packing rules as **`nexus auth-bundle`** (print or `--output` for CI). Details: [`host-auth-bundle.md`](host-auth-bundle.md). SDK `workspace.create` without `hostAuthBundle` sends no tarball (see [`sdk.md`](sdk.md)).
 
 ## Common commands
 
 ```bash
 nexus init [project-root] [--force]
+nexus auth-bundle [--output path]
 nexus create [--backend firecracker]
 nexus list
 nexus start|stop|remove|ssh|tunnel <workspace-id>
@@ -40,5 +41,6 @@ On a **cold Firecracker** workspace, the first run can take **several minutes** 
 ## Related
 
 - SDK: [`sdk.md`](sdk.md)
+- Host auth bundle: [`host-auth-bundle.md`](host-auth-bundle.md)
 - Workspace config: [`workspace-config.md`](workspace-config.md)
 

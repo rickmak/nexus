@@ -93,6 +93,9 @@ func main() {
 		return
 	case "doctor":
 		// handled below
+	case "auth-bundle":
+		runAuthBundleCommand(args)
+		return
 	default:
 		printUsage()
 		fmt.Fprintf(os.Stderr, "\nunknown subcommand: %s\n", command)
@@ -142,6 +145,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  nexus doctor --project-root <abs-path> --suite <name> [--compose-file docker-compose.yml] [--required-host-ports 5173,5174,8000] [--report-json path]")
 	fmt.Fprintln(os.Stderr, "  nexus init [project-root] [--force]")
 	fmt.Fprintln(os.Stderr, "  nexus exec --project-root <abs-path> [--timeout 10m] -- <command> [args...]")
+	fmt.Fprintln(os.Stderr, "  nexus auth-bundle [--output path]   (print base64 host auth bundle from $HOME, same rules as create)")
 	fmt.Fprintln(os.Stderr, "  nexus <list|create|start|stop|remove|fork|ssh|tunnel>")
 }
 
@@ -275,7 +279,7 @@ func runInit(opts initOptions) error {
 
 func runExec(opts execOptions) error {
 	if !filepath.IsAbs(opts.projectRoot) {
-		return fmt.Errorf("project root must be absolute: %s", opts.projectRoot)
+		return errNotAbsProjectRoot("project root", opts.projectRoot)
 	}
 	if err := applyRuntimeBackendFromWorkspace(opts.projectRoot); err != nil {
 		return err
@@ -358,13 +362,14 @@ func runExecWithKVMGroupReexec(commandPath string, args []string) error {
 
 func run(opts options) error {
 	if !filepath.IsAbs(opts.projectRoot) {
-		return fmt.Errorf("project root must be absolute: %s", opts.projectRoot)
+		return errNotAbsProjectRoot("project root", opts.projectRoot)
 	}
 	if err := applyRuntimeBackendFromWorkspace(opts.projectRoot); err != nil {
 		return err
 	}
 
 	execCtx := loadDoctorExecContext()
+	fmt.Printf("doctor: runtime backend=%s (cold firecracker: first run may take several minutes before suite probes)\n", execCtx.backend)
 	if execCtx.backend == "firecracker" {
 		if err := config.ValidateFirecrackerEnv(); err != nil {
 			return fmt.Errorf("firecracker configuration error: %w", err)

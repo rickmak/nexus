@@ -34,8 +34,10 @@ User-facing docs live under `docs/`: `tutorials/`, `reference/`, `dev/` (contrib
 ```text
 docs/
 ├── index.md
-├── tutorials/
-├── reference/   (cli, sdk, workspace-config)
+├── tutorials/   (installation, operations)
+├── reference/   (cli, sdk, host-auth-bundle, workspace-config)
 └── dev/         (contributing, roadmap)
 ```
+
+Canonical **host auth bundle** rules (roots, extensions, size): `docs/reference/host-auth-bundle.md`.
 

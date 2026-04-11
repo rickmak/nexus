@@ -57,7 +57,7 @@ Use the printed `<workspace-id>` with `ssh`, `tunnel`, `stop`, and `remove`.
 
 ### Host auth bundle (CLI vs SDK)
 
-- **`nexus create`** builds a tarball on **the machine running the CLI** (`authbundle.BuildFromHome`) and sends it as `hostAuthBundle`. Only **registry-allowed** files are packed (see `AGENTS.md` / `docs/reference/cli.md`: fixed roots, `.json`/`.yaml`/`.yml`, per-file size cap, no `.claude/projects/**`).
+- **`nexus create`** builds a tarball on **the machine running the CLI** and sends it as `hostAuthBundle`. **`nexus auth-bundle`** prints the same base64 (for CI) — see [`docs/reference/host-auth-bundle.md`](../../docs/reference/host-auth-bundle.md).
 - **SDK `workspace.create`:** omitting `hostAuthBundle` sends nothing; the daemon does not invent a bundle. Custom bundles are not re-filtered server-side—match the CLI registry if you need the same contents.
 
 ## Worktrees (parallel local branches)
@@ -87,7 +87,7 @@ nexus doctor --project-root "$(pwd -P)" --suite local
 
 (Add a `docker-compose.yml` at the project root when you want tunnel port discovery; this demo ships without one.)
 
-For backend selection and doctor latency in general, see [`docs/reference/cli.md`](../../docs/reference/cli.md) (`nexus doctor` and backends).
+For backend selection, doctor latency, and fork vs workspace vs worktree, see [`docs/tutorials/operations.md`](../../docs/tutorials/operations.md) and [`docs/reference/cli.md`](../../docs/reference/cli.md).
 
 ## Layout
 
