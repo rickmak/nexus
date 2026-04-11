@@ -221,10 +221,8 @@ func runInit(opts initOptions) error {
 		return fmt.Errorf("create .nexus directory: %w", err)
 	}
 
-	for _, dir := range []string{"lifecycles", "probe", "check", "e2e"} {
-		if err := os.MkdirAll(filepath.Join(nexusDir, dir), 0o755); err != nil {
-			return fmt.Errorf("create .nexus/%s directory: %w", dir, err)
-		}
+	if err := os.MkdirAll(filepath.Join(nexusDir, "lifecycles"), 0o755); err != nil {
+		return fmt.Errorf("create .nexus/lifecycles directory: %w", err)
 	}
 
 	workspaceCfg := config.WorkspaceConfig{
@@ -238,13 +236,10 @@ func runInit(opts initOptions) error {
 	workspaceJSON = append(workspaceJSON, '\n')
 
 	files := map[string]string{
-		filepath.Join(nexusDir, "workspace.json"):                 string(workspaceJSON),
-		filepath.Join(nexusDir, "lifecycles", "setup.sh"):         "#!/usr/bin/env bash\nset -euo pipefail\necho 'setup: no-op'\n",
-		filepath.Join(nexusDir, "lifecycles", "start.sh"):         "#!/usr/bin/env bash\nset -euo pipefail\necho 'start: no-op'\n",
-		filepath.Join(nexusDir, "lifecycles", "teardown.sh"):      "#!/usr/bin/env bash\nset -euo pipefail\necho 'teardown: no-op'\n",
-		filepath.Join(nexusDir, "probe", "01-runtime-backend.sh"): "#!/usr/bin/env bash\nset -euo pipefail\necho \"runtime-backend probe: backend=${NEXUS_RUNTIME_BACKEND:-unknown}\"\n",
-		filepath.Join(nexusDir, "check", "20-tooling-runtime.sh"): "#!/usr/bin/env bash\nset -euo pipefail\ncommand -v bash >/dev/null 2>&1\ncommand -v curl >/dev/null 2>&1 || true\necho 'tooling-runtime check passed'\n",
-		filepath.Join(nexusDir, "e2e", "run.sh"):                  "#!/usr/bin/env bash\nset -euo pipefail\necho 'e2e: no-op'\n",
+		filepath.Join(nexusDir, "workspace.json"):            string(workspaceJSON),
+		filepath.Join(nexusDir, "lifecycles", "setup.sh"):    "#!/usr/bin/env bash\nset -euo pipefail\necho 'setup: no-op'\n",
+		filepath.Join(nexusDir, "lifecycles", "start.sh"):    "#!/usr/bin/env bash\nset -euo pipefail\necho 'start: no-op'\n",
+		filepath.Join(nexusDir, "lifecycles", "teardown.sh"): "#!/usr/bin/env bash\nset -euo pipefail\necho 'teardown: no-op'\n",
 	}
 
 	for path, content := range files {

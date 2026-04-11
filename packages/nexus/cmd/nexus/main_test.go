@@ -956,9 +956,6 @@ func TestRunInitCreatesNexusWorkspaceFiles(t *testing.T) {
 		".nexus/lifecycles/setup.sh",
 		".nexus/lifecycles/start.sh",
 		".nexus/lifecycles/teardown.sh",
-		".nexus/probe/01-runtime-backend.sh",
-		".nexus/check/20-tooling-runtime.sh",
-		".nexus/e2e/run.sh",
 	} {
 		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
 			t.Fatalf("expected %s to be created: %v", rel, err)
