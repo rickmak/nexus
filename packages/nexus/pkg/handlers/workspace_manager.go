@@ -214,10 +214,7 @@ func HandleWorkspaceRestore(ctx context.Context, params json.RawMessage, mgr *wo
 	var requiredBackends []string
 
 	if factory != nil {
-		requiredBackends, requiredCaps, cfgErr := create.RuntimeSelectionFromRepo(ws.Repo)
-		if cfgErr != nil {
-			return &WorkspaceRestoreResult{}, &rpckit.RPCError{Code: rpckit.ErrInvalidParams.Code, Message: cfgErr.Error()}
-		}
+		requiredBackends, requiredCaps := create.DefaultPlatformHints()
 
 		driver, err := factory.SelectDriver(requiredBackends, requiredCaps)
 		if err != nil {

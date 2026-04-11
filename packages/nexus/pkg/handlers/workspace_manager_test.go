@@ -1150,39 +1150,12 @@ func TestHandleWorkspaceCreate_IgnoresInternalPreflightOverrideWhenDisabled(t *t
 	}
 }
 
-func TestLoadRuntimeSelectionFromRepoConfig_Succeeds(t *testing.T) {
-	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
-
-	required, caps, err := create.RuntimeSelectionFromRepo(repo)
-	if err != nil {
-		t.Fatalf("expected success, got %v", err)
-	}
+func TestDefaultPlatformHints(t *testing.T) {
+	required, caps := create.DefaultPlatformHints()
 	if len(required) != 2 || required[0] != "darwin" || required[1] != "linux" {
-		t.Fatalf("expected runtime.required [darwin linux], got %v", required)
+		t.Fatalf("expected [darwin linux], got %v", required)
 	}
 	if len(caps) != 0 {
 		t.Fatalf("expected no required capabilities, got %v", caps)
-	}
-}
-
-func TestLoadRuntimeSelectionFromRepoConfig_MissingRuntimeRequiredDefaultsToLinux(t *testing.T) {
-	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
-
-	required, caps, err := create.RuntimeSelectionFromRepo(repo)
-	if err != nil {
-		t.Fatalf("expected success when runtime.required is missing, got %v", err)
-	}
-	if len(required) != 2 || required[0] != "darwin" || required[1] != "linux" {
-		t.Fatalf("expected default runtime.required [darwin linux], got %v", required)
-	}
-	if len(caps) != 0 {
-		t.Fatalf("expected empty capabilities, got %v", caps)
-	}
-}
-
-func TestLoadRuntimeSelectionFromRepoConfig_NonLocalRepoFails(t *testing.T) {
-	_, _, err := create.RuntimeSelectionFromRepo("git@github.com:org/repo.git")
-	if err == nil {
-		t.Fatal("expected error for non-local repo")
 	}
 }
