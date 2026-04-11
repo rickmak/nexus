@@ -1961,7 +1961,7 @@ func TestRunExecReexecsWithSGKVMOnKVMPermissionError(t *testing.T) {
 	if !called {
 		t.Fatal("expected sg kvm reexec to be attempted")
 	}
-	if len(gotArgs) < 7 || gotArgs[0] != "exec" {
+	if len(gotArgs) < 6 || gotArgs[0] != "exec" || gotArgs[2] != "--timeout" || gotArgs[4] != "--" {
 		t.Fatalf("unexpected reexec args: %v", gotArgs)
 	}
 }
@@ -2032,7 +2032,7 @@ func TestRunDoctorReexecsWithSGKVMOnKVMPermissionError(t *testing.T) {
 		return nil
 	}
 
-	os.Args = []string{"nexus", "doctor", "--project-root", workspaceRoot, "--suite", "local"}
+	os.Args = []string{"nexus", "doctor", "--suite", "local"}
 
 	err := run(options{projectRoot: workspaceRoot, suite: "local"})
 	if err != nil {

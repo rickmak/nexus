@@ -62,7 +62,7 @@ var runtimeSetupRunner = func(ctx context.Context, repo, backend string) error {
 		return err
 	}
 
-	if out, err := runtimeSetupRunCommandFn(ctx, binary, "init", "--project-root", repo); err != nil {
+	if out, err := runtimeSetupRunCommandFn(ctx, binary, "init", repo); err != nil {
 		msg := strings.TrimSpace(string(out))
 		if msg == "" {
 			return fmt.Errorf("nexus init failed: %w", err)
@@ -145,7 +145,7 @@ func ResetRuntimeSetupRunnerForTest() {
 			return err
 		}
 
-		if out, err := runtimeSetupRunCommandFn(ctx, binary, "init", "--project-root", repo); err != nil {
+		if out, err := runtimeSetupRunCommandFn(ctx, binary, "init", repo); err != nil {
 			msg := strings.TrimSpace(string(out))
 			if msg == "" {
 				return fmt.Errorf("nexus init failed: %w", err)
@@ -167,7 +167,7 @@ func runtimeSetupRequiresManualPrivilege() bool {
 }
 
 func runtimeSetupManualPrivilegeError(repo string) error {
-	return fmt.Errorf("firecracker runtime setup requires passwordless sudo or root access in non-interactive sessions\n\nmanual next steps:\n  sudo -E nexus init --project-root %s", repo)
+	return fmt.Errorf("firecracker runtime setup requires passwordless sudo or root access in non-interactive sessions\n\nmanual next steps:\n  sudo -E nexus init %s", repo)
 }
 
 func runtimePreflightFailure(result runtime.FirecrackerPreflightResult, setupErr error) *rpckit.RPCError {

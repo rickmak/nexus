@@ -101,7 +101,6 @@ func main() {
 
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	projectRoot := fs.String("project-root", "", "absolute path to downstream project repository")
 	suite := fs.String("suite", "", "doctor suite name")
 	composeFile := fs.String("compose-file", "docker-compose.yml", "compose file path relative to project root")
 	requiredPorts := fs.String("required-host-ports", "", "comma-separated required published host ports (defaults to workspace config doctor.requiredHostPorts)")
@@ -110,8 +109,19 @@ func main() {
 		os.Exit(2)
 	}
 
-	if *projectRoot == "" || *suite == "" {
-		fmt.Fprintln(os.Stderr, "--project-root and --suite are required")
+	if *suite == "" {
+		fmt.Fprintln(os.Stderr, "--suite is required")
+		os.Exit(2)
+	}
+	if fs.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "usage: nexus doctor --suite <name> [--compose-file docker-compose.yml] [--required-host-ports 5173,5174,8000] [--report-json path]")
+		os.Exit(2)
+	}
+
+	projectRoot := "."
+	absProjectRoot, err := filepath.Abs(projectRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve project root: %v\n", err)
 		os.Exit(2)
 	}
 
@@ -126,7 +136,7 @@ func main() {
 	}
 
 	if err := run(options{
-		projectRoot:       *projectRoot,
+		projectRoot:       absProjectRoot,
 		suite:             *suite,
 		composeFile:       *composeFile,
 		requiredHostPorts: ports,
@@ -139,16 +149,15 @@ func main() {
 
 func printUsage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
-	fmt.Fprintln(os.Stderr, "  nexus doctor --project-root <abs-path> --suite <name> [--compose-file docker-compose.yml] [--required-host-ports 5173,5174,8000] [--report-json path]")
+	fmt.Fprintln(os.Stderr, "  nexus doctor --suite <name> [--compose-file docker-compose.yml] [--required-host-ports 5173,5174,8000] [--report-json path]")
 	fmt.Fprintln(os.Stderr, "  nexus init [project-root] [--force]")
-	fmt.Fprintln(os.Stderr, "  nexus exec --project-root <abs-path> [--timeout 10m] -- <command> [args...]")
+	fmt.Fprintln(os.Stderr, "  nexus exec [path] [--timeout 10m] -- <command> [args...]")
 	fmt.Fprintln(os.Stderr, "  nexus <list|create|start|stop|remove|fork|ssh|tunnel>")
 }
 
 func runInitCommand(args []string) {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	projectRootFlag := fs.String("project-root", "", "project repository path (defaults to current directory)")
 	force := fs.Bool("force", false, "overwrite existing .nexus files")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
@@ -159,16 +168,9 @@ func runInitCommand(args []string) {
 		fmt.Fprintln(os.Stderr, "usage: nexus init [project-root] [--force]")
 		os.Exit(2)
 	}
-	projectRoot := strings.TrimSpace(*projectRootFlag)
+	projectRoot := "."
 	if len(rest) == 1 {
-		if projectRoot != "" {
-			fmt.Fprintln(os.Stderr, "nexus init: use either --project-root or positional project-root")
-			os.Exit(2)
-		}
 		projectRoot = strings.TrimSpace(rest[0])
-	}
-	if projectRoot == "" {
-		projectRoot = "."
 	}
 	absProjectRoot, err := filepath.Abs(projectRoot)
 	if err != nil {
@@ -186,25 +188,59 @@ func runInitCommand(args []string) {
 }
 
 func runExecCommand(args []string) {
-	fs := flag.NewFlagSet("exec", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	projectRoot := fs.String("project-root", "", "absolute path to downstream project repository")
-	timeout := fs.Duration("timeout", 10*time.Minute, "command timeout")
-	if err := fs.Parse(args); err != nil {
+	dash := -1
+	for i, a := range args {
+		if a == "--" {
+			dash = i
+			break
+		}
+	}
+	if dash == -1 {
+		fmt.Fprintln(os.Stderr, "command is required")
+		os.Exit(2)
+	}
+	preDash := args[:dash]
+	postDash := args[dash+1:]
+	if len(postDash) == 0 {
+		fmt.Fprintln(os.Stderr, "command is required")
 		os.Exit(2)
 	}
 
-	rest := fs.Args()
-	if *projectRoot == "" || len(rest) == 0 {
-		fmt.Fprintln(os.Stderr, "--project-root and command are required")
+	timeout := 10 * time.Minute
+	var pos []string
+	for i := 0; i < len(preDash); {
+		if preDash[i] == "--timeout" && i+1 < len(preDash) {
+			d, err := time.ParseDuration(preDash[i+1])
+			if err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(2)
+			}
+			timeout = d
+			i += 2
+			continue
+		}
+		pos = append(pos, preDash[i])
+		i++
+	}
+	if len(pos) > 1 {
+		fmt.Fprintln(os.Stderr, "usage: nexus exec [path] [--timeout 10m] -- <command> [args...]")
+		os.Exit(2)
+	}
+	projectRoot := "."
+	if len(pos) == 1 {
+		projectRoot = pos[0]
+	}
+	absProjectRoot, err := filepath.Abs(projectRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve project root: %v\n", err)
 		os.Exit(2)
 	}
 
 	if err := runExec(execOptions{
-		projectRoot: *projectRoot,
-		timeout:     *timeout,
-		command:     rest[0],
-		args:        rest[1:],
+		projectRoot: absProjectRoot,
+		timeout:     timeout,
+		command:     postDash[0],
+		args:        postDash[1:],
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -292,7 +328,7 @@ func runExec(opts execOptions) error {
 		if shouldReexecExecWithKVMGroup(execCtx.backend, err) {
 			cmdPath := setupCommandPath()
 			reexecArgs := make([]string, 0, len(opts.args)+8)
-			reexecArgs = append(reexecArgs, "exec", "--project-root", opts.projectRoot, "--timeout", opts.timeout.String(), "--", opts.command)
+			reexecArgs = append(reexecArgs, "exec", opts.projectRoot, "--timeout", opts.timeout.String(), "--", opts.command)
 			reexecArgs = append(reexecArgs, opts.args...)
 			if reexecErr := execKVMGroupReexecRunner(cmdPath, reexecArgs); reexecErr == nil {
 				return nil

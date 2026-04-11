@@ -42,12 +42,12 @@ run_seed_nexus_init() {
   )
   local abs
   abs="$(cd "$seed/repo" && pwd)"
-  echo "flows e2e: nexus init --project-root $abs (runtime tools via preflight autoinstall when needed)"
+  echo "flows e2e: nexus init $abs (runtime tools via preflight autoinstall when needed)"
   if [[ "$(uname -s)" == "Linux" ]]; then
-    sudo -E env PATH="$PATH" "$NEXUS_CLI_PATH" init --project-root "$abs" --force
+    sudo -E env PATH="$PATH" "$NEXUS_CLI_PATH" init "$abs" --force
     sudo rm -rf "$seed"
   else
-    "$NEXUS_CLI_PATH" init --project-root "$abs" --force
+    "$NEXUS_CLI_PATH" init "$abs" --force
     rm -rf "$seed"
   fi
 }
