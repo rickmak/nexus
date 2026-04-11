@@ -15,7 +15,7 @@ const client = new WorkspaceClient({
 });
 await client.connect();
 const ws = await client.workspaces.open('ws-example');
-console.log((await ws.exec('bash', ['-lc', 'echo ok'])).stdout);
+console.log((await ws.exec.exec('bash', ['-lc', 'echo ok'])).stdout);
 await client.disconnect();
 ```
 

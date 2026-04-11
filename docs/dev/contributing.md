@@ -41,3 +41,4 @@ Conventional Commits, for example:
 - `feat(workspace-daemon): add compose port auto-forward`
 - `fix(workspace-sdk): align spotlight response types`
 - `docs: update workspace config reference`
+

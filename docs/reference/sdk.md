@@ -44,13 +44,22 @@ await client.workspaces.remove(ws.id);
 await client.disconnect();
 ```
 
-## Create spec
+## `workspace.create` spec
 
-`WorkspaceCreateSpec` includes `repo`, `workspaceName`, `agentProfile`, optional `ref`, `policy` (`authProfiles`, `sshAgentForward`, `gitCredentialMode`), and optional `backend`. Types: `packages/sdk/js/src/types.ts`.
+`WorkspaceCreateSpec` (`packages/sdk/js/src/types.ts`) includes:
 
-## Remote client vs remote daemon
+| Field | Role |
+|--------|------|
+| `repo`, `workspaceName`, `agentProfile` | Required for create |
+| `ref`, `policy`, `backend` | Optional |
+| `hostAuthBundle` | Optional. Base64-encoded **gzip-compressed tar** of config trees to unpack in the guest (same layout as the CLI’s bundle: paths under `$HOME` such as `.config/opencode`, `.claude`, …). **Max 4MiB after base64 decode**; invalid or oversized payloads are rejected. If omitted, **no** host config tarball is sent—the daemon does not read its own `$HOME` to fabricate one. |
 
-Prefer passing auth material via create-time policy / stored `AuthBinding` and short-lived relay tokens (`mintAuthRelay` / `revokeAuthRelay`) rather than assuming files on the daemon host. Daemon-side behavior that still reads the daemon’s home for tooling configs is a known limitation for fully remote daemons (see Firecracker driver host auth bundle).
+For command execution and API keys, prefer **`AuthBinding`** on the workspace and **`mintAuthRelay` / `revokeAuthRelay`** instead of assuming files on the daemon host.
+
+## Remote daemon
+
+- **Secrets and API keys:** Use `policy` / `AuthBinding` and auth relay tokens for `exec`/`ssh`, not daemon-local OAuth files.
+- **Tooling config tarball:** Supply `hostAuthBundle` from the **client** when you need guest copies of opencode/codex/claude-style configs. The CLI does this automatically for `nexus workspace create` by building the archive on the machine where the CLI runs.
 
 ## Related
 

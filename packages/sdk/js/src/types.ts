@@ -162,6 +162,7 @@ export interface WorkspaceCreateSpec {
   policy?: WorkspacePolicy;
   /** Preferred backend (e.g. "local", "lxc", "firecracker"). Daemon resolves best available if omitted. */
   backend?: string;
+  hostAuthBundle?: string;
 }
 
 export interface WorkspaceRecord {

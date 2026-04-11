@@ -12,15 +12,13 @@ nav:
   - Home: index.md
   - Tutorials:
     - Installation: tutorials/installation.md
-  - Explanation:
-    - Architecture: explanation/architecture.md
   - Reference:
-    - Workspace Daemon: reference/workspace-daemon.md
-    - Workspace SDK: reference/workspace-sdk.md
+    - CLI: reference/cli.md
+    - SDK: reference/sdk.md
     - Workspace Config: reference/workspace-config.md
   - Development:
     - Contributing: dev/contributing.md
-    - Architecture Decisions: dev/decisions/
+    - Roadmap: dev/roadmap.md
 
 theme:
   name: material

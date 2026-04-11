@@ -21,7 +21,7 @@ Or: `cd packages/nexus && go test ./...` and `cd packages/sdk/js && pnpm exec ts
 
 ## Docs
 
-When behavior changes, update `docs/reference/cli.md`, `sdk.md`, and `workspace-config.md` as needed. Developer notes: `docs/dev/contributing.md`, architecture: `docs/explanation/architecture.md`.
+When behavior changes, update `docs/reference/cli.md`, `sdk.md`, and `workspace-config.md` as needed. Contributor notes: `docs/dev/contributing.md`.
 
 ## Commits
 

@@ -14,9 +14,12 @@ nexus init && nexus create && nexus list && nexus start <workspace-id>
 
 ## By goal
 
-| Goal | Doc |
-|------|-----|
-| Install | [`docs/tutorials/installation.md`](tutorials/installation.md) |
-| CLI | [`docs/reference/cli.md`](reference/cli.md) |
-| JS/TS SDK | [`docs/reference/sdk.md`](reference/sdk.md) |
-| `.nexus` config | [`docs/reference/workspace-config.md`](reference/workspace-config.md) |
+
+| Goal            | Doc                                                                   |
+| --------------- | --------------------------------------------------------------------- |
+| Install         | `[docs/tutorials/installation.md](tutorials/installation.md)`         |
+| CLI             | `[docs/reference/cli.md](reference/cli.md)`                           |
+| JS/TS SDK       | `[docs/reference/sdk.md](reference/sdk.md)`                           |
+| `.nexus` config | `[docs/reference/workspace-config.md](reference/workspace-config.md)` |
+
+
