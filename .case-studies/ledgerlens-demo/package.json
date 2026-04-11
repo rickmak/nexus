@@ -4,6 +4,7 @@
   "private": true,
   "description": "Nexus parallel-workstream case study (no runtime deps)",
   "scripts": {
-    "check": "node -e \"console.log('ledgerlens-demo: ok')\""
+    "check": "node -e \"console.log('ledgerlens-demo: ok')\"",
+    "doctor": "bash scripts/doctor.sh"
   }
 }

@@ -27,12 +27,18 @@ nexus doctor --project-root <abs-path> --suite <name> \
   [--compose-file docker-compose.yml] [--required-host-ports 5173,5174] [--report-json path]
 ```
 
-- `**nexus ssh`:** optional `--shell`, `--command` (non-interactive one shot).
-- `**nexus tunnel`:** applies compose port forwards; blocks until Ctrl-C.
-- `**nexus init`:** default path is cwd; `--force` overwrites `.nexus` scaffold. Host setup may escalate privileges (`sudo`); use `sudo -E nexus init --force` only where non-interactive sudo is unavailable.
+- **`nexus ssh`:** optional `--shell`, `--command` (non-interactive one shot).
+- **`nexus tunnel`:** applies compose port forwards; blocks until Ctrl-C.
+- **`nexus init`:** default path is cwd; `--force` overwrites `.nexus` scaffold. Host setup may escalate privileges (`sudo`); use `sudo -E nexus init --force` only where non-interactive sudo is unavailable.
+
+## `nexus doctor` and backends
+
+`--project-root` and `--suite` are required. There is no top-level `--timeout` on `doctor` (unlike `nexus exec`); individual probes use their own timeouts inside the implementation.
+
+On a **cold Firecracker** workspace, the first run can take **several minutes** while the guest and tooling bootstrap—silence on the terminal can mean runtime setup, not only your `.nexus/probe` scripts. **Seatbelt** (often selected on macOS when nested virtualization is unavailable) is usually much faster. Backend selection follows `nexus create` / host capabilities; see [`workspace-config.md`](workspace-config.md) for runtime notes.
 
 ## Related
 
-- SDK: `[sdk.md](sdk.md)`
-- Workspace config: `[workspace-config.md](workspace-config.md)`
+- SDK: [`sdk.md`](sdk.md)
+- Workspace config: [`workspace-config.md`](workspace-config.md)
 
