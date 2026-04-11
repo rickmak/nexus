@@ -27,7 +27,6 @@ import (
 
 type options struct {
 	projectRoot       string
-	suite             string
 	composeFile       string
 	requiredHostPorts []int
 	reportJSON        string
@@ -101,7 +100,6 @@ func main() {
 
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	suite := fs.String("suite", "", "doctor suite name")
 	composeFile := fs.String("compose-file", "docker-compose.yml", "compose file path relative to project root")
 	requiredPorts := fs.String("required-host-ports", "", "comma-separated required published host ports (defaults to workspace config doctor.requiredHostPorts)")
 	reportJSON := fs.String("report-json", "", "optional path to write doctor probe results as JSON")
@@ -109,12 +107,8 @@ func main() {
 		os.Exit(2)
 	}
 
-	if *suite == "" {
-		fmt.Fprintln(os.Stderr, "--suite is required")
-		os.Exit(2)
-	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(os.Stderr, "usage: nexus doctor --suite <name> [--compose-file docker-compose.yml] [--required-host-ports 5173,5174,8000] [--report-json path]")
+		fmt.Fprintln(os.Stderr, "usage: nexus doctor [--compose-file docker-compose.yml] [--required-host-ports 5173,5174,8000] [--report-json path]")
 		os.Exit(2)
 	}
 
@@ -137,7 +131,6 @@ func main() {
 
 	if err := run(options{
 		projectRoot:       absProjectRoot,
-		suite:             *suite,
 		composeFile:       *composeFile,
 		requiredHostPorts: ports,
 		reportJSON:        strings.TrimSpace(*reportJSON),
@@ -149,7 +142,7 @@ func main() {
 
 func printUsage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
-	fmt.Fprintln(os.Stderr, "  nexus doctor --suite <name> [--compose-file docker-compose.yml] [--required-host-ports 5173,5174,8000] [--report-json path]")
+	fmt.Fprintln(os.Stderr, "  nexus doctor [--compose-file docker-compose.yml] [--required-host-ports 5173,5174,8000] [--report-json path]")
 	fmt.Fprintln(os.Stderr, "  nexus init [project-root] [--force]")
 	fmt.Fprintln(os.Stderr, "  nexus exec [path] [--timeout 10m] -- <command> [args...]")
 	fmt.Fprintln(os.Stderr, "  nexus <list|create|start|stop|remove|fork|ssh|tunnel>")
@@ -513,7 +506,7 @@ func run(opts options) error {
 		return err
 	}
 
-	fmt.Printf("doctor suite passed: %s (discovered %d compose ports)\n", opts.suite, len(publishedPorts))
+	fmt.Printf("doctor passed (discovered %d compose ports)\n", len(publishedPorts))
 	return nil
 }
 

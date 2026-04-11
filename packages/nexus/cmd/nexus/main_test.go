@@ -1219,7 +1219,6 @@ func TestDoctor_StillRunsTestsWhenRequiredProbeFails(t *testing.T) {
 	reportPath := filepath.Join(t.TempDir(), "report.json")
 	err := run(options{
 		projectRoot: workspaceRoot,
-		suite:       "test-suite",
 		reportJSON:  reportPath,
 	})
 
@@ -1311,7 +1310,6 @@ func TestDoctor_ProbesPassThenTestsRun(t *testing.T) {
 	reportPath := filepath.Join(t.TempDir(), "report.json")
 	err := run(options{
 		projectRoot: workspaceRoot,
-		suite:       "test-suite",
 		reportJSON:  reportPath,
 	})
 
@@ -1396,7 +1394,6 @@ func TestDoctor_RequiredTestFailureReturnsError(t *testing.T) {
 	reportPath := filepath.Join(t.TempDir(), "report.json")
 	err := run(options{
 		projectRoot: workspaceRoot,
-		suite:       "test-suite",
 		reportJSON:  reportPath,
 	})
 
@@ -2032,9 +2029,9 @@ func TestRunDoctorReexecsWithSGKVMOnKVMPermissionError(t *testing.T) {
 		return nil
 	}
 
-	os.Args = []string{"nexus", "doctor", "--suite", "local"}
+	os.Args = []string{"nexus", "doctor"}
 
-	err := run(options{projectRoot: workspaceRoot, suite: "local"})
+	err := run(options{projectRoot: workspaceRoot})
 	if err != nil {
 		t.Fatalf("expected run to return nil after successful sg kvm reexec, got %v", err)
 	}
@@ -2153,7 +2150,7 @@ func TestRunFirecrackerDoctorFailsFastWhenGuestDockerUnavailable(t *testing.T) {
 	doctorExecBootstrapRunner = func(projectRoot string) error { return nil }
 	doctorFirecrackerRuntimeVerifier = func() error { return errors.New("docker unavailable in guest") }
 
-	err = run(options{projectRoot: root, suite: "local"})
+	err = run(options{projectRoot: root})
 	if err == nil {
 		t.Fatal("expected run to fail fast when guest docker is unavailable")
 	}

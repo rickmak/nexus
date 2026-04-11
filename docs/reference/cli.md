@@ -22,18 +22,18 @@ nexus create [--backend firecracker]
 nexus list
 nexus start|stop|remove|ssh|tunnel <workspace-id>
 nexus fork --id <workspace-id> --name <child-name> [--ref <child-ref>]
-nexus exec --project-root <abs-path> [--timeout 10m] -- <command> [args...]
-nexus doctor --project-root <abs-path> --suite <name> \
-  [--compose-file docker-compose.yml] [--required-host-ports 5173,5174] [--report-json path]
+nexus exec [path] [--timeout 10m] -- <command> [args...]
+nexus doctor [--compose-file docker-compose.yml] [--required-host-ports 5173,5174] [--report-json path]
 ```
 
 - **`nexus ssh`:** optional `--shell`, `--command` (non-interactive one shot).
 - **`nexus tunnel`:** applies compose port forwards; blocks until Ctrl-C.
 - **`nexus init`:** default path is cwd; `--force` overwrites `.nexus` scaffold. Host setup may escalate privileges (`sudo`); use `sudo -E nexus init --force` only where non-interactive sudo is unavailable.
+- **`nexus exec`:** default path is cwd; pass an explicit path as first argument to target another directory.
 
 ## `nexus doctor` and backends
 
-`--project-root` and `--suite` are required. There is no top-level `--timeout` on `doctor` (unlike `nexus exec`); individual probes use their own timeouts inside the implementation.
+`nexus doctor` runs from the current directory (or the path passed to `nexus exec`). There is no top-level `--timeout`; individual probes use their own timeouts.
 
 On a **cold Firecracker** workspace, the first run can take **several minutes** while the guest and tooling bootstrap—silence on the terminal can mean runtime setup, not only your `.nexus/probe` scripts. **Seatbelt** (often selected on macOS when nested virtualization is unavailable) is usually much faster. Backend selection follows `nexus create` / host capabilities; see [`workspace-config.md`](workspace-config.md) for runtime notes.
 
