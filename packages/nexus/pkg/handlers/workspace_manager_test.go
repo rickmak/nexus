@@ -11,6 +11,7 @@ import (
 
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/selection"
+	"github.com/inizio/nexus/packages/nexus/pkg/workspace/create"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspacemgr"
 )
 
@@ -1152,7 +1153,7 @@ func TestHandleWorkspaceCreate_IgnoresInternalPreflightOverrideWhenDisabled(t *t
 func TestLoadRuntimeSelectionFromRepoConfig_Succeeds(t *testing.T) {
 	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
-	required, caps, err := loadRuntimeSelectionFromRepoConfig(repo)
+	required, caps, err := create.RuntimeSelectionFromRepo(repo)
 	if err != nil {
 		t.Fatalf("expected success, got %v", err)
 	}
@@ -1167,7 +1168,7 @@ func TestLoadRuntimeSelectionFromRepoConfig_Succeeds(t *testing.T) {
 func TestLoadRuntimeSelectionFromRepoConfig_MissingRuntimeRequiredDefaultsToLinux(t *testing.T) {
 	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
-	required, caps, err := loadRuntimeSelectionFromRepoConfig(repo)
+	required, caps, err := create.RuntimeSelectionFromRepo(repo)
 	if err != nil {
 		t.Fatalf("expected success when runtime.required is missing, got %v", err)
 	}
@@ -1180,7 +1181,7 @@ func TestLoadRuntimeSelectionFromRepoConfig_MissingRuntimeRequiredDefaultsToLinu
 }
 
 func TestLoadRuntimeSelectionFromRepoConfig_NonLocalRepoFails(t *testing.T) {
-	_, _, err := loadRuntimeSelectionFromRepoConfig("git@github.com:org/repo.git")
+	_, _, err := create.RuntimeSelectionFromRepo("git@github.com:org/repo.git")
 	if err == nil {
 		t.Fatal("expected error for non-local repo")
 	}

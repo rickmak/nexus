@@ -5,14 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
-	"path/filepath"
 	"strings"
 	"time"
 
 	rpckit "github.com/inizio/nexus/packages/nexus/pkg/rpcerrors"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
-	"github.com/inizio/nexus/packages/nexus/pkg/runtime/selection"
+	"github.com/inizio/nexus/packages/nexus/pkg/workspace/create"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspacemgr"
 )
 
@@ -106,19 +104,12 @@ func HandleWorkspaceCreate(ctx context.Context, params json.RawMessage, mgr *wor
 		return nil, rpckit.ErrInvalidParams
 	}
 
-	spec := p.Spec
-
-	if factory != nil {
-		requiredBackends, requiredCaps, cfgErr := loadRuntimeSelectionFromRepoConfig(spec.Repo)
-		if cfgErr != nil {
-			return &WorkspaceCreateResult{}, &rpckit.RPCError{Code: rpckit.ErrInvalidParams.Code, Message: cfgErr.Error()}
+	spec, prepErr, emptyResultOnErr := create.PrepareCreate(ctx, p.Spec, factory)
+	if prepErr != nil {
+		if emptyResultOnErr {
+			return &WorkspaceCreateResult{}, prepErr
 		}
-
-		backend, selErr := selection.SelectBackend(ctx, spec.Repo, requiredBackends, requiredCaps, factory)
-		if selErr != nil {
-			return nil, selErr
-		}
-		spec.Backend = backend
+		return nil, prepErr
 	}
 
 	ws, err := mgr.Create(ctx, spec)
@@ -223,7 +214,7 @@ func HandleWorkspaceRestore(ctx context.Context, params json.RawMessage, mgr *wo
 	var requiredBackends []string
 
 	if factory != nil {
-		requiredBackends, requiredCaps, cfgErr := loadRuntimeSelectionFromRepoConfig(ws.Repo)
+		requiredBackends, requiredCaps, cfgErr := create.RuntimeSelectionFromRepo(ws.Repo)
 		if cfgErr != nil {
 			return &WorkspaceRestoreResult{}, &rpckit.RPCError{Code: rpckit.ErrInvalidParams.Code, Message: cfgErr.Error()}
 		}
@@ -372,26 +363,6 @@ func HandleWorkspaceFork(ctx context.Context, params json.RawMessage, mgr *works
 	}
 
 	return &WorkspaceForkResult{Forked: true, Workspace: child}, nil
-}
-
-func loadRuntimeSelectionFromRepoConfig(repo string) ([]string, []string, error) {
-	repoPath := strings.TrimSpace(repo)
-	if repoPath == "" {
-		return nil, nil, fmt.Errorf("repo is required")
-	}
-	if !filepath.IsAbs(repoPath) {
-		abs, err := filepath.Abs(repoPath)
-		if err == nil {
-			repoPath = abs
-		}
-	}
-
-	info, err := os.Stat(repoPath)
-	if err != nil || !info.IsDir() {
-		return nil, nil, fmt.Errorf("repo must be a local directory with .nexus/workspace.json: %s", repo)
-	}
-
-	return []string{"darwin", "linux"}, nil, nil
 }
 
 func ensureLocalRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace, factory *runtime.Factory, mgr *workspacemgr.Manager, configBundle string) *rpckit.RPCError {
