@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
+	"github.com/inizio/nexus/packages/nexus/pkg/runtime/authbundle"
 )
 
 // fakeManager is a test double for the Manager
@@ -327,9 +328,9 @@ func TestBuildHostAuthBundleIncludesKnownConfigPaths(t *testing.T) {
 		t.Fatalf("write opencode session: %v", err)
 	}
 
-	bundle, err := BuildHostAuthBundleFromHome()
+	bundle, err := authbundle.BuildFromHome()
 	if err != nil {
-		t.Fatalf("BuildHostAuthBundleFromHome: %v", err)
+		t.Fatalf("authbundle.BuildFromHome: %v", err)
 	}
 	if strings.TrimSpace(bundle) == "" {
 		t.Fatal("expected non-empty auth bundle")

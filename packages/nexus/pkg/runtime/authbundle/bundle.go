@@ -31,11 +31,6 @@ func ResolveFromOptions(opts map[string]string) (string, error) {
 	return "", nil
 }
 
-func TruthyOption(raw string) bool {
-	s := strings.TrimSpace(strings.ToLower(raw))
-	return s == "1" || s == "true" || s == "yes" || s == "on"
-}
-
 func BuildFromHome() (string, error) {
 	home, err := os.UserHomeDir()
 	if err != nil || strings.TrimSpace(home) == "" {

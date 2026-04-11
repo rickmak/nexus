@@ -945,9 +945,6 @@ func TestHandleWorkspaceCreate_PassesHostAuthBundleToRuntime(t *testing.T) {
 	if gotOpts["host_auth_bundle"] != "e30=" {
 		t.Fatalf("expected host_auth_bundle in options, got %#v", gotOpts)
 	}
-	if gotOpts["use_daemon_host_auth_bundle"] != "" {
-		t.Fatalf("did not expect use_daemon_host_auth_bundle when bundle set, got %#v", gotOpts)
-	}
 }
 
 func TestHandleWorkspaceCreate_InstallableMissingRetriesSetupOnce(t *testing.T) {

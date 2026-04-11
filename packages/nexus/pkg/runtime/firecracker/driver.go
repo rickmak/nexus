@@ -284,14 +284,6 @@ func resolveHostAuthBundle(opts map[string]string) (string, error) {
 	return authbundle.ResolveFromOptions(opts)
 }
 
-func truthyOption(raw string) bool {
-	return authbundle.TruthyOption(raw)
-}
-
-func BuildHostAuthBundleFromHome() (string, error) {
-	return authbundle.BuildFromHome()
-}
-
 // GrowWorkspace expands the workspace disk image and runs resize2fs in the guest.
 func (d *Driver) GrowWorkspace(ctx context.Context, workspaceID string, newSizeBytes int64) error {
 	if d.manager == nil {
