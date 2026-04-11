@@ -474,7 +474,7 @@ func (s *Server) processRPC(msg *RPCMessage, conn *Connection) *RPCResponse {
 	case "workspace.relations.list":
 		result, err = handlers.HandleWorkspaceRelationsList(ctx, msg.Params, s.workspaceMgr)
 	case "workspace.remove":
-		result, err = handlers.HandleWorkspaceRemove(ctx, msg.Params, s.workspaceMgr)
+		result, err = handlers.HandleWorkspaceRemove(ctx, msg.Params, s.workspaceMgr, s.runtimeFactory)
 	case "workspace.stop":
 		result, err = handlers.HandleWorkspaceStop(ctx, msg.Params, s.workspaceMgr)
 	case "workspace.start":
@@ -646,6 +646,15 @@ func (s *Server) SetRuntimeFactory(factory *runtime.Factory) {
 	s.runtimeFactory = factory
 }
 
+func (s *Server) WorkspaceIDs() []string {
+	all := s.workspaceMgr.List()
+	ids := make([]string, len(all))
+	for i, ws := range all {
+		ids[i] = ws.ID
+	}
+	return ids
+}
+
 func (s *Server) SetNodeConfig(cfg *config.NodeConfig) {
 	s.nodeCfg = cfg
 }
@@ -777,6 +786,13 @@ func (s *Server) handleFirecrackerPTYOpen(conn *Connection, p ptyOpenParams, wsR
 		return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("%s runtime driver not configured", backend)}
 	}
 
+	if wsRecord.Backend == "seatbelt" {
+		if rpcErr := handlers.EnsureLocalRuntimeWorkspace(context.Background(), wsRecord, s.runtimeFactory, s.workspaceMgr,
+			handlers.EnsureRuntimeAuth{UseDaemonHostAuthBundle: false}); rpcErr != nil {
+			return nil, rpcErr
+		}
+	}
+
 	connector, ok := driverAny.(firecrackerAgentConnector)
 	if !ok {
 		return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("%s runtime does not support agent connection", backend)}
@@ -797,6 +813,16 @@ func (s *Server) handleFirecrackerPTYOpen(conn *Connection, p ptyOpenParams, wsR
 	workDirHint := strings.TrimSpace(p.WorkDir)
 	if workDirHint == "" {
 		workDirHint = "/workspace"
+	}
+	if wsRecord.Backend == "seatbelt" {
+		type guestWorkdirProvider interface {
+			GuestWorkdir(string) string
+		}
+		if sbDriver, ok := driverAny.(guestWorkdirProvider); ok {
+			if gw := sbDriver.GuestWorkdir(wsRecord.ID); gw != "" {
+				workDirHint = gw
+			}
+		}
 	}
 
 	sessionID := fmt.Sprintf("pty-%d", time.Now().UnixNano())
