@@ -45,15 +45,21 @@ vendor/
 .nexus/pulse.db
 .nexus/telemetry.db
 .nexus/enforcer-rules.local.json
+.nexus/probe/
+.nexus/check/
+.nexus/e2e/
+.nexus/run/
 
 # Nexus worktrees
 .worktrees/
 .nexus/worktrees/
 .nexus/dogfooding/
 .nexus/case-studies/
-.case-studies/*
-!.case-studies/ledgerlens-demo/
-!.case-studies/ledgerlens-demo/**
+.case-studies/
+
+# Agent/superpowers artifacts (never commit)
+docs/superpowers/
+.agents/
 
 # Nexus collection data (may contain credentials)
 .nexus/collection/data/
