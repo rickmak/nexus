@@ -15,6 +15,47 @@ Nexus remote workspace core: **Workspace Daemon** (Go, `packages/nexus`) and **W
 
 Flag any feature that reads user-owned data from the daemon filesystem without an explicit client-supplied or relayed payload.
 
+## Code Structure Policy
+
+**Tiered file-size limits:**
+
+```
+Core/domain logic:              <= 300 lines
+Orchestration/application logic: <= 400 lines
+Transport/adapters/tests:        <= 500 lines
+Generated files:                 exempt
+```
+
+**Dependency direction rules:**
+
+```
+domain          → no project-specific dependencies
+orchestration   → may depend on domain
+transport       → may depend on application/domain
+storage         → implements domain/application-owned interfaces
+tests           → may depend on any layer; keep harness code modular
+```
+
+**Concept naming conventions:**
+
+```
+transport/    wire protocol, sockets, adapters, sessions
+storage/      persistence and backing stores
+runtime/      backend selection, preflight, driver-specific behavior
+workspace/    lifecycle, readiness, relations, create/fork/restore flows
+auth/         relay, bundle, profile mapping
+rpc/          method registration, DTOs, middleware
+harness/      reusable e2e support code only
+```
+
+**Known debt (tracked, not instant failures):**
+
+```
+packages/nexus/pkg/server/server.go          (~1209 lines)
+packages/nexus/pkg/handlers/workspace_manager.go (~660 lines)
+packages/sdk/js/src/types.ts                 (~376 lines)
+```
+
 ## Enforcement
 
 Complete work fully; verify builds, tests, types, and lint; provide evidence; use isolated worktrees for features (not the main worktree). If stopping early, list what is undone, why, and what the user should do next.

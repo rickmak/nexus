@@ -30,6 +30,43 @@ Nexus keeps architecture intentionally small: daemon + SDK + project conventions
 - Runtime/backend selection is automatic.
 - Port forwarding can be convention-driven from compose files.
 
+## Layer Boundaries
+
+Target modular layout (incremental migration):
+
+**`packages/nexus`**
+
+```
+server/transport/   - websocket framing, sessions
+server/rpc/         - method registry, dispatch
+server/pty/         - PTY open/write/resize/close
+workspace/          - lifecycle, readiness, relations, create flows
+runtime/selection/  - single entrypoint for backend selection policy
+runtime/drivers/    - backend-specific drivers + shared helpers
+storage/            - persistence (SQLite) and record access
+git/                - worktree, fork, sync operations
+auth/               - relay, bundle, profile mapping
+```
+
+**`packages/sdk/js`**
+
+```
+rpc/                - connection core, request map, notifications
+transport/          - node-websocket and browser-websocket adapters
+workspace/          - manager, handle, lifecycle
+operations/         - exec, fs, pty, spotlight
+auth/               - bundle
+types/              - domain-split type files
+```
+
+**`packages/e2e/flows` (formerly `sdk-runtime`)**
+
+```
+harness/            - daemon, repo, session, assertions, fixtures
+cases/              - test suites organized by flow type
+parity/             - matrix and contracts
+```
+
 ## Related Docs
 
 - CLI: `docs/reference/cli.md`

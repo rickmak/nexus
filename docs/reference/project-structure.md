@@ -2,6 +2,33 @@
 
 Nexus keeps project integration intentionally small: one directory, clear roles.
 
+## Repository layout (high level)
+
+```text
+docs/
+├── index.md
+├── explanation/
+├── superpowers/
+│   └── plans/
+├── tutorials/
+├── reference/
+└── dev/
+
+packages/
+├── e2e/
+│   └── sdk-runtime/
+│       └── src/
+│           ├── cases/
+│           ├── harness/
+│           └── parity/
+├── nexus/          # Go daemon
+├── nexus-ui/       # Web UI
+└── sdk/
+    └── js/         # TypeScript SDK (@nexus/sdk)
+```
+
+The E2E package directory is `packages/e2e/sdk-runtime` today; layering docs refer to it as `flows` (see `docs/explanation/architecture.md`).
+
 ## Minimal Structure
 
 ```text
