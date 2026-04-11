@@ -18,13 +18,15 @@ func ResolveFromOptions(opts map[string]string) (string, error) {
 		return "", nil
 	}
 	if b := strings.TrimSpace(opts["host_auth_bundle"]); b != "" {
-		if _, err := base64.StdEncoding.DecodeString(b); err != nil {
+		decoded, err := base64.StdEncoding.DecodeString(b)
+		if err != nil {
 			return "", fmt.Errorf("host_auth_bundle: %w", err)
 		}
+		const maxBundleBytes = 4 * 1024 * 1024
+		if len(decoded) > maxBundleBytes {
+			return "", fmt.Errorf("host_auth_bundle: exceeds maximum size of %d bytes", maxBundleBytes)
+		}
 		return b, nil
-	}
-	if TruthyOption(opts["use_daemon_host_auth_bundle"]) {
-		return BuildFromHome()
 	}
 	return "", nil
 }

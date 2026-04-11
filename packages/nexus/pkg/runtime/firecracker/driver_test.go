@@ -437,26 +437,15 @@ func TestResolveHostAuthBundle_ClientBundleContainsCodexConfig(t *testing.T) {
 	}
 }
 
-func TestResolveHostAuthBundle_DaemonWhenFlag(t *testing.T) {
-	home := t.TempDir()
-	if err := os.Setenv("HOME", home); err != nil {
-		t.Fatalf("set HOME: %v", err)
+func TestResolveHostAuthBundle_RejectsOversizedBundle(t *testing.T) {
+	oversized := strings.Repeat("A", 4*1024*1024+1)
+	encoded := base64.StdEncoding.EncodeToString([]byte(oversized))
+	_, err := resolveHostAuthBundle(map[string]string{"host_auth_bundle": encoded})
+	if err == nil {
+		t.Fatal("expected error for oversized bundle, got nil")
 	}
-	t.Cleanup(func() { _ = os.Unsetenv("HOME") })
-
-	if err := os.MkdirAll(filepath.Join(home, ".config", "codex"), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(home, ".config", "codex", "x.json"), []byte("{}"), 0o644); err != nil {
-		t.Fatalf("write: %v", err)
-	}
-
-	got, err := resolveHostAuthBundle(map[string]string{"use_daemon_host_auth_bundle": "true"})
-	if err != nil {
-		t.Fatalf("resolveHostAuthBundle: %v", err)
-	}
-	if strings.TrimSpace(got) == "" {
-		t.Fatal("expected non-empty bundle from daemon home")
+	if !strings.Contains(err.Error(), "exceeds maximum size") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
