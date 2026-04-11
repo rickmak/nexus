@@ -133,12 +133,12 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 	d.projectRoots[req.WorkspaceID] = req.ProjectRoot
 	d.mu.Unlock()
 
-	hostCLI := detectHostCLIAvailability()
 	if shouldBootstrapGuestTooling(req.Options) {
 		bundle, err := authbundle.ResolveFromOptions(req.Options)
 		if err != nil {
 			return fmt.Errorf("prepare host auth bundle: %w", err)
 		}
+		hostCLI := cliAvailabilityForBundle(bundle)
 		if err := d.bootstrapGuestToolingAndAuth(ctx, req.WorkspaceID, hostCLI, bundle); err != nil {
 			return err
 		}
@@ -235,6 +235,13 @@ func detectHostCLIAvailability() hostCLIAvailability {
 		Codex:    has("codex"),
 		Claude:   has("claude"),
 	}
+}
+
+func cliAvailabilityForBundle(bundle string) hostCLIAvailability {
+	if strings.TrimSpace(bundle) != "" {
+		return hostCLIAvailability{Opencode: true, Codex: true, Claude: true}
+	}
+	return detectHostCLIAvailability()
 }
 
 func buildGuestCLIBootstrapCommand(hostCLI hostCLIAvailability) string {

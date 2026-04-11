@@ -25,7 +25,7 @@ func TestCreateRequiresLimaForIsolation(t *testing.T) {
 		seatbeltLookPath = oldLookPath
 	})
 	seatbeltLookPath = func(file string) (string, error) { return "", errors.New("not found") }
-	d.bootstrapInstance = func(ctx context.Context, instance string) error { return nil }
+	d.bootstrapInstance = func(ctx context.Context, instance, bundle string) error { return nil }
 
 	err := d.Create(context.Background(), runtime.CreateRequest{
 		WorkspaceID:   "ws-1",
@@ -46,7 +46,7 @@ func TestCreateRunsBootstrapAndMount(t *testing.T) {
 	calledBootstrap := false
 	calledPrepare := false
 
-	d.bootstrapInstance = func(ctx context.Context, instance string) error {
+	d.bootstrapInstance = func(ctx context.Context, instance, bundle string) error {
 		calledBootstrap = true
 		if instance == "" {
 			t.Fatal("expected non-empty instance")
@@ -84,7 +84,7 @@ func TestCreateFallsBackToDefaultInstanceWhenSeatbeltMountPrepareFails(t *testin
 	seatbeltLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
 
 	d.instanceEnv = "nexus-seatbelt"
-	d.bootstrapInstance = func(ctx context.Context, instance string) error { return nil }
+	d.bootstrapInstance = func(ctx context.Context, instance, bundle string) error { return nil }
 
 	seen := make([]string, 0)
 	d.prepareWorkspaceFS = func(ctx context.Context, instance, targetPath, localPath string) error {
@@ -128,7 +128,7 @@ func TestCreateFailsWhenBootstrapFails(t *testing.T) {
 	t.Cleanup(func() { seatbeltLookPath = oldLookPath })
 	seatbeltLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
 
-	d.bootstrapInstance = func(ctx context.Context, instance string) error {
+	d.bootstrapInstance = func(ctx context.Context, instance, bundle string) error {
 		return errors.New("bootstrap failed")
 	}
 

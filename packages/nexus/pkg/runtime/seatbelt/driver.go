@@ -42,7 +42,7 @@ type Driver struct {
 	instanceEnv        string
 	bootstrapMu        sync.Mutex
 	bootstrapped       map[string]bool
-	bootstrapInstance  func(ctx context.Context, instance string) error
+	bootstrapInstance  func(ctx context.Context, instance, bundle string) error
 	prepareWorkspaceFS func(ctx context.Context, instance, targetPath, localPath string) error
 }
 
@@ -483,7 +483,7 @@ func teardownWorkspacePath(ctx context.Context, instance, workspaceID string) er
 	return nil
 }
 
-func bootstrapSeatbeltTooling(ctx context.Context, instance string) error {
+func bootstrapSeatbeltTooling(ctx context.Context, instance, bundle string) error {
 	instance = strings.TrimSpace(instance)
 	if instance == "" {
 		instance = "nexus-firecracker"
@@ -494,7 +494,7 @@ func bootstrapSeatbeltTooling(ctx context.Context, instance string) error {
 		candidates = filterCandidatesByAvailability(candidates, discovered)
 	}
 
-	hostCLI := detectHostCLIAvailability(seatbeltLookPath)
+	hostCLI := cliAvailabilityForBundle(bundle, seatbeltLookPath)
 	script := buildSeatbeltBootstrapScript(hostCLI)
 
 	var lastErr error
@@ -556,6 +556,13 @@ func detectHostCLIAvailability(lookPath func(string) (string, error)) hostCLIAva
 		Codex:    has("codex"),
 		Claude:   has("claude"),
 	}
+}
+
+func cliAvailabilityForBundle(bundle string, lookPath func(string) (string, error)) hostCLIAvailability {
+	if strings.TrimSpace(bundle) != "" {
+		return hostCLIAvailability{Opencode: true, Codex: true, Claude: true}
+	}
+	return detectHostCLIAvailability(lookPath)
 }
 
 func isTransientLimaShellError(message string) bool {
@@ -732,7 +739,7 @@ func (d *Driver) ensureInstanceBootstrapped(ctx context.Context, instance, bundl
 		d.bootstrapped[instance] = true
 		return nil
 	}
-	if err := d.bootstrapInstance(ctx, instance); err != nil {
+	if err := d.bootstrapInstance(ctx, instance, bundle); err != nil {
 		return err
 	}
 	if bundle != "" {
