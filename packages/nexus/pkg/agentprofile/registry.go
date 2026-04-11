@@ -17,7 +17,7 @@ var registry = []Profile{
 		Name:       "claude",
 		Aliases:    []string{"anthropic", "claude-code"},
 		Binary:     "claude",
-		EnvVars:    []string{"ANTHROPIC_API_KEY", "CLAUDE_API_KEY"},
+		EnvVars:    []string{"ANTHROPIC_API_KEY"},
 		CredFiles:  []string{".claude/.credentials.json", ".claude.json"},
 		InstallPkg: "@anthropic-ai/claude-code",
 	},

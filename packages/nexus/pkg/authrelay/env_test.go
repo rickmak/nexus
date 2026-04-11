@@ -110,6 +110,15 @@ func TestRelayEnv(t *testing.T) {
 				"NEXUS_AUTH_VALUE":   "x",
 			},
 		},
+		{
+			name:    "amp_binding_via_registry",
+			binding: "amp",
+			value:   "sk-ant-xxx",
+			want: map[string]string{
+				"NEXUS_AUTH_BINDING": "amp",
+				"NEXUS_AUTH_VALUE":   "sk-ant-xxx",
+			},
+		},
 	}
 	for _, tc := range cases {
 		tc := tc
