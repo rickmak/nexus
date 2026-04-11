@@ -437,7 +437,19 @@ func bootstrapSeatbeltTooling(ctx context.Context, instance, hostHome, configBun
 		candidates = filterCandidatesByAvailability(candidates, discovered)
 	}
 
-	script := buildSeatbeltBootstrapScript(hostHome, configBundle)
+	bundleHostPath := ""
+	if strings.TrimSpace(configBundle) != "" && strings.TrimSpace(hostHome) != "" {
+		cacheDir := filepath.Join(hostHome, ".cache", "nexus")
+		if mkErr := os.MkdirAll(cacheDir, 0o700); mkErr == nil {
+			bundleFile := filepath.Join(cacheDir, "bootstrap-"+instance+".tar.gz.b64")
+			if writeErr := os.WriteFile(bundleFile, []byte(configBundle), 0o600); writeErr == nil {
+				bundleHostPath = bundleFile
+				defer func() { _ = os.Remove(bundleFile) }()
+			}
+		}
+	}
+
+	script := buildSeatbeltBootstrapScript(hostHome, bundleHostPath)
 
 	var lastErr error
 	for _, candidate := range candidates {
@@ -527,18 +539,17 @@ func ensureLimaInstanceRunning(ctx context.Context, instance string) error {
 	return nil
 }
 
-func buildSeatbeltBootstrapScript(hostHome, configBundle string) string {
+func buildSeatbeltBootstrapScript(hostHome, bundleHostPath string) string {
 	parts := []string{
 		"set -e",
 		buildCredentialSymlinkCleanup(),
 	}
 
-	if strings.TrimSpace(configBundle) != "" {
+	if strings.TrimSpace(bundleHostPath) != "" {
+		quoted := shellQuote(bundleHostPath)
 		parts = append(parts,
-			`export NEXUS_HOST_AUTH_BUNDLE='`+configBundle+`'`,
-			`if [ -n "${NEXUS_HOST_AUTH_BUNDLE:-}" ]; then `+
-				`mkdir -p "$HOME"; `+
-				`(printf '%s' "$NEXUS_HOST_AUTH_BUNDLE" | base64 -d 2>/dev/null || printf '%s' "$NEXUS_HOST_AUTH_BUNDLE" | base64 -D 2>/dev/null) >/tmp/nexus-auth.tar.gz && `+
+			`if [ -f `+quoted+` ]; then `+
+				`(cat `+quoted+` | base64 -d 2>/dev/null || cat `+quoted+` | base64 -D 2>/dev/null) >/tmp/nexus-auth.tar.gz && `+
 				`tar -xzf /tmp/nexus-auth.tar.gz -C "$HOME" >/dev/null 2>&1 || true; `+
 				`rm -f /tmp/nexus-auth.tar.gz >/dev/null 2>&1 || true; fi`,
 		)

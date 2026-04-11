@@ -180,9 +180,9 @@ func TestBuildSeatbeltBootstrapScriptChecksRegistryBinaries(t *testing.T) {
 }
 
 func TestBuildSeatbeltBootstrapScriptExtractsBundleWhenProvided(t *testing.T) {
-	script := buildSeatbeltBootstrapScript("", "BASE64BUNDLE")
-	if !strings.Contains(script, "NEXUS_HOST_AUTH_BUNDLE") {
-		t.Fatal("bootstrap script must contain NEXUS_HOST_AUTH_BUNDLE when configBundle is provided")
+	script := buildSeatbeltBootstrapScript("", "/tmp/test-bundle.tar.gz.b64")
+	if !strings.Contains(script, "/tmp/test-bundle.tar.gz.b64") {
+		t.Fatal("bootstrap script must reference the bundle file path")
 	}
 	if !strings.Contains(script, "base64") {
 		t.Fatal("bootstrap script must contain base64 decode step")
@@ -194,8 +194,8 @@ func TestBuildSeatbeltBootstrapScriptExtractsBundleWhenProvided(t *testing.T) {
 
 func TestBuildSeatbeltBootstrapScriptNoBundleWhenEmpty(t *testing.T) {
 	script := buildSeatbeltBootstrapScript("/Users/testhost", "")
-	if strings.Contains(script, "NEXUS_HOST_AUTH_BUNDLE") {
-		t.Fatal("bootstrap script must not set NEXUS_HOST_AUTH_BUNDLE when configBundle is empty")
+	if strings.Contains(script, "nexus-auth.tar.gz") {
+		t.Fatal("bootstrap script must not contain tar extraction when bundle path is empty")
 	}
 }
 
