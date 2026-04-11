@@ -1,4 +1,4 @@
-import { WorkspaceHandle } from '@nexus/sdk';
+import { WorkspaceHandle, buildConfigBundle } from '@nexus/sdk';
 import { createGitFixture, cleanupFixture } from '../harness/fixtures';
 import { rpcRequest } from '../harness/rpc';
 import { startSession, type DaemonSession } from '../harness/session';
@@ -83,12 +83,14 @@ describe('tools auth live e2e', () => {
 
       let created;
       try {
+        const configBundle = await buildConfigBundle().catch(() => '');
         created = await rpcRequest<{ workspace: { id: string } }>(session.client, 'workspace.create', {
           spec: {
             repo: fixture.repoDir,
             workspaceName: 'tools-auth-live-case',
             agentProfile: 'default',
             authBinding,
+            configBundle: configBundle || undefined,
           },
         });
       } catch (error) {

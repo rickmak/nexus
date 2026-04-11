@@ -1,24 +1,18 @@
 package firecracker
 
 import (
-	"archive/tar"
-	"bytes"
-	"compress/gzip"
 	"context"
-	"encoding/base64"
 	"errors"
 	"fmt"
-	"io"
 	"net"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/inizio/nexus/packages/nexus/pkg/agentprofile"
+	"github.com/inizio/nexus/packages/nexus/pkg/credsbundle"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
 	"github.com/mdlayher/vsock"
 )
@@ -265,106 +259,7 @@ func buildGuestCLIBootstrapCommand() string {
 }
 
 func buildHostAuthBundle() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil || strings.TrimSpace(home) == "" {
-		return "", nil
-	}
-	return buildHostAuthBundleFromHome(home)
-}
-
-func buildHostAuthBundleFromHome(home string) (string, error) {
-	var buf bytes.Buffer
-	gz := gzip.NewWriter(&buf)
-	tw := tar.NewWriter(gz)
-
-	added := 0
-	for _, cf := range agentprofile.AllCredFiles() {
-		src := filepath.Join(home, cf)
-		if _, statErr := os.Stat(src); statErr == nil {
-			added++
-		}
-		if err := addPathToTar(tw, home, src); err != nil {
-			_ = tw.Close()
-			_ = gz.Close()
-			return "", err
-		}
-	}
-
-	if err := tw.Close(); err != nil {
-		_ = gz.Close()
-		return "", err
-	}
-	if err := gz.Close(); err != nil {
-		return "", err
-	}
-
-	if added == 0 || buf.Len() == 0 {
-		return "", nil
-	}
-
-	const maxBundleBytes = 4 * 1024 * 1024
-	if buf.Len() > maxBundleBytes {
-		return "", nil
-	}
-
-	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
-}
-
-func addPathToTar(tw *tar.Writer, rootHome, src string) error {
-	_, err := os.Lstat(src)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return err
-	}
-
-	return filepath.Walk(src, func(path string, fi os.FileInfo, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-
-		if fi == nil {
-			return nil
-		}
-
-		rel, err := filepath.Rel(rootHome, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-
-		hdr, err := tar.FileInfoHeader(fi, "")
-		if err != nil {
-			return err
-		}
-		hdr.Name = rel
-
-		if fi.Mode()&os.ModeSymlink != 0 {
-			linkTarget, lerr := os.Readlink(path)
-			if lerr != nil {
-				return lerr
-			}
-			hdr.Linkname = linkTarget
-		}
-
-		if err := tw.WriteHeader(hdr); err != nil {
-			return err
-		}
-
-		if !fi.Mode().IsRegular() {
-			return nil
-		}
-
-		f, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer f.Close()
-
-		_, err = io.Copy(tw, f)
-		return err
-	})
+	return credsbundle.Build()
 }
 
 func (d *Driver) Start(ctx context.Context, workspaceID string) error {

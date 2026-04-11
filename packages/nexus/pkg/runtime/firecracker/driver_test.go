@@ -14,6 +14,7 @@ import (
 	"testing"
 
 	"github.com/inizio/nexus/packages/nexus/pkg/agentprofile"
+	"github.com/inizio/nexus/packages/nexus/pkg/credsbundle"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
 )
 
@@ -407,7 +408,7 @@ func TestBuildHostAuthBundleIncludesRegistryPaths(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	encoded, err := buildHostAuthBundleFromHome(home)
+	encoded, err := credsbundle.BuildFromHome(home)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/inizio/nexus/packages/nexus/pkg/credsbundle"
 	"github.com/inizio/nexus/packages/nexus/pkg/daemonclient"
 	"github.com/inizio/nexus/packages/nexus/pkg/localws"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspacemgr"
@@ -247,6 +248,9 @@ func runWorkspaceCreateCommand(args []string) {
 		WorkspaceName: workspaceName,
 		AgentProfile:  "default",
 		Backend:       strings.TrimSpace(*backend),
+	}
+	if bundle, bundleErr := credsbundle.Build(); bundleErr == nil && bundle != "" {
+		spec.ConfigBundle = bundle
 	}
 	var result struct {
 		Workspace workspacemgr.Workspace `json:"workspace"`
