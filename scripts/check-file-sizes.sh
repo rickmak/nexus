@@ -99,6 +99,12 @@ threshold_for() {
     return
     ;;
   esac
+  case "$path" in
+  */domain/* | */entities/* | */models/*)
+    echo 300
+    return
+    ;;
+  esac
   echo 400
 }
 
