@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	goruntime "runtime"
 	"strings"
+	"time"
 
 	rpckit "github.com/inizio/nexus/packages/nexus/pkg/rpcerrors"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
@@ -397,7 +398,9 @@ func HandleWorkspaceRemove(ctx context.Context, params json.RawMessage, mgr *wor
 
 	if factory != nil && strings.TrimSpace(ws.Backend) != "" {
 		if driver, selErr := factory.SelectDriver([]string{ws.Backend}, nil); selErr == nil {
-			if destroyErr := driver.Destroy(ctx, p.ID); destroyErr != nil {
+			destroyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+			defer cancel()
+			if destroyErr := driver.Destroy(destroyCtx, p.ID); destroyErr != nil {
 				_ = destroyErr
 			}
 		}
