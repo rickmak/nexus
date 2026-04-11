@@ -363,7 +363,7 @@ func HandleWorkspaceFork(ctx context.Context, params json.RawMessage, mgr *works
 }
 
 func ensureLocalRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace, factory *runtime.Factory, mgr *workspacemgr.Manager, configBundle string) *rpckit.RPCError {
-	if factory == nil || ws == nil || (ws.Backend != "firecracker" && ws.Backend != "seatbelt") {
+	if factory == nil || ws == nil {
 		return nil
 	}
 
