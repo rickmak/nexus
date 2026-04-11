@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"log"
 	"net/http"
-	"path/filepath"
 	"strings"
 	"sync"
 
@@ -229,27 +228,6 @@ func (s *Server) WorkspaceIDs() []string {
 
 func (s *Server) SetNodeConfig(cfg *config.NodeConfig) {
 	s.nodeCfg = cfg
-}
-
-func (s *Server) handleWorkspaceInfo(params json.RawMessage) map[string]interface{} {
-	workspaceID := extractWorkspaceID(params)
-	result := map[string]interface{}{
-		"workspace_id":   s.ws.ID(),
-		"workspace_path": s.ws.Path(),
-		"workspaces":     s.workspaceMgr.List(),
-		"spotlight":      s.spotlightMgr.List(""),
-	}
-
-	if workspaceID != "" {
-		if ws, ok := s.workspaceMgr.Get(workspaceID); ok {
-			result["workspace"] = ws
-			result["workspace_id"] = ws.ID
-			result["workspace_path"] = filepath.Clean(ws.RootPath)
-			result["spotlight"] = s.spotlightMgr.List(workspaceID)
-		}
-	}
-
-	return result
 }
 
 func (s *Server) requireWorkspaceStarted(workspaceID string) *rpckit.RPCError {

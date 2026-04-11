@@ -54,7 +54,7 @@ func (s *Server) newRPCRegistry() *rpc.Registry {
 		return handlers.HandleAuthRelayRevoke(ctx, params, s.authRelayBroker)
 	})
 	r.Register("workspace.info", func(_ context.Context, _ string, params json.RawMessage, _ any) (interface{}, *rpckit.RPCError) {
-		return s.handleWorkspaceInfo(params), nil
+		return handlers.HandleWorkspaceInfo(extractWorkspaceID(params), s.ws, s.workspaceMgr, s.spotlightMgr), nil
 	})
 	r.Register("workspace.create", func(_ context.Context, _ string, params json.RawMessage, _ any) (interface{}, *rpckit.RPCError) {
 		return handlers.HandleWorkspaceCreate(ctx, params, s.workspaceMgr, s.runtimeFactory)
