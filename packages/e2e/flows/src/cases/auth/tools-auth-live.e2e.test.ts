@@ -1,6 +1,6 @@
 import { WorkspaceHandle, buildConfigBundle } from '@nexus/sdk';
 import { createGitFixture, cleanupFixture } from '../../harness/repo';
-import { rpcRequest, startSession, type DaemonSession } from '../../harness/session';
+import { startSession, type DaemonSession } from '../../harness/session';
 import { onDaemonStartError, onWorkspaceCreateRuntimeError } from '../../harness/assertions';
 import { liveToolsAuthCaseIds } from '../test-ids';
 
@@ -83,7 +83,7 @@ describe('tools auth live e2e', () => {
       let created;
       try {
         const configBundle = await buildConfigBundle().catch(() => '');
-        created = await rpcRequest<{ workspace: { id: string } }>(session.client, 'workspace.create', {
+        created = await session.client.request<{ workspace: { id: string } }>('workspace.create', {
           spec: {
             repo: fixture.repoDir,
             workspaceName: 'tools-auth-live-case',

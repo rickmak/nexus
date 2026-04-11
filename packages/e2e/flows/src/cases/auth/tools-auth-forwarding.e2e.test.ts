@@ -1,6 +1,6 @@
 import { WorkspaceHandle } from '@nexus/sdk';
 import { createGitFixture, cleanupFixture } from '../../harness/repo';
-import { rpcRequest, startSession, type DaemonSession } from '../../harness/session';
+import { startSession, type DaemonSession } from '../../harness/session';
 import { onDaemonStartError, onWorkspaceCreateRuntimeError } from '../../harness/assertions';
 import { toolsAuthForwardingCaseIds } from '../test-ids';
 
@@ -22,7 +22,7 @@ describe('tools auth forwarding e2e', () => {
     try {
       let created;
       try {
-        created = await rpcRequest<{ workspace: { id: string } }>(session.client, 'workspace.create', {
+        created = await session.client.request<{ workspace: { id: string } }>('workspace.create', {
           spec: {
             repo: fixture.repoDir,
             workspaceName: 'auth-forwarding-case',

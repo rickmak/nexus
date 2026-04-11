@@ -7,8 +7,6 @@ import {
   type ManagedDaemonOptions,
 } from '../daemon';
 
-export { rpcRequest } from './rpc';
-
 export type DaemonSession = {
   client: WorkspaceClient;
   managed: boolean;
