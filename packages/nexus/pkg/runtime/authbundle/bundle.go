@@ -13,6 +13,8 @@ import (
 	"strings"
 )
 
+const maxBundledFileBytes = 512 * 1024
+
 func ResolveFromOptions(opts map[string]string) (string, error) {
 	if opts == nil {
 		return "", nil
@@ -49,16 +51,15 @@ func BuildFromHome() (string, error) {
 	gz := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(gz)
 
-	added := 0
+	var fileCount int
 	for _, path := range paths {
-		if err := addPathToTar(tw, home, path); err != nil {
+		n, err := addFilteredTreeToTar(tw, home, path)
+		if err != nil {
 			_ = tw.Close()
 			_ = gz.Close()
 			return "", err
 		}
-		if info, statErr := os.Stat(path); statErr == nil && info.IsDir() {
-			added++
-		}
+		fileCount += n
 	}
 
 	if err := tw.Close(); err != nil {
@@ -69,7 +70,7 @@ func BuildFromHome() (string, error) {
 		return "", err
 	}
 
-	if added == 0 || buf.Len() == 0 {
+	if fileCount == 0 || buf.Len() == 0 {
 		return "", nil
 	}
 
@@ -81,29 +82,71 @@ func BuildFromHome() (string, error) {
 	return base64.StdEncoding.EncodeToString(buf.Bytes()), nil
 }
 
-func addPathToTar(tw *tar.Writer, rootHome, src string) error {
+func includeBundledFile(rel string) bool {
+	rel = filepath.ToSlash(rel)
+	if strings.Contains(rel, "..") {
+		return false
+	}
+	ext := strings.ToLower(filepath.Ext(rel))
+	base := filepath.Base(rel)
+
+	switch {
+	case strings.HasPrefix(rel, ".config/opencode/"):
+		return ext == ".json" || ext == ".yaml" || ext == ".yml"
+	case strings.HasPrefix(rel, ".config/codex/"):
+		return ext == ".json" || ext == ".yaml" || ext == ".yml"
+	case strings.HasPrefix(rel, ".codex/"):
+		return ext == ".json" || ext == ".yaml" || ext == ".yml"
+	case strings.HasPrefix(rel, ".config/openai/"):
+		return ext == ".json" || ext == ".yaml" || ext == ".yml"
+	case strings.HasPrefix(rel, ".claude/"):
+		if strings.Contains(rel, "/projects/") {
+			return false
+		}
+		if strings.EqualFold(base, "claude.md") {
+			return true
+		}
+		return ext == ".json" || ext == ".yaml" || ext == ".yml"
+	default:
+		return false
+	}
+}
+
+func addFilteredTreeToTar(tw *tar.Writer, home, src string) (int, error) {
 	_, err := os.Lstat(src)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil
+			return 0, nil
 		}
-		return err
+		return 0, err
 	}
 
-	return filepath.Walk(src, func(path string, fi os.FileInfo, walkErr error) error {
+	var count int
+	err = filepath.Walk(src, func(path string, fi os.FileInfo, walkErr error) error {
 		if walkErr != nil {
 			return walkErr
 		}
-
 		if fi == nil {
 			return nil
 		}
+		if fi.Mode()&os.ModeSymlink != 0 {
+			return nil
+		}
+		if !fi.Mode().IsRegular() {
+			return nil
+		}
 
-		rel, err := filepath.Rel(rootHome, path)
+		rel, err := filepath.Rel(home, path)
 		if err != nil {
 			return err
 		}
 		rel = filepath.ToSlash(rel)
+		if !includeBundledFile(rel) {
+			return nil
+		}
+		if fi.Size() > maxBundledFileBytes {
+			return nil
+		}
 
 		hdr, err := tar.FileInfoHeader(fi, "")
 		if err != nil {
@@ -111,20 +154,8 @@ func addPathToTar(tw *tar.Writer, rootHome, src string) error {
 		}
 		hdr.Name = rel
 
-		if fi.Mode()&os.ModeSymlink != 0 {
-			linkTarget, lerr := os.Readlink(path)
-			if lerr != nil {
-				return lerr
-			}
-			hdr.Linkname = linkTarget
-		}
-
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
-		}
-
-		if !fi.Mode().IsRegular() {
-			return nil
 		}
 
 		f, err := os.Open(path)
@@ -133,7 +164,11 @@ func addPathToTar(tw *tar.Writer, rootHome, src string) error {
 		}
 		defer f.Close()
 
-		_, err = io.Copy(tw, f)
-		return err
+		if _, err := io.Copy(tw, f); err != nil {
+			return err
+		}
+		count++
+		return nil
 	})
+	return count, err
 }

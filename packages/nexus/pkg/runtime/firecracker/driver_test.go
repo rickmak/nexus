@@ -323,9 +323,20 @@ func TestBuildHostAuthBundleIncludesKnownConfigPaths(t *testing.T) {
 	mkdir(filepath.Join(home, ".config", "opencode"))
 	mkdir(filepath.Join(home, ".config", "codex"))
 	mkdir(filepath.Join(home, ".codex"))
+	mkdir(filepath.Join(home, ".config", "openai"))
 	mkdir(filepath.Join(home, ".claude"))
 	if err := os.WriteFile(filepath.Join(home, ".config", "opencode", "session.json"), []byte("{}"), 0o644); err != nil {
 		t.Fatalf("write opencode session: %v", err)
+	}
+	for _, p := range []string{
+		filepath.Join(home, ".config", "codex", "auth.json"),
+		filepath.Join(home, ".codex", "config.json"),
+		filepath.Join(home, ".config", "openai", "settings.json"),
+		filepath.Join(home, ".claude", "settings.json"),
+	} {
+		if err := os.WriteFile(p, []byte("{}"), 0o644); err != nil {
+			t.Fatalf("write %s: %v", p, err)
+		}
 	}
 
 	bundle, err := authbundle.BuildFromHome()

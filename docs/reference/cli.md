@@ -12,7 +12,7 @@ nexus init && nexus create && nexus list && nexus start <workspace-id>
 
 `nexus create` prints the workspace id used by `start`, `ssh`, `tunnel`, `stop`, `remove`.
 
-**Create and host auth bundle:** The `nexus workspace create` command (invoked by `nexus create`) builds a tarball of local AI-tool config directories from **the machine running the CLI** (`authbundle.BuildFromHome`), base64-encodes it, and sends it as `hostAuthBundle` on `workspace.create`. The daemon never substitutes its own `$HOME` for that step. Omitting the CLI (e.g. pure SDK create without `hostAuthBundle`) means no config tarball is sent.
+**Create and host auth bundle:** `nexus create` runs `authbundle.BuildFromHome()` on **the machine running the CLI**, then sends it as `hostAuthBundle`. It only packs **registry-allowed** files under fixed tool roots (e.g. `.config/opencode`, `.config/codex`, `.codex`, `.config/openai`, `.claude`): mostly `.json`/`.yaml`/`.yml`, up to **512KiB per file**, skips symlinks and `.claude/projects/**`. Total gzip payload still capped at **4MiB** before base64. The daemon never reads its own `$HOME` to build this. SDK `workspace.create` without `hostAuthBundle` sends no tarball (see [`sdk.md`](sdk.md)).
 
 ## Common commands
 

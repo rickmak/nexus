@@ -52,14 +52,14 @@ await client.disconnect();
 |--------|------|
 | `repo`, `workspaceName`, `agentProfile` | Required for create |
 | `ref`, `policy`, `backend` | Optional |
-| `hostAuthBundle` | Optional. Base64-encoded **gzip-compressed tar** of config trees to unpack in the guest (same layout as the CLI’s bundle: paths under `$HOME` such as `.config/opencode`, `.claude`, …). **Max 4MiB after base64 decode**; invalid or oversized payloads are rejected. If omitted, **no** host config tarball is sent—the daemon does not read its own `$HOME` to fabricate one. |
+| `hostAuthBundle` | Optional. Base64-encoded **gzip-compressed tar** (paths relative to `$HOME` as in the CLI). **Max 4MiB decoded**; invalid base64 or over limit is rejected. The daemon does **not** re-filter contents—if you build the archive yourself, mirror the CLI registry (see `authbundle` / `AGENTS.md`: allowed roots, `.json`/`.yaml`/`.yml` only, 512KiB/file, no `.claude/projects/**`) for parity with `nexus create`. If omitted, **no** tarball is sent. |
 
 For command execution and API keys, prefer **`AuthBinding`** on the workspace and **`mintAuthRelay` / `revokeAuthRelay`** instead of assuming files on the daemon host.
 
 ## Remote daemon
 
 - **Secrets and API keys:** Use `policy` / `AuthBinding` and auth relay tokens for `exec`/`ssh`, not daemon-local OAuth files.
-- **Tooling config tarball:** Supply `hostAuthBundle` from the **client** when you need guest copies of opencode/codex/claude-style configs. The CLI does this automatically for `nexus workspace create` by building the archive on the machine where the CLI runs.
+- **Tooling config tarball:** Supply `hostAuthBundle` from the **client** when you need guest copies of opencode/codex/claude-style configs. The CLI builds it via `BuildFromHome()` on the machine running `nexus create`, using the selective file registry above.
 
 ## Related
 
