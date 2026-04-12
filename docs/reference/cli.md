@@ -77,6 +77,16 @@ nexus doctor [--report-json <path>]
 ```
 Runs health checks on the local runtime environment and prints a report. Optional `--report-json` writes the full result as JSON.
 
+```
+nexus version [--json]
+```
+Prints current CLI version, running daemon version (if reachable), latest release version, and updater status.
+
+```
+nexus update [--check] [--force] [--rollback] [--json]
+```
+Checks latest release metadata and applies updates for both `nexus` and `nexus-daemon`. Use `--check` for read-only status and `--rollback` to revert to the previous installed binaries.
+
 ## Environment variables
 
 | Variable | Description |
@@ -84,6 +94,7 @@ Runs health checks on the local runtime environment and prints a report. Optiona
 | `NEXUS_DAEMON_PORT` | Daemon port override (default `7874`) |
 | `NEXUS_DAEMON_TOKEN` | Auth token override (auto-managed when unset) |
 | `NEXUS_AUTH_RELAY_TOKEN` | Relay token for `shell` / `exec` commands |
+| `NEXUS_RELEASE_BASE_URL` | Release asset base URL override for updater |
 
 ## Related
 

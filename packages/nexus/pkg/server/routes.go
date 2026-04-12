@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"io"
 	"io/fs"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"strings"
 
+	"github.com/inizio/nexus/packages/nexus/pkg/buildinfo"
 	"github.com/inizio/nexus/packages/nexus/pkg/server/portal"
 )
 
@@ -29,6 +31,7 @@ func (s *Server) Start() error {
 func (s *Server) routes() *http.ServeMux {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", s.handleHealthz)
+	mux.HandleFunc("/version", s.handleVersion)
 
 	if devUI := os.Getenv("NEXUS_DEV_UI"); devUI != "" {
 		target, err := url.Parse(strings.TrimRight(devUI, "/"))
@@ -89,6 +92,12 @@ func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write([]byte(`{"ok":true,"service":"workspace-daemon"}`))
+}
+
+func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_ = json.NewEncoder(w).Encode(buildinfo.Daemon())
 }
 
 func (s *Server) handlePortalUI(w http.ResponseWriter, r *http.Request) {

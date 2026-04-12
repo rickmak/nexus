@@ -12,6 +12,7 @@ func TestRootCommandIncludesWorkspaceSubcommands(t *testing.T) {
 	for _, name := range []string{
 		"create", "list", "start", "stop", "shell", "exec", "run", "fork",
 		"doctor", "init", "remove", "tunnel", "pause", "resume", "restore",
+		"version", "update",
 	} {
 		if !strings.Contains(usage, name) {
 			t.Errorf("usage missing subcommand %q", name)

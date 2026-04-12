@@ -12,9 +12,13 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"syscall"
 	"time"
 )
+
+var daemonProcessCommandLineFn = daemonProcessCommandLine
+var daemonProcessStartedAtFn = daemonProcessStartedAt
 
 // RunDir returns the platform directory used for daemon runtime files
 // (PID file, token file, log file).
@@ -91,10 +95,6 @@ func IsRunning(port int) bool {
 // If token is empty, LoadOrCreateToken() is used to obtain one.
 // The workspaceDir is passed as --workspace-dir to the daemon.
 func EnsureRunning(port int, token, workspaceDir string) error {
-	if IsRunning(port) {
-		return nil
-	}
-
 	if token == "" {
 		var err error
 		token, err = LoadOrCreateToken()
@@ -106,6 +106,19 @@ func EnsureRunning(port int, token, workspaceDir string) error {
 	daemonBin, err := resolveDaemonBin()
 	if err != nil {
 		return fmt.Errorf("daemonclient: cannot find nexus-daemon binary: %w", err)
+	}
+
+	if IsRunning(port) {
+		restart, err := shouldRestartRunningDaemon(port, daemonBin)
+		if err != nil {
+			return fmt.Errorf("daemonclient: inspect running daemon: %w", err)
+		}
+		if !restart {
+			return nil
+		}
+		if stopErr := stopRunningDaemon(port); stopErr != nil {
+			return fmt.Errorf("daemonclient: restart daemon: %w", stopErr)
+		}
 	}
 
 	runDir, err := RunDir()
@@ -143,8 +156,8 @@ func EnsureRunning(port int, token, workspaceDir string) error {
 		return fmt.Errorf("daemonclient: start daemon: %w", err)
 	}
 
-	pidPath := filepath.Join(runDir, "daemon.pid")
-	_ = os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)), 0o644)
+	_ = os.WriteFile(pidFilePath(runDir, port), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644)
+	_ = os.WriteFile(filepath.Join(runDir, "daemon.pid"), []byte(strconv.Itoa(cmd.Process.Pid)), 0o644)
 
 	// Detach from our process table so we don't wait for it.
 	_ = cmd.Process.Release()
@@ -189,4 +202,118 @@ func pollHealthz(port int, timeout time.Duration) error {
 		}
 	}
 	return fmt.Errorf("daemonclient: daemon did not become ready within %s", timeout)
+}
+
+func shouldRestartRunningDaemon(port int, daemonBin string) (bool, error) {
+	pid, err := readRunningDaemonPID(port)
+	if err != nil {
+		return false, err
+	}
+	if pid <= 0 {
+		return false, nil
+	}
+
+	commandLine, err := daemonProcessCommandLineFn(pid)
+	if err == nil {
+		binName := filepath.Base(strings.TrimSpace(daemonBin))
+		if binName != "" && !strings.Contains(commandLine, binName) {
+			return true, nil
+		}
+	}
+
+	binInfo, err := os.Stat(daemonBin)
+	if err != nil {
+		return false, nil
+	}
+	startedAt, err := daemonProcessStartedAtFn(pid)
+	if err != nil {
+		return true, nil
+	}
+	return binInfo.ModTime().After(startedAt.Add(time.Second)), nil
+}
+
+func stopRunningDaemon(port int) error {
+	pid, err := readRunningDaemonPID(port)
+	if err != nil {
+		return err
+	}
+	if pid <= 0 {
+		return nil
+	}
+
+	proc, err := os.FindProcess(pid)
+	if err != nil {
+		return err
+	}
+	if err := proc.Signal(syscall.SIGTERM); err != nil && err != os.ErrProcessDone {
+		return err
+	}
+
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if !IsRunning(port) {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	_ = proc.Signal(syscall.SIGKILL)
+
+	deadline = time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if !IsRunning(port) {
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("existing daemon (pid %d) did not exit", pid)
+}
+
+func readRunningDaemonPID(port int) (int, error) {
+	runDir, err := RunDir()
+	if err != nil {
+		return 0, err
+	}
+	pidData, err := os.ReadFile(pidFilePath(runDir, port))
+	if err == nil {
+		return strconv.Atoi(strings.TrimSpace(string(pidData)))
+	}
+	if !os.IsNotExist(err) {
+		return 0, err
+	}
+	pidData, err = os.ReadFile(filepath.Join(runDir, "daemon.pid"))
+	if err != nil {
+		return 0, err
+	}
+	return strconv.Atoi(strings.TrimSpace(string(pidData)))
+}
+
+func pidFilePath(runDir string, port int) string {
+	return filepath.Join(runDir, fmt.Sprintf("daemon-%d.pid", port))
+}
+
+func daemonProcessCommandLine(pid int) (string, error) {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "command=").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
+func daemonProcessStartedAt(pid int) (time.Time, error) {
+	out, err := exec.Command("ps", "-p", strconv.Itoa(pid), "-o", "lstart=").Output()
+	if err != nil {
+		return time.Time{}, err
+	}
+	startedAtRaw := strings.TrimSpace(string(out))
+	if startedAtRaw == "" {
+		return time.Time{}, fmt.Errorf("empty process start time")
+	}
+	startedAt, err := time.ParseInLocation("Mon Jan 2 15:04:05 2006", startedAtRaw, time.Local)
+	if err != nil {
+		startedAt, err = time.ParseInLocation("Mon Jan _2 15:04:05 2006", startedAtRaw, time.Local)
+		if err != nil {
+			return time.Time{}, err
+		}
+	}
+	return startedAt, nil
 }

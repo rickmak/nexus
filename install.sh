@@ -5,6 +5,7 @@ NEXUS_VERSION="${NEXUS_VERSION:-latest}"
 NEXUS_REPO="${NEXUS_REPO:-inizio/nexus}"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="nexus"
+DAEMON_BINARY_NAME="nexus-daemon"
 
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -62,12 +63,20 @@ get_binary_name() {
     fi
 }
 
-get_download_url() {
+get_daemon_binary_name() {
     local os="$1"
     local arch="$2"
-    local version="$3"
-    local binary_name
-    binary_name=$(get_binary_name "$os" "$arch")
+
+    if [ "$os" = "windows" ]; then
+        echo "${DAEMON_BINARY_NAME}-${os}-${arch}.exe"
+    else
+        echo "${DAEMON_BINARY_NAME}-${os}-${arch}"
+    fi
+}
+
+get_download_url() {
+    local binary_name="$1"
+    local version="$2"
 
     if [ "$version" = "latest" ]; then
         echo "https://github.com/${NEXUS_REPO}/releases/latest/download/${binary_name}"
@@ -78,18 +87,15 @@ get_download_url() {
 
 verify_checksum() {
     local file="$1"
-    local os="$2"
-    local arch="$3"
-
-    local checksum_file
-    checksum_file="nexus-${os}-${arch}.sha256"
+    local checksum_file="$2"
+    local version="$3"
 
     if [ "$NEXUS_REPO" = "inizio/nexus" ]; then
         local checksum_url
-        if [ "$NEXUS_VERSION" = "latest" ]; then
+        if [ "$version" = "latest" ]; then
             checksum_url="https://github.com/${NEXUS_REPO}/releases/latest/download/${checksum_file}"
         else
-            checksum_url="https://github.com/${NEXUS_REPO}/releases/download/v${NEXUS_VERSION}/${checksum_file}"
+            checksum_url="https://github.com/${NEXUS_REPO}/releases/download/v${version}/${checksum_file}"
         fi
 
         if curl -fsSL "$checksum_url" -o /tmp/"$checksum_file" 2>/dev/null; then
@@ -118,34 +124,45 @@ install_binary() {
     local arch="$2"
     local version="$3"
 
-    local binary_name
-    binary_name=$(get_binary_name "$os" "$arch")
-    local download_url
-    download_url=$(get_download_url "$os" "$arch" "$version")
-    local temp_file
-    temp_file=$(mktemp)
+    local cli_binary_name daemon_binary_name
+    cli_binary_name=$(get_binary_name "$os" "$arch")
+    daemon_binary_name=$(get_daemon_binary_name "$os" "$arch")
+    local cli_download_url daemon_download_url
+    cli_download_url=$(get_download_url "$cli_binary_name" "$version")
+    daemon_download_url=$(get_download_url "$daemon_binary_name" "$version")
+    local cli_temp_file daemon_temp_file
+    cli_temp_file=$(mktemp)
+    daemon_temp_file=$(mktemp)
 
     log_info "Detected OS: $os, Architecture: $arch"
-    log_info "Downloading $binary_name..."
+    log_info "Downloading $cli_binary_name and $daemon_binary_name..."
 
-    if ! curl -fsSL "$download_url" -o "$temp_file"; then
-        log_error "Failed to download binary"
-        log_error "URL: $download_url"
-        rm -f "$temp_file"
+    if ! curl -fsSL "$cli_download_url" -o "$cli_temp_file"; then
+        log_error "Failed to download CLI binary"
+        log_error "URL: $cli_download_url"
+        rm -f "$cli_temp_file" "$daemon_temp_file"
+        exit 1
+    fi
+
+    if ! curl -fsSL "$daemon_download_url" -o "$daemon_temp_file"; then
+        log_error "Failed to download daemon binary"
+        log_error "URL: $daemon_download_url"
+        rm -f "$cli_temp_file" "$daemon_temp_file"
         exit 1
     fi
 
     log_info "Download complete, verifying..."
 
-    if [ -f "${temp_file}" ] && [ -s "${temp_file}" ]; then
-        log_info "Binary downloaded successfully"
+    if [ -f "${cli_temp_file}" ] && [ -s "${cli_temp_file}" ] && [ -f "${daemon_temp_file}" ] && [ -s "${daemon_temp_file}" ]; then
+        log_info "Binaries downloaded successfully"
     else
         log_error "Downloaded file is empty or invalid"
-        rm -f "$temp_file"
+        rm -f "$cli_temp_file" "$daemon_temp_file"
         exit 1
     fi
 
-    verify_checksum "$temp_file" "$os" "$arch"
+    verify_checksum "$cli_temp_file" "${cli_binary_name}.sha256" "$version"
+    verify_checksum "$daemon_temp_file" "${daemon_binary_name}.sha256" "$version"
 
     if [ ! -d "$INSTALL_DIR" ]; then
         log_info "Creating install directory: $INSTALL_DIR"
@@ -153,21 +170,27 @@ install_binary() {
     fi
 
     local final_path="${INSTALL_DIR}/${BINARY_NAME}"
+    local daemon_final_path="${INSTALL_DIR}/${DAEMON_BINARY_NAME}"
     if [ "$os" = "windows" ]; then
         final_path="${INSTALL_DIR}/${BINARY_NAME}.exe"
+        daemon_final_path="${INSTALL_DIR}/${DAEMON_BINARY_NAME}.exe"
     fi
 
-    log_info "Installing to $final_path..."
+    log_info "Installing to $final_path and $daemon_final_path..."
 
     if [ "$INSTALL_DIR" = "/usr/local/bin" ] || [ "$INSTALL_DIR" = "/usr/bin" ]; then
-        sudo cp "$temp_file" "$final_path"
+        sudo cp "$cli_temp_file" "$final_path"
+        sudo cp "$daemon_temp_file" "$daemon_final_path"
         sudo chmod +x "$final_path"
+        sudo chmod +x "$daemon_final_path"
     else
-        cp "$temp_file" "$final_path"
+        cp "$cli_temp_file" "$final_path"
+        cp "$daemon_temp_file" "$daemon_final_path"
         chmod +x "$final_path"
+        chmod +x "$daemon_final_path"
     fi
 
-    rm -f "$temp_file"
+    rm -f "$cli_temp_file" "$daemon_temp_file"
 
     if command -v "$BINARY_NAME" >/dev/null 2>&1; then
         log_info "Installation complete!"

@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,10 +20,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/inizio/nexus/packages/nexus/pkg/buildinfo"
 	"github.com/inizio/nexus/packages/nexus/pkg/compose"
 	"github.com/inizio/nexus/packages/nexus/pkg/config"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/authbundle"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/firecracker"
+	"github.com/inizio/nexus/packages/nexus/pkg/update"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspacemgr"
 	"github.com/spf13/cobra"
 )
@@ -91,6 +94,11 @@ var initCmd = &cobra.Command{
 
 var runBackend string
 var runTimeout time.Duration
+var updateCheckOnly bool
+var updateForce bool
+var updateRollback bool
+var updateJSON bool
+var versionJSON bool
 
 var runCmd = &cobra.Command{
 	Use:   "run [--backend name] [--timeout dur] -- <command> [args...]",
@@ -107,15 +115,39 @@ var runCmd = &cobra.Command{
 	},
 }
 
+var versionCmd = &cobra.Command{
+	Use:   "version",
+	Short: "Show CLI, daemon, and latest release version",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runVersion(versionJSON)
+	},
+}
+
+var updateCmd = &cobra.Command{
+	Use:   "update",
+	Short: "Check for updates and apply latest release",
+	Args:  cobra.NoArgs,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return runUpdate(updateCheckOnly, updateForce, updateRollback, updateJSON)
+	},
+}
+
 func init() {
 	doctorCmd.Flags().StringVar(&doctorReportJSON, "report-json", "", "optional path to write doctor probe results as JSON")
 	initCmd.Flags().BoolVar(&initForce, "force", false, "overwrite existing .nexus files")
 	runCmd.Flags().StringVar(&runBackend, "backend", "", "runtime backend override")
 	runCmd.Flags().DurationVar(&runTimeout, "timeout", 10*time.Minute, "max time for the workspace run")
-	rootCmd.AddCommand(doctorCmd, initCmd, runCmd)
+	versionCmd.Flags().BoolVar(&versionJSON, "json", false, "render machine-readable output")
+	updateCmd.Flags().BoolVar(&updateCheckOnly, "check", false, "check latest version without applying update")
+	updateCmd.Flags().BoolVar(&updateForce, "force", false, "ignore update check interval and re-evaluate latest release")
+	updateCmd.Flags().BoolVar(&updateRollback, "rollback", false, "rollback CLI and daemon binaries to previous version")
+	updateCmd.Flags().BoolVar(&updateJSON, "json", false, "render machine-readable output")
+	rootCmd.AddCommand(doctorCmd, initCmd, runCmd, versionCmd, updateCmd)
 }
 
 func main() {
+	tryBackgroundAutoUpdate()
 	args := os.Args[1:]
 	for len(args) > 0 && args[0] == "--" {
 		args = args[1:]
@@ -133,6 +165,157 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func tryBackgroundAutoUpdate() {
+	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Second)
+	defer cancel()
+	_, _ = update.AutoUpdate(ctx, update.Options{
+		ReleaseBaseURL:     releaseBaseURL(),
+		PublicKeyBase64:    strings.TrimSpace(buildinfo.UpdatePublicKeyBase64),
+		CheckInterval:      4 * time.Hour,
+		BadVersionCooldown: 24 * time.Hour,
+		CurrentVersion:     buildinfo.CLI().Version,
+		CurrentUpdater:     buildinfo.CLI().Version,
+		AutoApply:          true,
+		Force:              false,
+	})
+}
+
+func runVersion(asJSON bool) error {
+	info := buildinfo.CLI()
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	status, _ := update.Check(ctx, update.Options{
+		ReleaseBaseURL:     releaseBaseURL(),
+		PublicKeyBase64:    strings.TrimSpace(buildinfo.UpdatePublicKeyBase64),
+		CheckInterval:      0,
+		BadVersionCooldown: 24 * time.Hour,
+		CurrentVersion:     info.Version,
+		CurrentUpdater:     info.Version,
+		AutoApply:          false,
+		Force:              true,
+	})
+	daemonVersion := fetchDaemonVersion()
+	payload := map[string]any{
+		"cli":    info,
+		"daemon": daemonVersion,
+		"update": status,
+	}
+	if asJSON {
+		return json.NewEncoder(os.Stdout).Encode(payload)
+	}
+	fmt.Printf("CLI:     %s\n", info.Version)
+	if daemonVersion != "" {
+		fmt.Printf("Daemon:  %s\n", daemonVersion)
+	} else {
+		fmt.Printf("Daemon:  unavailable\n")
+	}
+	if strings.TrimSpace(status.LatestVersion) != "" {
+		fmt.Printf("Latest:  %s\n", status.LatestVersion)
+	}
+	if strings.TrimSpace(status.LastFailure) != "" {
+		fmt.Printf("Update:  %s\n", status.LastFailure)
+	} else if status.UpdateReady {
+		fmt.Printf("Update:  available\n")
+	} else {
+		fmt.Printf("Update:  up to date\n")
+	}
+	return nil
+}
+
+func runUpdate(checkOnly, force, rollback, asJSON bool) error {
+	if rollback {
+		err := update.Rollback(context.Background())
+		if asJSON {
+			return json.NewEncoder(os.Stdout).Encode(map[string]any{
+				"rolledBack": err == nil,
+				"error":      errString(err),
+			})
+		}
+		if err != nil {
+			return err
+		}
+		fmt.Println("rollback completed")
+		return nil
+	}
+	opts := update.Options{
+		ReleaseBaseURL:     releaseBaseURL(),
+		PublicKeyBase64:    strings.TrimSpace(buildinfo.UpdatePublicKeyBase64),
+		CheckInterval:      0,
+		BadVersionCooldown: 24 * time.Hour,
+		CurrentVersion:     buildinfo.CLI().Version,
+		CurrentUpdater:     buildinfo.CLI().Version,
+		AutoApply:          !checkOnly,
+		Force:              force,
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	if checkOnly {
+		status, err := update.Check(ctx, opts)
+		if asJSON {
+			return json.NewEncoder(os.Stdout).Encode(map[string]any{"status": status, "error": errString(err)})
+		}
+		if err != nil {
+			return err
+		}
+		if status.UpdateReady {
+			fmt.Printf("update available: %s -> %s\n", status.CurrentVersion, status.LatestVersion)
+			return nil
+		}
+		fmt.Println("already up to date")
+		return nil
+	}
+	result, err := update.ForceUpdate(ctx, opts)
+	if asJSON {
+		return json.NewEncoder(os.Stdout).Encode(map[string]any{"result": result, "error": errString(err)})
+	}
+	if err != nil {
+		return err
+	}
+	if result.Updated {
+		fmt.Printf("updated: %s -> %s\n", result.FromVersion, result.ToVersion)
+		return nil
+	}
+	fmt.Println("already up to date")
+	return nil
+}
+
+func fetchDaemonVersion() string {
+	port := daemonPort()
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("http://localhost:%d/version", port), nil)
+	if err != nil {
+		return ""
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	var body struct {
+		Version string `json:"version"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(body.Version)
+}
+
+func releaseBaseURL() string {
+	if value := strings.TrimSpace(os.Getenv("NEXUS_RELEASE_BASE_URL")); value != "" {
+		return value
+	}
+	return "https://github.com/inizio/nexus/releases/latest/download"
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func printUsage() {
@@ -2088,4 +2271,3 @@ func ensureDotEnv(projectRoot string) error {
 	}
 	return nil
 }
-
