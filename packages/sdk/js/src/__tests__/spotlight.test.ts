@@ -2,6 +2,7 @@ import WebSocket from 'ws';
 import { WorkspaceClient } from '../client';
 
 jest.mock('ws');
+jest.mock('../bundle', () => ({ buildConfigBundle: jest.fn().mockReturnValue('') }));
 
 const MockedWebSocket = WebSocket as jest.MockedClass<typeof WebSocket>;
 
