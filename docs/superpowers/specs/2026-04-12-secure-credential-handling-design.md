@@ -249,11 +249,35 @@ func (f *SSHAgentForwarder) Stop() error
 
 ## Configuration
 
-No configuration needed for hard-cutover. All credentials are handled securely by default.
+**Zero configuration required.** Nexus auto-detects all credentials from the host.
 
-Optional future enhancements:
-- `NEXUS_SECRETS_STRICT_MODE` — block all outbound HTTP except through interceptor
-- `NEXUS_SECRETS_LOG_LEVEL` — verbose logging of all credential usage
+### Auto-Detected Sources
+
+```
+Host Home Directory Scan:
+├── ~/.gitconfig                              → Git HTTPS credentials
+├── ~/.git-credentials                        → Git credential store
+├── ~/.ssh/                                   → SSH keys (via agent forwarding)
+├── ~/.config/codex/auth.json                 → Codex CLI OAuth
+├── ~/.config/claude/settings.json          → Claude CLI auth
+├── ~/.config/openai/auth.json                → OpenAI API keys
+├── ~/.config/gh/hosts.yml                    → GitHub CLI OAuth
+└── ~/.config/gcm/credentials                 → Git Credential Manager
+```
+
+### Optional Overrides
+
+```bash
+# Disable specific providers
+export NEXUS_DISABLE_CODEX=1
+export NEXUS_DISABLE_CLAUDE=1
+
+# Strict mode (block all outbound HTTP not through interceptor)
+export NEXUS_SECRETS_STRICT_MODE=1
+
+# Verbose credential usage logging
+export NEXUS_SECRETS_LOG_LEVEL=debug
+```
 
 ## Migration (Hard-Cutover)
 
@@ -289,25 +313,106 @@ The placeholder approach works for static tokens but fails for OAuth-based agent
 3. Store and refresh tokens automatically
 4. Handle single-use refresh token rotation (race conditions with multiple agents)
 
-### Solution: Credential Vending Service
+### Solution: Auto-Detect + Credential Vending Service
+
+Nexus **automatically detects** OAuth configurations from the host and sets up credential vending transparently. No explicit flags needed.
+
+```go
+// pkg/secrets/discovery/discovery.go
+
+type HostOAuthConfig struct {
+    Provider     string    // "codex", "claude", "openai", "github"
+    RefreshToken string    // From host config file
+    AccessToken  string    // May be present, we'll use short-lived instead
+    ExpiresAt    time.Time // When access token expires
+    Scopes       []string  // Granted scopes
+}
+
+// DetectOAuthConfigs scans host home directory for OAuth configurations
+func DetectOAuthConfigs(homeDir string) ([]HostOAuthConfig, error) {
+    var configs []HostOAuthConfig
+    
+    // Check for Codex CLI
+    if cfg, err := detectCodexConfig(homeDir); err == nil && cfg != nil {
+        configs = append(configs, *cfg)
+    }
+    
+    // Check for Claude CLI/Desktop
+    if cfg, err := detectClaudeConfig(homeDir); err == nil && cfg != nil {
+        configs = append(configs, *cfg)
+    }
+    
+    // Check for OpenAI CLI
+    if cfg, err := detectOpenAIConfig(homeDir); err == nil && cfg != nil {
+        configs = append(configs, *cfg)
+    }
+    
+    // Check for GitHub CLI (gh)
+    if cfg, err := detectGitHubCLIConfig(homeDir); err == nil && cfg != nil {
+        configs = append(configs, *cfg)
+    }
+    
+    return configs, nil
+}
+
+func detectCodexConfig(home string) (*HostOAuthConfig, error) {
+    paths := []string{
+        filepath.Join(home, ".config", "codex", "auth.json"),
+        filepath.Join(home, ".codex", "auth.json"),
+    }
+    
+    for _, path := range paths {
+        data, err := os.ReadFile(path)
+        if err != nil {
+            continue
+        }
+        
+        var auth struct {
+            RefreshToken string    `json:"refresh_token"`
+            AccessToken  string    `json:"access_token"`
+            ExpiresAt    time.Time `json:"expires_at"`
+            Account      string    `json:"account"` // GitHub username
+        }
+        
+        if err := json.Unmarshal(data, &auth); err != nil {
+            continue
+        }
+        
+        if auth.RefreshToken == "" {
+            continue // Not authenticated
+        }
+        
+        return &HostOAuthConfig{
+            Provider:     "codex",
+            RefreshToken: auth.RefreshToken,
+            AccessToken:  auth.AccessToken,
+            ExpiresAt:    auth.ExpiresAt,
+            Scopes:       []string{"repo", "read:org"}, // Codex default scopes
+        }, nil
+    }
+    
+    return nil, nil // Not found, not an error
+}
+
+func detectClaudeConfig(home string) (*HostOAuthConfig, error) {
+    // Similar for ~/.config/claude/settings.json or ~/.claude/auth
+    // Extract session_token or api_key
+}
+```
+
+### Credential Vending Service
 
 ```go
 // pkg/secrets/vending/service.go
 type VendingService struct {
-    vault      *Vault
+    vault        *Vault
     oauthBrokers map[string]OAuthBroker // provider -> broker
 }
 
 type OAuthBroker interface {
-    // InitiateDeviceFlow starts OAuth device flow, returns user_code and verification URL
-    InitiateDeviceFlow(ctx context.Context, scopes []string) (*DeviceFlowInit, error)
-    
     // GetAccessToken returns short-lived access token (5-15 min TTL)
-    // Handles refresh internally, guest never sees refresh_token
+    // Handles refresh internally using host's stored refresh_token
     GetAccessToken(ctx context.Context, workspaceID string) (*AccessToken, error)
-    
-    // Revoke invalidates all tokens for this workspace
-    Revoke(ctx context.Context, workspaceID string) error
 }
 
 type AccessToken struct {
@@ -322,9 +427,9 @@ type AccessToken struct {
 ```go
 // pkg/secrets/vending/codex_broker.go
 type CodexBroker struct {
-    clientID     string
-    tokenStore   *TokenStore  // Encrypted storage for refresh tokens
-    mu           sync.RWMutex // Serializes refresh operations
+    hostConfig   HostOAuthConfig  // Populated from host's ~/.config/codex/auth.json
+    tokenStore   *TokenStore      // Encrypted storage for refresh tokens (copied from host)
+    mu           sync.RWMutex     // Serializes refresh operations
 }
 
 func (b *CodexBroker) GetAccessToken(ctx context.Context, workspaceID string) (*AccessToken, error) {
@@ -344,18 +449,16 @@ func (b *CodexBroker) GetAccessToken(ctx context.Context, workspaceID string) (*
     }
     
     // 4. Perform refresh with stored refresh_token
-    refreshToken, err := b.tokenStore.GetRefreshToken(workspaceID)
-    if err != nil {
-        return nil, fmt.Errorf("no refresh token available, need re-auth: %w", err)
-    }
+    refreshToken := b.hostConfig.RefreshToken
     
     newToken, err := b.refresh(refreshToken)
     if err != nil {
         return nil, fmt.Errorf("token refresh failed: %w", err)
     }
     
-    // 5. Store new refresh_token (it's single-use, rotated)
-    b.tokenStore.StoreRefreshToken(workspaceID, newToken.RefreshToken)
+    // 5. Update host config with new refresh_token (it's single-use, rotated)
+    b.hostConfig.RefreshToken = newToken.RefreshToken
+    b.updateHostConfigFile()
     
     // 6. Cache short-lived access token
     b.cacheToken(workspaceID, newToken.AccessToken, newToken.ExpiresIn)
@@ -368,16 +471,17 @@ func (b *CodexBroker) GetAccessToken(ctx context.Context, workspaceID string) (*
 }
 ```
 
-### Guest Integration
+### Guest Integration (Transparent)
 
-The guest doesn't run `codex login` directly. Instead:
+No explicit configuration needed. When workspace starts:
 
-1. **Host runs device flow** when workspace is created with `--oauth codex`
-2. **Host displays user_code** to user via CLI/notification
-3. **User authenticates** in browser
-4. **Host stores refresh_token** securely (encrypted, outside sandbox)
-5. **Guest has "fake" Codex endpoint** at `localhost:8091` (vending client proxy)
-6. **Codex CLI configured** to talk to `localhost:8091` instead of real API
+1. **Host auto-detects OAuth configs** from `~/.config/codex/auth.json`, etc.
+2. **Host migrates refresh tokens** to encrypted vault (outside sandbox)
+3. **Host starts vending proxy** for each detected provider
+4. **Guest environment auto-configured** with proxy endpoints:
+   - `CODEX_API_URL=http://localhost:8091`
+   - `ANTHROPIC_API_URL=http://localhost:8092`
+   - `OPENAI_BASE_URL=http://localhost:8093`
 
 ```go
 // Guest agent runs local proxy that forwards to host via vsock
@@ -391,44 +495,56 @@ func (c *VendingClient) GetToken(ctx context.Context, provider string) (string, 
 }
 ```
 
-### Data Flow: Codex CLI in Workspace
+### Data Flow: Codex CLI in Workspace (Auto-Detected)
 
 ```
-1. Workspace creation with OAuth:
-   $ nexus workspace create --oauth codex
+1. User has Codex CLI configured on host:
+   ~/.config/codex/auth.json exists with refresh_token
+
+2. User creates workspace (no flags needed):
+   $ nexus workspace create
    
-2. Host initiates device flow:
-   → POST https://github.com/login/device/code
-   ← {device_code: "...", user_code: "ABCD-1234", verification_uri: "https://github.com/login/device"}
+3. Host auto-detects:
+   → Scan ~/.config/codex/auth.json
+   → Extract refresh_token: "ghr_..."
+   → Register CodexBroker with vault
 
-3. Host displays to user:
-   "Open https://github.com/login/device and enter code: ABCD-1234"
+4. Host starts guest with:
+   → CODEX_API_URL=http://localhost:8091 (vending proxy)
+   → No ~/.config/codex directory in guest
 
-4. User authenticates in browser
-
-5. Host polls and receives:
-   {access_token: "ghu_...", refresh_token: "ghr_...", expires_in: 28800}
-
-6. Host stores encrypted refresh_token, discards access_token
-
-7. Guest workspace starts with:
-   - CODEX_API_URL=http://localhost:8091 (vending proxy)
-   - No ~/.config/codex/auth.json file
-   
-8. Guest runs: codex "fix this bug"
-   → Codex CLI requests http://localhost:8091/token
-   → Vending proxy forwards over vsock to host
+5. Guest runs: codex "fix this bug"
+   → Codex CLI reads CODEX_API_URL, talks to localhost:8091
+   → Vending proxy forwards over vsock: "give me codex token"
    → Host returns fresh access_token (ghu_..., 10 min TTL)
-   → Codex CLI uses token, makes real API calls
+   → Codex CLI uses token, makes real API calls to GitHub
    
-9. Token expires mid-operation:
+6. Token expires mid-operation:
    → Codex CLI requests new token from localhost:8091
    → Host returns fresh token (no refresh in guest)
    
-10. Race condition avoided:
-    → All refresh operations serialized on host
-    → Single source of truth for refresh_token
+7. Token refresh on host:
+   → Host serializes all refresh operations
+   → Updates ~/.config/codex/auth.json with new refresh_token
+   → Guest never sees refresh_token
 ```
+
+### Auto-Detection Strategy
+
+| Provider | Host Config Location | Detection Method |
+|----------|----------------------|------------------|
+| Codex CLI | `~/.config/codex/auth.json` | Check for `refresh_token` field |
+| Claude CLI | `~/.config/claude/settings.json` | Check for `sessionToken` |
+| Claude Desktop | `~/.claude/auth.json` | Check for `apiKey` |
+| OpenAI CLI | `~/.config/openai/auth.json` | Check for `api_key` |
+| GitHub CLI | `~/.config/gh/hosts.yml` | Check for `oauth_token` |
+| Git Credential Manager | `~/.config/gcm/credentials` | Check for stored creds |
+
+**Transparent behavior:**
+- If host has Codex configured → Guest Codex works immediately
+- If host has Claude configured → Guest Claude works immediately
+- If host has nothing → No vending proxies started, no errors
+- Multiple providers → All vend simultaneously
 
 ### Supported Providers
 
@@ -442,11 +558,12 @@ Initial implementation targets:
 
 | Threat | Mitigation |
 |--------|------------|
-| Guest steals refresh_token | Never enters guest, stored encrypted on host |
+| Guest steals refresh_token | Never enters guest, stays in host's ~/.config |
 | Guest exfiltrates access_token | Short TTL (5-15 min), limited blast radius |
 | Multiple agents race on refresh | Host serializes all refresh operations |
 | Guest forges token requests | Vsock connection authenticated per-workspace |
-| User re-auth required | Only when refresh_token expires/revoked |
+| Re-auth required | Only when refresh_token expires/revoked on host |
+| Host credential file changed | Host watches files, updates broker automatically |
 
 ## Component Summary
 
