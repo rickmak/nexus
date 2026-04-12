@@ -19,7 +19,7 @@ import (
 // Config holds local workspace settings. Zero values use defaults.
 type Config struct {
 	// WorktreeRoot is the directory under which named worktrees are created.
-	// Default: ~/nexus-workspaces
+	// Default: $XDG_DATA_HOME/nexus/workspaces (or ~/.nexus/workspaces)
 	WorktreeRoot string
 	// RepoCacheDir is the directory where bare repo clones are cached.
 	// Default: ~/.cache/nexus/repos
@@ -34,11 +34,7 @@ type Manager struct {
 // NewManager creates a new Manager. If cfg fields are empty, defaults are applied.
 func NewManager(cfg Config) (*Manager, error) {
 	if cfg.WorktreeRoot == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return nil, fmt.Errorf("localws: cannot determine home dir: %w", err)
-		}
-		cfg.WorktreeRoot = filepath.Join(home, "nexus-workspaces")
+		cfg.WorktreeRoot = defaultWorktreeRoot()
 	}
 	if cfg.RepoCacheDir == "" {
 		cacheBase := os.Getenv("XDG_CACHE_HOME")
@@ -222,6 +218,16 @@ func gitCmd(ctx context.Context, dir string, args ...string) *exec.Cmd {
 	cmd := exec.CommandContext(ctx, "git", args...)
 	cmd.Dir = dir
 	return cmd
+}
+
+// defaultWorktreeRoot returns the default path for workspace worktrees.
+// It respects $XDG_DATA_HOME if set; otherwise falls back to ~/.nexus/workspaces.
+func defaultWorktreeRoot() string {
+	if dataHome := os.Getenv("XDG_DATA_HOME"); dataHome != "" {
+		return filepath.Join(dataHome, "nexus", "workspaces")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".nexus", "workspaces")
 }
 
 // urlToSlug converts a git remote URL to a filesystem-safe slug.

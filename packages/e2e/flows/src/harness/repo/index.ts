@@ -13,7 +13,15 @@ export type GitFixture = TempFixture & {
 
 async function fixtureRootBase(): Promise<string> {
   const override = process.env.NEXUS_E2E_FIXTURE_ROOT?.trim();
-  const baseDir = override && override.length > 0 ? override : path.join(os.homedir(), 'nexus-workspaces', 'e2e-fixtures');
+  if (override && override.length > 0) {
+    await fs.mkdir(override, { recursive: true });
+    return override;
+  }
+  // Default: ~/.nexus/e2e-fixtures (respecting XDG_DATA_HOME if set)
+  const dataHome = process.env.XDG_DATA_HOME;
+  const baseDir = dataHome
+    ? path.join(dataHome, 'nexus', 'e2e-fixtures')
+    : path.join(os.homedir(), '.nexus', 'e2e-fixtures');
   await fs.mkdir(baseDir, { recursive: true });
   return baseDir;
 }

@@ -102,18 +102,18 @@ func daemonToken() (string, error) {
 	if t := os.Getenv("NEXUS_DAEMON_TOKEN"); t != "" {
 		return t, nil
 	}
-	return daemonclient.LoadOrCreateToken()
+	return daemonclient.ReadDaemonToken()
 }
 
 func ensureDaemon() (*websocket.Conn, error) {
 	port := daemonPort()
+	tokenEnv := strings.TrimSpace(os.Getenv("NEXUS_DAEMON_TOKEN"))
+	if err := daemonclient.EnsureRunning(port, "", tokenEnv); err != nil {
+		return nil, fmt.Errorf("start daemon: %w", err)
+	}
 	token, err := daemonToken()
 	if err != nil {
 		return nil, fmt.Errorf("daemon token: %w", err)
-	}
-
-	if err := daemonclient.EnsureRunning(port, token, ""); err != nil {
-		return nil, fmt.Errorf("start daemon: %w", err)
 	}
 
 	url := fmt.Sprintf("ws://localhost:%d/?token=%s", port, token)

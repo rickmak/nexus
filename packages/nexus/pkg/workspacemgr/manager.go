@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/inizio/nexus/packages/nexus/pkg/auth"
 	"github.com/inizio/nexus/packages/nexus/pkg/config"
 	"github.com/inizio/nexus/packages/nexus/pkg/git/worktree"
 	"github.com/inizio/nexus/packages/nexus/pkg/store"
@@ -133,7 +134,7 @@ func (m *Manager) deleteRecord(id string) {
 	}
 }
 
-func (m *Manager) Create(_ context.Context, spec CreateSpec) (*Workspace, error) {
+func (m *Manager) Create(ctx context.Context, spec CreateSpec) (*Workspace, error) {
 	if spec.Repo == "" {
 		return nil, fmt.Errorf("repo is required")
 	}
@@ -144,6 +145,7 @@ func (m *Manager) Create(_ context.Context, spec CreateSpec) (*Workspace, error)
 		return nil, err
 	}
 
+	identity := auth.IdentityFromContext(ctx)
 	now := time.Now().UTC()
 	id := fmt.Sprintf("ws-%d", now.UnixNano())
 	rootPath := filepath.Join(m.root, "instances", id)
@@ -179,6 +181,9 @@ func (m *Manager) Create(_ context.Context, spec CreateSpec) (*Workspace, error)
 		Backend:           spec.Backend,
 		AuthBinding:       authBinding,
 		LocalWorktreePath: localWorktreePath,
+		OwnerUserID:       identity.Subject,
+		TenantID:          identity.TenantID,
+		CreatedBy:         identity.Subject,
 		CreatedAt:         now,
 		UpdatedAt:         now,
 	}
@@ -575,4 +580,3 @@ func isLikelyRemoteRepo(repo string) bool {
 	}
 	return false
 }
-

@@ -3,8 +3,6 @@
 package daemonclient
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -38,7 +36,30 @@ func RunDir() (string, error) {
 	return filepath.Join(configHome, "nexus", "run"), nil
 }
 
-// TokenPath returns the path of the per-user daemon token file.
+// defaultWorkspaceDir returns the default directory for workspace storage.
+// It respects $XDG_DATA_HOME if set; otherwise falls back to ~/.nexus/workspaces.
+func defaultWorkspaceDir() string {
+	if dataHome := os.Getenv("XDG_DATA_HOME"); dataHome != "" {
+		return filepath.Join(dataHome, "nexus", "workspaces")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".nexus", "workspaces")
+}
+
+// DefaultDataDir returns the absolute path for daemon persistent data
+// ($XDG_DATA_HOME/nexus or ~/.local/share/nexus), matching config.DefaultConfig.
+func DefaultDataDir() (string, error) {
+	if d := strings.TrimSpace(os.Getenv("XDG_DATA_HOME")); d != "" {
+		return filepath.Join(d, "nexus"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("daemon data dir: %w", err)
+	}
+	return filepath.Join(home, ".local", "share", "nexus"), nil
+}
+
+// TokenPath returns the legacy path of the per-user daemon token file (runtime dir).
 func TokenPath() (string, error) {
 	d, err := RunDir()
 	if err != nil {
@@ -47,31 +68,36 @@ func TokenPath() (string, error) {
 	return filepath.Join(d, "token"), nil
 }
 
-// LoadOrCreateToken reads the daemon token from TokenPath, generating and
-// persisting a new random token if none exists yet.
-func LoadOrCreateToken() (string, error) {
-	path, err := TokenPath()
+// ReadDaemonToken reads the secret the workspace daemon uses for JWT auth.
+// It prefers $XDG_DATA_HOME/nexus/token (or ~/.local/share/nexus/token), then
+// falls back to the legacy TokenPath location for transitional compatibility.
+func ReadDaemonToken() (string, error) {
+	dataDir, err := DefaultDataDir()
 	if err != nil {
 		return "", err
 	}
+	path := filepath.Join(dataDir, "token")
 	data, err := os.ReadFile(path)
 	if err == nil {
-		tok := string(data)
-		if len(tok) >= 16 {
+		tok := strings.TrimSpace(string(data))
+		if tok != "" {
 			return tok, nil
 		}
 	}
-	// Generate a new token.
-	buf := make([]byte, 24)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("generate token: %w", err)
+	legacy, legErr := TokenPath()
+	if legErr != nil {
+		if err != nil {
+			return "", fmt.Errorf("read daemon token: %w", err)
+		}
+		return "", fmt.Errorf("read daemon token: %w", legErr)
 	}
-	tok := hex.EncodeToString(buf)
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return "", fmt.Errorf("create run dir: %w", err)
+	data, err = os.ReadFile(legacy)
+	if err != nil {
+		return "", fmt.Errorf("read daemon token: %w", err)
 	}
-	if err := os.WriteFile(path, []byte(tok), 0o600); err != nil {
-		return "", fmt.Errorf("write token: %w", err)
+	tok := strings.TrimSpace(string(data))
+	if tok == "" {
+		return "", fmt.Errorf("read daemon token: empty file")
 	}
 	return tok, nil
 }
@@ -92,17 +118,10 @@ func IsRunning(port int) bool {
 // executable (or via $PATH), writes a PID file to RunDir(), and polls
 // /healthz for up to 5 seconds before returning.
 //
-// If token is empty, LoadOrCreateToken() is used to obtain one.
-// The workspaceDir is passed as --workspace-dir to the daemon.
-func EnsureRunning(port int, token, workspaceDir string) error {
-	if token == "" {
-		var err error
-		token, err = LoadOrCreateToken()
-		if err != nil {
-			return fmt.Errorf("daemonclient: load token: %w", err)
-		}
-	}
-
+// tokenForDaemon, if non-empty, is passed as --token (e.g. NEXUS_DAEMON_TOKEN).
+// If empty, the daemon loads or creates the token in its data directory.
+// workspaceDir is passed as --workspace-dir to the daemon (empty uses default).
+func EnsureRunning(port int, workspaceDir string, tokenForDaemon string) error {
 	daemonBin, err := resolveDaemonBin()
 	if err != nil {
 		return fmt.Errorf("daemonclient: cannot find nexus-daemon binary: %w", err)
@@ -137,15 +156,23 @@ func EnsureRunning(port int, token, workspaceDir string) error {
 	}
 
 	if workspaceDir == "" {
-		home, _ := os.UserHomeDir()
-		workspaceDir = filepath.Join(home, "nexus-workspaces")
+		workspaceDir = defaultWorkspaceDir()
 	}
 
-	cmd := exec.Command(daemonBin,
+	dataDir, err := DefaultDataDir()
+	if err != nil {
+		return fmt.Errorf("daemonclient: data dir: %w", err)
+	}
+
+	args := []string{
 		"--port", strconv.Itoa(port),
-		"--token", token,
+		"--data-dir", dataDir,
 		"--workspace-dir", workspaceDir,
-	)
+	}
+	if tokenForDaemon != "" {
+		args = append(args, "--token", tokenForDaemon)
+	}
+	cmd := exec.Command(daemonBin, args...)
 	// Detach from the calling process: new session, no controlling terminal.
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Stdin = nil
@@ -162,7 +189,27 @@ func EnsureRunning(port int, token, workspaceDir string) error {
 	// Detach from our process table so we don't wait for it.
 	_ = cmd.Process.Release()
 
-	return pollHealthz(port, 5*time.Second)
+	if err := pollHealthz(port, 5*time.Second); err != nil {
+		return err
+	}
+	if tokenForDaemon == "" {
+		if err := pollDaemonToken(5 * time.Second); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func pollDaemonToken(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	interval := 50 * time.Millisecond
+	for time.Now().Before(deadline) {
+		if _, err := ReadDaemonToken(); err == nil {
+			return nil
+		}
+		time.Sleep(interval)
+	}
+	return fmt.Errorf("daemonclient: token file not available within %s", timeout)
 }
 
 // resolveDaemonBin finds the nexus-daemon binary. It first looks next to the
