@@ -150,21 +150,27 @@ func printUsage() {
 }
 
 func runInitCommand(args []string) {
-	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	force := fs.Bool("force", false, "overwrite existing .nexus files")
-	if err := fs.Parse(args); err != nil {
-		os.Exit(2)
+	force := false
+	var positional []string
+	for _, arg := range args {
+		switch arg {
+		case "--force", "-force":
+			force = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(os.Stderr, "unknown flag: %s\nusage: nexus init [project-root] [--force]\n", arg)
+				os.Exit(2)
+			}
+			positional = append(positional, arg)
+		}
 	}
-
-	rest := fs.Args()
-	if len(rest) > 1 {
+	if len(positional) > 1 {
 		fmt.Fprintln(os.Stderr, "usage: nexus init [project-root] [--force]")
 		os.Exit(2)
 	}
 	projectRoot := "."
-	if len(rest) == 1 {
-		projectRoot = strings.TrimSpace(rest[0])
+	if len(positional) == 1 {
+		projectRoot = strings.TrimSpace(positional[0])
 	}
 	absProjectRoot, err := filepath.Abs(projectRoot)
 	if err != nil {
@@ -174,7 +180,7 @@ func runInitCommand(args []string) {
 
 	if err := runInit(initOptions{
 		projectRoot: absProjectRoot,
-		force:       *force,
+		force:       force,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
