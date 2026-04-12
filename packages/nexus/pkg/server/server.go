@@ -79,6 +79,28 @@ var newSpotlightManagerForServer = func(workspaceMgr *workspacemgr.Manager) (*sp
 	return spotlight.NewManagerWithRepository(workspaceMgr.SpotlightRepository())
 }
 
+type workspaceMigrationAdapter struct {
+	mgr *workspacemgr.Manager
+}
+
+func (a workspaceMigrationAdapter) ListWorkspaceMigrationRecords() []projectmgr.WorkspaceMigrationRecord {
+	all := a.mgr.List()
+	out := make([]projectmgr.WorkspaceMigrationRecord, 0, len(all))
+	for _, ws := range all {
+		out = append(out, projectmgr.WorkspaceMigrationRecord{
+			ID:        ws.ID,
+			ProjectID: ws.ProjectID,
+			Repo:      ws.Repo,
+			RepoID:    ws.RepoID,
+		})
+	}
+	return out
+}
+
+func (a workspaceMigrationAdapter) UpdateProjectID(workspaceID, projectID string) error {
+	return a.mgr.UpdateProjectID(workspaceID, projectID)
+}
+
 func NewServer(port int, workspaceDir string, tokenSecret string) (*Server, error) {
 	ws, err := workspace.NewWorkspace(workspaceDir)
 	if err != nil {
@@ -93,6 +115,10 @@ func NewServer(port int, workspaceDir string, tokenSecret string) (*Server, erro
 	}
 	projectMgr := projectmgr.NewManager(workspaceDir, projectStore)
 	workspaceMgr.SetProjectManager(projectMgr)
+
+	if err := projectMgr.MigrateWorkspacesWithoutProject(workspaceMigrationAdapter{mgr: workspaceMgr}); err != nil {
+		log.Printf("warning: project migration failed: %v", err)
+	}
 
 	spotlightMgr, err := newSpotlightManagerForServer(workspaceMgr)
 	if err != nil {

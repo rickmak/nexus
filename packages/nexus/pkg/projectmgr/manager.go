@@ -3,6 +3,7 @@ package projectmgr
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
 	"strings"
@@ -125,6 +126,41 @@ func (m *Manager) GetOrCreateForRepo(repo string, repoID string) (*Project, erro
 	}
 
 	return p, nil
+}
+
+// WorkspaceMigrationRecord describes a workspace row for project backfill.
+type WorkspaceMigrationRecord struct {
+	ID        string
+	ProjectID string
+	Repo      string
+	RepoID    string
+}
+
+// WorkspaceMigrationSource enumerates workspaces without importing workspacemgr (avoids an import cycle).
+type WorkspaceMigrationSource interface {
+	ListWorkspaceMigrationRecords() []WorkspaceMigrationRecord
+	UpdateProjectID(workspaceID, projectID string) error
+}
+
+// MigrateWorkspacesWithoutProject creates projects for existing workspaces that do not have a project_id. Call on startup.
+func (m *Manager) MigrateWorkspacesWithoutProject(src WorkspaceMigrationSource) error {
+	if m.projectRepo == nil {
+		return nil
+	}
+	for _, ws := range src.ListWorkspaceMigrationRecords() {
+		if ws.ProjectID != "" {
+			continue
+		}
+		project, err := m.GetOrCreateForRepo(ws.Repo, ws.RepoID)
+		if err != nil {
+			log.Printf("project migration: failed to create project for workspace %s: %v", ws.ID, err)
+			continue
+		}
+		if err := src.UpdateProjectID(ws.ID, project.ID); err != nil {
+			log.Printf("project migration: failed to update workspace %s: %v", ws.ID, err)
+		}
+	}
+	return nil
 }
 
 func (m *Manager) Get(id string) (*Project, bool) {
