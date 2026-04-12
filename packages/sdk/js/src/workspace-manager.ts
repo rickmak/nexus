@@ -1,16 +1,9 @@
 import {
-  AuthRelayMintParams,
-  AuthRelayMintResult,
-  AuthRelayRevokeResult,
-  CapabilitiesListResult,
-  Capability,
   WorkspaceCreateResult,
   WorkspaceCreateSpec,
   WorkspaceListResult,
-  WorkspaceOpenResult,
   WorkspaceRemoveResult,
   WorkspaceRestoreResult,
-  WorkspaceRelationsListResult,
   WorkspaceForkResult,
   WorkspacePauseResult,
   WorkspaceResumeResult,
@@ -22,31 +15,27 @@ import type { RPCClient } from './rpc/types';
 
 export class WorkspaceManager {
   private client: RPCClient;
+  private bundleProvider: () => string | Promise<string>;
 
-  constructor(client: RPCClient) {
+  constructor(client: RPCClient, bundleProvider: () => string | Promise<string> = () => '') {
     this.client = client;
+    this.bundleProvider = bundleProvider;
   }
 
   async create(spec: WorkspaceCreateSpec): Promise<WorkspaceHandle> {
-    const result = await this.client.request<WorkspaceCreateResult>('workspace.create', { spec });
-    return new WorkspaceHandle(this.client, result.workspace);
-  }
-
-  async open(id: string): Promise<WorkspaceHandle> {
-    const result = await this.client.request<WorkspaceOpenResult>('workspace.open', { id });
+    const br = this.bundleProvider();
+    const bundle = typeof br === 'string' ? br : await br;
+    const params =
+      bundle.trim() !== ''
+        ? { spec: { ...spec, configBundle: bundle } }
+        : { spec };
+    const result = await this.client.request<WorkspaceCreateResult>('workspace.create', params);
     return new WorkspaceHandle(this.client, result.workspace);
   }
 
   async list(): Promise<WorkspaceListResult['workspaces']> {
     const result = await this.client.request<WorkspaceListResult>('workspace.list', {});
     return result.workspaces;
-  }
-
-  async relations(repoId?: string): Promise<WorkspaceRelationsListResult['relations']> {
-    const result = await this.client.request<WorkspaceRelationsListResult>('workspace.relations.list', {
-      repoId,
-    });
-    return result.relations;
   }
 
   async remove(id: string): Promise<boolean> {
@@ -59,9 +48,9 @@ export class WorkspaceManager {
     return result.stopped;
   }
 
-  async start(id: string): Promise<boolean> {
+  async start(id: string): Promise<WorkspaceHandle> {
     const result = await this.client.request<WorkspaceStartResult>('workspace.start', { id });
-    return result.started;
+    return new WorkspaceHandle(this.client, result.workspace);
   }
 
   async restore(id: string): Promise<WorkspaceHandle> {
@@ -82,24 +71,5 @@ export class WorkspaceManager {
   async fork(id: string, childWorkspaceName?: string, childRef?: string): Promise<WorkspaceHandle> {
     const result = await this.client.request<WorkspaceForkResult>('workspace.fork', { id, childWorkspaceName, childRef });
     return new WorkspaceHandle(this.client, result.workspace);
-  }
-
-  async mintAuthRelay(params: AuthRelayMintParams): Promise<string> {
-    const result = await this.client.request<AuthRelayMintResult>('authrelay.mint', {
-      workspaceId: params.workspaceId,
-      binding: params.binding,
-      ttlSeconds: params.ttlSeconds,
-    });
-    return result.token;
-  }
-
-  async revokeAuthRelay(token: string): Promise<boolean> {
-    const result = await this.client.request<AuthRelayRevokeResult>('authrelay.revoke', { token });
-    return result.revoked;
-  }
-
-  async capabilities(): Promise<Capability[]> {
-    const result = await this.client.request<CapabilitiesListResult>('capabilities.list', {});
-    return result.capabilities;
   }
 }

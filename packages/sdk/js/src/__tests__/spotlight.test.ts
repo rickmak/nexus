@@ -2,6 +2,7 @@ import WebSocket from 'ws';
 import { WorkspaceClient } from '../client';
 
 jest.mock('ws');
+jest.mock('../bundle', () => ({ buildConfigBundle: jest.fn().mockReturnValue('') }));
 
 const MockedWebSocket = WebSocket as jest.MockedClass<typeof WebSocket>;
 
@@ -86,11 +87,11 @@ describe('Spotlight on WorkspaceHandle', () => {
     return promise;
   }
 
-  it('exposes and lists spotlight mappings', async () => {
+  it('adds, lists, and removes tunnel forwards', async () => {
     await connectClient();
     const handle = await createHandle();
 
-    const startPromise = handle.tunnel.start({
+    const addPromise = handle.tunnel.add({
       service: 'student-portal',
       remotePort: 5173,
       localPort: 5173,
@@ -121,7 +122,7 @@ describe('Spotlight on WorkspaceHandle', () => {
       )
     );
 
-    const fwd = await startPromise;
+    const fwd = await addPromise;
     expect(fwd.id).toBe('spot-1');
 
     const listPromise = handle.tunnel.list();
@@ -155,82 +156,12 @@ describe('Spotlight on WorkspaceHandle', () => {
     const all = await listPromise;
     expect(all.forwards.some((x) => x.id === fwd.id)).toBe(true);
 
-    const applyPromise = handle.tunnel.applyDefaults();
-    sentData = mockWsInstance.send.mock.calls[3][0] as string;
-    request = JSON.parse(sentData);
-    expect(request.method).toBe('spotlight.applyDefaults');
-
-    emitEvent(
-      'message',
-      Buffer.from(
-        JSON.stringify({
-          jsonrpc: '2.0',
-          id: request.id,
-          result: {
-            forwards: [
-              {
-                id: 'spot-2',
-                workspaceId: 'ws-1',
-                service: 'api',
-                remotePort: 8000,
-                localPort: 8000,
-                host: '127.0.0.1',
-                createdAt: new Date().toISOString(),
-              },
-            ],
-          },
-        })
-      )
-    );
-
-    const applied = await applyPromise;
-    expect(applied.forwards.length).toBe(1);
-
-    const applyComposePromise = handle.tunnel.applyComposePorts();
-    sentData = mockWsInstance.send.mock.calls[4][0] as string;
-    request = JSON.parse(sentData);
-    expect(request.method).toBe('spotlight.applyComposePorts');
-
-    emitEvent(
-      'message',
-      Buffer.from(
-        JSON.stringify({
-          jsonrpc: '2.0',
-          id: request.id,
-          result: {
-            forwards: [
-              {
-                id: 'spot-3',
-                workspaceId: 'ws-1',
-                service: 'student',
-                remotePort: 5173,
-                localPort: 5173,
-                host: '127.0.0.1',
-                createdAt: new Date().toISOString(),
-              },
-            ],
-            errors: [
-              {
-                service: 'api',
-                hostPort: 8000,
-                targetPort: 8000,
-                message: 'local port 8000 already in use',
-              },
-            ],
-          },
-        })
-      )
-    );
-
-    const composeApplied = await applyComposePromise;
-    expect(composeApplied.forwards.length).toBe(1);
-    expect(composeApplied.errors.length).toBe(1);
-
     const stopPromise = fwd.stop();
-    sentData = mockWsInstance.send.mock.calls[5][0] as string;
+    sentData = mockWsInstance.send.mock.calls[3][0] as string;
     request = JSON.parse(sentData);
     expect(request.method).toBe('spotlight.close');
     expect(request.params.id).toBe('spot-1');
+
     emitEvent(
       'message',
       Buffer.from(
@@ -241,6 +172,7 @@ describe('Spotlight on WorkspaceHandle', () => {
         })
       )
     );
+
     await expect(stopPromise).resolves.toBe(true);
   });
 });

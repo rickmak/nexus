@@ -4,13 +4,10 @@ import { TunnelOperations } from './spotlight';
 import type { RPCClient } from './rpc/types';
 import {
   ExecOptions,
-  WorkspaceInfo,
   WorkspaceReadyCheck,
   WorkspaceReadyResult,
   WorkspaceRecord,
 } from './types';
-
-export type { RPCClient } from './rpc/types';
 
 export class WorkspaceHandle {
   private client: RPCClient;
@@ -40,57 +37,22 @@ export class WorkspaceHandle {
     return this.record.rootPath;
   }
 
-  async info(): Promise<WorkspaceInfo> {
-    return this.client.request<WorkspaceInfo>('workspace.info', { workspaceId: this.record.id });
-  }
-
-  async ready(checks: WorkspaceReadyCheck[], options?: { timeoutMs?: number; intervalMs?: number }): Promise<WorkspaceReadyResult> {
+  async ready(
+    checksOrProfile: WorkspaceReadyCheck[] | string,
+    options?: { timeoutMs?: number; intervalMs?: number }
+  ): Promise<WorkspaceReadyResult> {
+    if (typeof checksOrProfile === 'string') {
+      return this.client.request<WorkspaceReadyResult>('workspace.ready', {
+        workspaceId: this.record.id,
+        profile: checksOrProfile,
+        ...options,
+      });
+    }
     return this.client.request<WorkspaceReadyResult>('workspace.ready', {
       workspaceId: this.record.id,
-      checks,
-      timeoutMs: options?.timeoutMs,
-      intervalMs: options?.intervalMs,
+      checks: checksOrProfile,
+      ...options,
     });
-  }
-
-  async readyProfile(profile: string, options?: { timeoutMs?: number; intervalMs?: number }): Promise<WorkspaceReadyResult> {
-    return this.client.request<WorkspaceReadyResult>('workspace.ready', {
-      workspaceId: this.record.id,
-      profile,
-      timeoutMs: options?.timeoutMs,
-      intervalMs: options?.intervalMs,
-    });
-  }
-
-  async git(action: string, params?: Record<string, unknown>): Promise<unknown> {
-    return this.client.request('git.command', {
-      workspaceId: this.record.id,
-      action,
-      params,
-    });
-  }
-
-  async service(action: string, params?: Record<string, unknown>): Promise<unknown> {
-    return this.client.request('service.command', {
-      workspaceId: this.record.id,
-      action,
-      params,
-    });
-  }
-
-  async start(): Promise<boolean> {
-    const result = await this.client.request<{ started: boolean }>('workspace.start', { id: this.record.id });
-    return result.started;
-  }
-
-  async stop(): Promise<boolean> {
-    const result = await this.client.request<{ stopped: boolean }>('workspace.stop', { id: this.record.id });
-    return result.stopped;
-  }
-
-  async remove(): Promise<boolean> {
-    const result = await this.client.request<{ removed: boolean }>('workspace.remove', { id: this.record.id });
-    return result.removed;
   }
 
   async exec(command: string, args: string[] = [], options: ExecOptions = {}) {
@@ -124,5 +86,4 @@ export class WorkspaceHandle {
   async stat(path: string) {
     return this.fsOps.stat(path);
   }
-
 }

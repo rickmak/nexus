@@ -6,13 +6,12 @@ Nexus keeps project integration intentionally small: one directory, clear roles.
 
 ```text
 docs/
-├── index.md
-├── explanation/
+├── README.md
+├── guides/
 ├── superpowers/
 │   └── plans/
-├── tutorials/
 ├── reference/
-└── dev/
+└── roadmap.md
 
 packages/
 ├── e2e/
@@ -44,16 +43,12 @@ Canonical project scaffold lives at the **repository root** as `.nexus/` (used b
     setup.sh
     start.sh
     teardown.sh
-  probe/
-  check/
 ```
 
 ## Mental Model
 
 - `workspace.json`: schema/version marker.
 - `lifecycles/`: setup, start, and teardown hooks.
-- `probe/`: environment and runtime probes.
-- `check/`: behavioral checks used by `nexus doctor`.
 
 If these files are present and executable where needed, Nexus can infer most behavior without extra config.
 
@@ -61,8 +56,8 @@ If these files are present and executable where needed, Nexus can infer most beh
 
 ```bash
 nexus init
-nexus doctor --suite local
-nexus tunnel <workspace-id>
+nexus doctor
+nexus create && nexus shell <workspace-id>
 ```
 
 ## Related Docs
@@ -70,4 +65,4 @@ nexus tunnel <workspace-id>
 - Workspace config: `docs/reference/workspace-config.md`
 - CLI: `docs/reference/cli.md`
 - SDK: `docs/reference/sdk.md`
-- Architecture: `docs/explanation/architecture.md`
+- Architecture: `CONTRIBUTING.md` (repository root)

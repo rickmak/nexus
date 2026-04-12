@@ -1,10 +1,10 @@
 import type {
   WorkspaceRecord,
   WorkspaceRelationsGroup,
+  WorkspaceRelationNode,
   SpotlightForward,
   WorkspaceRelationsListResult,
   SpotlightListResult,
-  SpotlightApplyDefaultsResult,
   SpotlightApplyComposePortsResult,
   WorkspaceCreateResult,
   WorkspaceForkResult,
@@ -172,17 +172,12 @@ export async function resumeWorkspace(id: string): Promise<boolean> {
 
 export async function startWorkspace(id: string): Promise<boolean> {
   const res = await rpc.request<WorkspaceStartResult>("workspace.start", { id });
-  return res.started;
+  return !!res.workspace;
 }
 
 export async function stopWorkspace(id: string): Promise<boolean> {
   const res = await rpc.request<WorkspaceStopResult>("workspace.stop", { id });
   return res.stopped;
-}
-
-export async function applySpotlightDefaults(workspaceId: string): Promise<SpotlightForward[]> {
-  const res = await rpc.request<SpotlightApplyDefaultsResult>("spotlight.applyDefaults", { workspaceId });
-  return res.forwards;
 }
 
 export async function applySpotlightCompose(workspaceId: string): Promise<SpotlightForward[]> {

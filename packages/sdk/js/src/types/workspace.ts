@@ -45,10 +45,6 @@ export interface WorkspaceCreateResult {
   workspace: WorkspaceRecord;
 }
 
-export interface WorkspaceOpenResult {
-  workspace: WorkspaceRecord;
-}
-
 export interface WorkspaceListResult {
   workspaces: WorkspaceRecord[];
 }
@@ -79,22 +75,12 @@ export interface WorkspaceReadyResult {
   lastResults: Record<string, number>;
 }
 
-export interface Capability {
-  name: string;
-  available: boolean;
-  metadata?: Record<string, unknown>;
-}
-
-export interface CapabilitiesListResult {
-  capabilities: Capability[];
-}
-
 export interface WorkspaceStopResult {
   stopped: boolean;
 }
 
 export interface WorkspaceStartResult {
-  started: boolean;
+  workspace: WorkspaceRecord;
 }
 
 export interface WorkspaceRestoreResult {
@@ -115,13 +101,18 @@ export interface WorkspaceForkResult {
   workspace: WorkspaceRecord;
 }
 
+export interface Capability {
+  name: string;
+  available: boolean;
+}
+
 export interface WorkspaceRelationNode {
   workspaceId: string;
   parentWorkspaceId?: string;
   lineageRootId?: string;
   derivedFromRef?: string;
   worktreeRef?: string;
-  state: WorkspaceState;
+  state: string;
   backend?: string;
   workspaceName: string;
   rootPath: string;
@@ -142,18 +133,4 @@ export interface WorkspaceRelationsGroup {
 
 export interface WorkspaceRelationsListResult {
   relations: WorkspaceRelationsGroup[];
-}
-
-export interface AuthRelayMintParams {
-  workspaceId: string;
-  binding: string;
-  ttlSeconds?: number;
-}
-
-export interface AuthRelayMintResult {
-  token: string;
-}
-
-export interface AuthRelayRevokeResult {
-  revoked: boolean;
 }

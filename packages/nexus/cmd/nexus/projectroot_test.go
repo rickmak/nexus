@@ -11,7 +11,7 @@ func TestErrNotAbsProjectRoot(t *testing.T) {
 		t.Fatal("expected error")
 	}
 	s := err.Error()
-	if !strings.Contains(s, "try:") || !strings.Contains(s, "--project-root") {
-		t.Fatalf("expected hint with --project-root, got: %v", err)
+	if !strings.Contains(s, "resolved:") {
+		t.Fatalf("expected resolved absolute path hint, got: %v", err)
 	}
 }

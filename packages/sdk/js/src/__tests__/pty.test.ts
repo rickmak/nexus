@@ -19,13 +19,13 @@ describe('PTYOperations', () => {
 
     const pty = new PTYOperations({ request, onNotification });
 
-    await expect(pty.open({ workspaceId: 'ws-1', shell: 'bash' })).resolves.toBe('pty-123');
+    await expect(pty.open({ workspaceId: 'ws-1' })).resolves.toBe('pty-123');
     await expect(pty.write('pty-123', 'ls\n')).resolves.toBe(true);
     await expect(pty.resize('pty-123', 120, 40)).resolves.toBe(true);
     await expect(pty.close('pty-123')).resolves.toBe(true);
 
     expect(calls).toEqual([
-      { method: 'pty.open', params: { workspaceId: 'ws-1', shell: 'bash' } },
+      { method: 'pty.open', params: { workspaceId: 'ws-1' } },
       { method: 'pty.write', params: { sessionId: 'pty-123', data: 'ls\n' } },
       { method: 'pty.resize', params: { sessionId: 'pty-123', cols: 120, rows: 40 } },
       { method: 'pty.close', params: { sessionId: 'pty-123' } },

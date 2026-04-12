@@ -10,5 +10,5 @@ func errNotAbsProjectRoot(what, raw string) error {
 	if err != nil {
 		return fmt.Errorf("%s must be an absolute path (could not resolve %q: %v)", what, raw, err)
 	}
-	return fmt.Errorf("%s must be an absolute path (got %q); try: --project-root %q", what, raw, abs)
+	return fmt.Errorf("%s must be an absolute path (got %q); resolved: %q", what, raw, abs)
 }

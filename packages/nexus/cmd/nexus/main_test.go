@@ -15,7 +15,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/inizio/nexus/packages/nexus/pkg/compose"
 	"github.com/inizio/nexus/packages/nexus/pkg/config"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/firecracker"
 )
@@ -48,23 +47,6 @@ func (f fakeSocketFileInfo) ModTime() time.Time { return time.Time{} }
 func (f fakeSocketFileInfo) IsDir() bool        { return false }
 func (f fakeSocketFileInfo) Sys() any           { return nil }
 
-func TestParseRequiredPorts(t *testing.T) {
-	ports, err := parseRequiredPorts("5173, 5174,5173,8000")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-	expected := []int{5173, 5174, 8000}
-	if !reflect.DeepEqual(ports, expected) {
-		t.Fatalf("expected %v, got %v", expected, ports)
-	}
-}
-
-func TestParseRequiredPortsInvalid(t *testing.T) {
-	if _, err := parseRequiredPorts("abc"); err == nil {
-		t.Fatal("expected error for invalid port")
-	}
-}
-
 func TestDetectHostDockerSocketPrefersSnapHostfsSocket(t *testing.T) {
 	originalStat := hostDockerSocketStat
 	t.Cleanup(func() {
@@ -85,16 +67,6 @@ func TestDetectHostDockerSocketPrefersSnapHostfsSocket(t *testing.T) {
 	got := detectHostDockerSocket()
 	if got != "/var/lib/snapd/hostfs/var/run/docker.sock" {
 		t.Fatalf("expected hostfs docker socket, got %q", got)
-	}
-}
-
-func TestMissingRequiredPorts(t *testing.T) {
-	required := []int{5173, 5174, 8000}
-	discovered := []compose.PublishedPort{{HostPort: 5173}, {HostPort: 8000}}
-	missing := missingRequiredPorts(required, discovered)
-	expected := []int{5174}
-	if !reflect.DeepEqual(missing, expected) {
-		t.Fatalf("expected %v, got %v", expected, missing)
 	}
 }
 
@@ -956,9 +928,6 @@ func TestRunInitCreatesNexusWorkspaceFiles(t *testing.T) {
 		".nexus/lifecycles/setup.sh",
 		".nexus/lifecycles/start.sh",
 		".nexus/lifecycles/teardown.sh",
-		".nexus/probe/01-runtime-backend.sh",
-		".nexus/check/20-tooling-runtime.sh",
-		".nexus/e2e/run.sh",
 	} {
 		if _, err := os.Stat(filepath.Join(root, rel)); err != nil {
 			t.Fatalf("expected %s to be created: %v", rel, err)
@@ -1222,7 +1191,6 @@ func TestDoctor_StillRunsTestsWhenRequiredProbeFails(t *testing.T) {
 	reportPath := filepath.Join(t.TempDir(), "report.json")
 	err := run(options{
 		projectRoot: workspaceRoot,
-		suite:       "test-suite",
 		reportJSON:  reportPath,
 	})
 
@@ -1314,7 +1282,6 @@ func TestDoctor_ProbesPassThenTestsRun(t *testing.T) {
 	reportPath := filepath.Join(t.TempDir(), "report.json")
 	err := run(options{
 		projectRoot: workspaceRoot,
-		suite:       "test-suite",
 		reportJSON:  reportPath,
 	})
 
@@ -1399,7 +1366,6 @@ func TestDoctor_RequiredTestFailureReturnsError(t *testing.T) {
 	reportPath := filepath.Join(t.TempDir(), "report.json")
 	err := run(options{
 		projectRoot: workspaceRoot,
-		suite:       "test-suite",
 		reportJSON:  reportPath,
 	})
 
@@ -1964,7 +1930,7 @@ func TestRunExecReexecsWithSGKVMOnKVMPermissionError(t *testing.T) {
 	if !called {
 		t.Fatal("expected sg kvm reexec to be attempted")
 	}
-	if len(gotArgs) < 7 || gotArgs[0] != "exec" {
+	if len(gotArgs) < 6 || gotArgs[0] != "run" || gotArgs[2] != "--timeout" || gotArgs[4] != "--" {
 		t.Fatalf("unexpected reexec args: %v", gotArgs)
 	}
 }
@@ -2035,9 +2001,9 @@ func TestRunDoctorReexecsWithSGKVMOnKVMPermissionError(t *testing.T) {
 		return nil
 	}
 
-	os.Args = []string{"nexus", "doctor", "--project-root", workspaceRoot, "--suite", "local"}
+	os.Args = []string{"nexus", "doctor"}
 
-	err := run(options{projectRoot: workspaceRoot, suite: "local"})
+	err := run(options{projectRoot: workspaceRoot})
 	if err != nil {
 		t.Fatalf("expected run to return nil after successful sg kvm reexec, got %v", err)
 	}
@@ -2156,7 +2122,7 @@ func TestRunFirecrackerDoctorFailsFastWhenGuestDockerUnavailable(t *testing.T) {
 	doctorExecBootstrapRunner = func(projectRoot string) error { return nil }
 	doctorFirecrackerRuntimeVerifier = func() error { return errors.New("docker unavailable in guest") }
 
-	err = run(options{projectRoot: root, suite: "local"})
+	err = run(options{projectRoot: root})
 	if err == nil {
 		t.Fatal("expected run to fail fast when guest docker is unavailable")
 	}

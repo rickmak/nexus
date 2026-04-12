@@ -7,9 +7,12 @@ import {
 import { WorkspaceManager } from './workspace-manager';
 import { PTYOperations } from './pty';
 import { NodeWebSocketTransport } from './transport/node-websocket';
+import type { BrowserWebSocketTransport } from './transport/browser-websocket';
+
+type WsTransport = NodeWebSocketTransport | BrowserWebSocketTransport;
 
 export class WorkspaceClient {
-  private transport: NodeWebSocketTransport | null = null;
+  private transport: WsTransport | null = null;
   private core = new RpcTransportCore({
     onParseError: (error) => console.error('Failed to parse RPC response:', error),
     onReconnectScheduled: ({ attempt, delay }) =>
@@ -23,14 +26,12 @@ export class WorkspaceClient {
     workspaceId?: string;
     token: string;
     reconnect: boolean;
-    reconnectDelay: number;
-    maxReconnectAttempts: number;
   };
   private state: ConnectionState = 'disconnected';
   private disconnectCallbacks: Array<() => void> = [];
   private reconnectEnabled = true;
 
-  public readonly ssh: PTYOperations;
+  public readonly shell: PTYOperations;
   public readonly workspaces: WorkspaceManager;
 
   constructor(config: WorkspaceClientConfig) {
@@ -39,12 +40,25 @@ export class WorkspaceClient {
       workspaceId: config.workspaceId,
       token: config.token,
       reconnect: config.reconnect ?? true,
-      reconnectDelay: config.reconnectDelay ?? 1000,
-      maxReconnectAttempts: config.maxReconnectAttempts ?? 10,
     };
 
-    this.ssh = new PTYOperations(this);
-    this.workspaces = new WorkspaceManager(this);
+    const bundleProvider = (): string | Promise<string> => {
+      if (typeof (globalThis as { WebSocket?: unknown }).WebSocket !== 'undefined') {
+        return '';
+      }
+      if (typeof process !== 'undefined' && process.versions?.node) {
+        try {
+          const { buildConfigBundle } = require('./bundle') as typeof import('./bundle');
+          return buildConfigBundle();
+        } catch {
+          return '';
+        }
+      }
+      return import('./bundle').then((m) => m.buildConfigBundle());
+    };
+
+    this.shell = new PTYOperations(this);
+    this.workspaces = new WorkspaceManager(this, bundleProvider);
   }
 
   get isConnected(): boolean {
@@ -55,6 +69,15 @@ export class WorkspaceClient {
     return this.state;
   }
 
+  private async createTransport(): Promise<WsTransport> {
+    if (typeof (globalThis as { WebSocket?: unknown }).WebSocket !== 'undefined') {
+      const { BrowserWebSocketTransport } = await import('./transport/browser-websocket');
+      return new BrowserWebSocketTransport();
+    }
+    const { NodeWebSocketTransport: NodeCtor } = await import('./transport/node-websocket');
+    return new NodeCtor();
+  }
+
   async connect(): Promise<void> {
     if (this.state === 'connected' || this.state === 'connecting') {
       return;
@@ -62,15 +85,24 @@ export class WorkspaceClient {
 
     this.state = 'connecting';
 
-    return new Promise((resolve, reject) => {
-      try {
-        const url = new URL(this.config.endpoint);
-        if (this.config.workspaceId && this.config.workspaceId.trim() !== '') {
-          url.searchParams.set('workspaceId', this.config.workspaceId);
+    try {
+      if (!this.transport) {
+        if (typeof process !== 'undefined' && process.versions?.node) {
+          this.transport = new NodeWebSocketTransport();
+        } else {
+          this.transport = await this.createTransport();
         }
-        url.searchParams.set('token', this.config.token);
+      }
 
-        const t = new NodeWebSocketTransport();
+      const url = new URL(this.config.endpoint);
+      if (this.config.workspaceId && this.config.workspaceId.trim() !== '') {
+        url.searchParams.set('workspaceId', this.config.workspaceId);
+      }
+      url.searchParams.set('token', this.config.token);
+
+      const t = this.transport;
+
+      await new Promise<void>((resolve, reject) => {
         t.onOpen = () => {
           this.state = 'connected';
           this.core.resetReconnectAttempts();
@@ -93,14 +125,13 @@ export class WorkspaceClient {
             console.error('WebSocket error:', error.message);
           }
         };
-        this.transport = t;
         t.connect(url.toString());
-      } catch (error) {
-        this.transport = null;
-        this.state = 'disconnected';
-        reject(error);
-      }
-    });
+      });
+    } catch (error) {
+      this.transport = null;
+      this.state = 'disconnected';
+      throw error;
+    }
   }
 
   async disconnect(): Promise<void> {
@@ -149,8 +180,8 @@ export class WorkspaceClient {
       this.state = 'reconnecting';
       this.core.scheduleReconnect(() => this.connect(), {
         enabled: true,
-        maxAttempts: this.config.maxReconnectAttempts,
-        baseDelay: this.config.reconnectDelay,
+        maxAttempts: 10,
+        baseDelay: 1000,
       });
     }
   }

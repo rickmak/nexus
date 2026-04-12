@@ -3,8 +3,6 @@ export interface WorkspaceClientConfig {
   workspaceId?: string;
   token: string;
   reconnect?: boolean;
-  reconnectDelay?: number;
-  maxReconnectAttempts?: number;
 }
 
 export interface RPCRequest {

@@ -50,7 +50,7 @@ func TestRuntimeSetupRunner_FailsFastInNonInteractiveWithoutPasswordlessSudo(t *
 	if !strings.Contains(err.Error(), "manual next steps") {
 		t.Fatalf("expected manual next steps in error, got %q", err.Error())
 	}
-	if !strings.Contains(err.Error(), "sudo -E nexus init --project-root /tmp/repo") {
+	if !strings.Contains(err.Error(), "sudo -E nexus init /tmp/repo") {
 		t.Fatalf("expected sudo manual command in error, got %q", err.Error())
 	}
 	if resolveCalls != 0 {

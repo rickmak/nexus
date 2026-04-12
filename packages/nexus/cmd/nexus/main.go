@@ -22,15 +22,14 @@ import (
 
 	"github.com/inizio/nexus/packages/nexus/pkg/compose"
 	"github.com/inizio/nexus/packages/nexus/pkg/config"
+	"github.com/inizio/nexus/packages/nexus/pkg/runtime/authbundle"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/firecracker"
+	"github.com/inizio/nexus/packages/nexus/pkg/workspacemgr"
 )
 
 type options struct {
-	projectRoot       string
-	suite             string
-	composeFile       string
-	requiredHostPorts []int
-	reportJSON        string
+	projectRoot string
+	reportJSON  string
 }
 
 type execOptions struct {
@@ -64,8 +63,11 @@ func main() {
 	case "init":
 		runInitCommand(args)
 		return
+	case "run":
+		runRunCommand(args)
+		return
 	case "exec":
-		runExecCommand(args)
+		runWorkspaceExecCommand(args)
 		return
 	case "list":
 		runWorkspaceListCommand(args)
@@ -85,11 +87,20 @@ func main() {
 	case "fork":
 		runWorkspaceForkCommand(args)
 		return
-	case "ssh":
-		runWorkspaceSSHCommand(args)
+	case "shell":
+		runWorkspaceShellCommand(args)
 		return
 	case "tunnel":
 		runWorkspaceTunnelCommand(args)
+		return
+	case "pause":
+		runWorkspacePauseCommand(args)
+		return
+	case "resume":
+		runWorkspaceResumeCommand(args)
+		return
+	case "restore":
+		runWorkspaceRestoreCommand(args)
 		return
 	case "doctor":
 		// handled below
@@ -101,36 +112,26 @@ func main() {
 
 	fs := flag.NewFlagSet("doctor", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
-	projectRoot := fs.String("project-root", "", "absolute path to downstream project repository")
-	suite := fs.String("suite", "", "doctor suite name")
-	composeFile := fs.String("compose-file", "docker-compose.yml", "compose file path relative to project root")
-	requiredPorts := fs.String("required-host-ports", "", "comma-separated required published host ports (defaults to workspace config doctor.requiredHostPorts)")
 	reportJSON := fs.String("report-json", "", "optional path to write doctor probe results as JSON")
 	if err := fs.Parse(args); err != nil {
 		os.Exit(2)
 	}
 
-	if *projectRoot == "" || *suite == "" {
-		fmt.Fprintln(os.Stderr, "--project-root and --suite are required")
+	if fs.NArg() != 0 {
+		fmt.Fprintln(os.Stderr, "usage: nexus doctor [--report-json path]")
 		os.Exit(2)
 	}
 
-	var ports []int
-	if strings.TrimSpace(*requiredPorts) != "" {
-		parsedPorts, err := parseRequiredPorts(*requiredPorts)
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(2)
-		}
-		ports = parsedPorts
+	projectRoot := "."
+	absProjectRoot, err := filepath.Abs(projectRoot)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "resolve project root: %v\n", err)
+		os.Exit(2)
 	}
 
 	if err := run(options{
-		projectRoot:       *projectRoot,
-		suite:             *suite,
-		composeFile:       *composeFile,
-		requiredHostPorts: ports,
-		reportJSON:        strings.TrimSpace(*reportJSON),
+		projectRoot: absProjectRoot,
+		reportJSON:  strings.TrimSpace(*reportJSON),
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -139,36 +140,37 @@ func main() {
 
 func printUsage() {
 	fmt.Fprintln(os.Stderr, "Usage:")
-	fmt.Fprintln(os.Stderr, "  nexus doctor --project-root <abs-path> --suite <name> [--compose-file docker-compose.yml] [--required-host-ports 5173,5174,8000] [--report-json path]")
+	fmt.Fprintln(os.Stderr, "  nexus doctor [--report-json path]")
 	fmt.Fprintln(os.Stderr, "  nexus init [project-root] [--force]")
-	fmt.Fprintln(os.Stderr, "  nexus exec --project-root <abs-path> [--timeout 10m] -- <command> [args...]")
-	fmt.Fprintln(os.Stderr, "  nexus <list|create|start|stop|remove|fork|ssh|tunnel>")
+	fmt.Fprintln(os.Stderr, "  nexus run [--backend <name>] [--timeout <dur>] -- <command> [args...]")
+	fmt.Fprintln(os.Stderr, "  nexus fork <id> <name> [--ref <ref>]")
+	fmt.Fprintln(os.Stderr, "  nexus shell <id> [--timeout <dur>]")
+	fmt.Fprintln(os.Stderr, "  nexus exec <id> [--timeout <dur>] -- <command> [args...]")
+	fmt.Fprintln(os.Stderr, "  nexus <list|create|start|stop|remove|pause|resume|restore|shell|exec|tunnel>")
 }
 
 func runInitCommand(args []string) {
-	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	projectRootFlag := fs.String("project-root", "", "project repository path (defaults to current directory)")
-	force := fs.Bool("force", false, "overwrite existing .nexus files")
-	if err := fs.Parse(args); err != nil {
-		os.Exit(2)
+	force := false
+	var positional []string
+	for _, arg := range args {
+		switch arg {
+		case "--force", "-force":
+			force = true
+		default:
+			if strings.HasPrefix(arg, "-") {
+				fmt.Fprintf(os.Stderr, "unknown flag: %s\nusage: nexus init [project-root] [--force]\n", arg)
+				os.Exit(2)
+			}
+			positional = append(positional, arg)
+		}
 	}
-
-	rest := fs.Args()
-	if len(rest) > 1 {
+	if len(positional) > 1 {
 		fmt.Fprintln(os.Stderr, "usage: nexus init [project-root] [--force]")
 		os.Exit(2)
 	}
-	projectRoot := strings.TrimSpace(*projectRootFlag)
-	if len(rest) == 1 {
-		if projectRoot != "" {
-			fmt.Fprintln(os.Stderr, "nexus init: use either --project-root or positional project-root")
-			os.Exit(2)
-		}
-		projectRoot = strings.TrimSpace(rest[0])
-	}
-	if projectRoot == "" {
-		projectRoot = "."
+	projectRoot := "."
+	if len(positional) == 1 {
+		projectRoot = strings.TrimSpace(positional[0])
 	}
 	absProjectRoot, err := filepath.Abs(projectRoot)
 	if err != nil {
@@ -178,37 +180,125 @@ func runInitCommand(args []string) {
 
 	if err := runInit(initOptions{
 		projectRoot: absProjectRoot,
-		force:       *force,
+		force:       force,
 	}); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func runExecCommand(args []string) {
-	fs := flag.NewFlagSet("exec", flag.ContinueOnError)
-	fs.SetOutput(os.Stderr)
-	projectRoot := fs.String("project-root", "", "absolute path to downstream project repository")
-	timeout := fs.Duration("timeout", 10*time.Minute, "command timeout")
-	if err := fs.Parse(args); err != nil {
+func runRunCommand(args []string) {
+	dash := -1
+	for i, a := range args {
+		if a == "--" {
+			dash = i
+			break
+		}
+	}
+	if dash == -1 || len(args[dash+1:]) == 0 {
+		fmt.Fprintln(os.Stderr, "usage: nexus run [--backend <name>] [--timeout <dur>] -- <command> [args...]")
 		os.Exit(2)
 	}
+	preDash := args[:dash]
+	cmdArgs := args[dash+1:]
 
-	rest := fs.Args()
-	if *projectRoot == "" || len(rest) == 0 {
-		fmt.Fprintln(os.Stderr, "--project-root and command are required")
-		os.Exit(2)
+	backend := ""
+	timeout := 10 * time.Minute
+	for i := 0; i < len(preDash); {
+		switch preDash[i] {
+		case "--backend":
+			if i+1 >= len(preDash) {
+				fmt.Fprintln(os.Stderr, "nexus run: --backend requires a value")
+				os.Exit(2)
+			}
+			backend = strings.TrimSpace(preDash[i+1])
+			i += 2
+		case "--timeout":
+			if i+1 >= len(preDash) {
+				fmt.Fprintln(os.Stderr, "nexus run: --timeout requires a value")
+				os.Exit(2)
+			}
+			d, err := time.ParseDuration(preDash[i+1])
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "nexus run: invalid timeout: %v\n", err)
+				os.Exit(2)
+			}
+			timeout = d
+			i += 2
+		default:
+			fmt.Fprintf(os.Stderr, "usage: nexus run [--backend <name>] [--timeout <dur>] -- <command> [args...]\n")
+			os.Exit(2)
+		}
 	}
 
-	if err := runExec(execOptions{
-		projectRoot: *projectRoot,
-		timeout:     *timeout,
-		command:     rest[0],
-		args:        rest[1:],
-	}); err != nil {
-		fmt.Fprintln(os.Stderr, err)
+	repoPath, err := normalizeLocalRepoPath(".")
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nexus run: %v\n", err)
+		os.Exit(2)
+	}
+	workspaceName := deriveWorkspaceName(repoPath)
+
+	conn, err := ensureDaemon()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nexus run: %v\n", err)
 		os.Exit(1)
 	}
+	defer conn.Close()
+
+	hostAuthBundle, err := authbundle.BuildFromHome()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "nexus run: %v\n", err)
+		os.Exit(1)
+	}
+
+	spec := workspacemgr.CreateSpec{
+		Repo:          repoPath,
+		Ref:           "",
+		WorkspaceName: workspaceName,
+		AgentProfile:  "default",
+		Backend:       backend,
+		ConfigBundle:  hostAuthBundle,
+	}
+	var createResult struct {
+		Workspace workspacemgr.Workspace `json:"workspace"`
+	}
+	if err := daemonRPC(conn, "workspace.create", map[string]any{"spec": spec}, &createResult); err != nil {
+		if renderPreflightCreateError(err) {
+			os.Exit(1)
+		}
+		fmt.Fprintf(os.Stderr, "nexus run: create failed: %v\n", err)
+		os.Exit(1)
+	}
+	wsID := createResult.Workspace.ID
+
+	defer func() {
+		if removeErr := daemonRPC(conn, "workspace.remove", map[string]any{"id": wsID}, nil); removeErr != nil {
+			fmt.Fprintf(os.Stderr, "nexus run: cleanup warning: %v\n", removeErr)
+		}
+	}()
+
+	deadline := time.Now().Add(timeout)
+	for {
+		if time.Now().After(deadline) {
+			fmt.Fprintln(os.Stderr, "nexus run: timed out waiting for workspace to become ready")
+			os.Exit(1)
+		}
+		var readyResult struct {
+			Ready bool `json:"ready"`
+		}
+		if readyErr := daemonRPC(conn, "workspace.ready", map[string]any{
+			"workspaceId": wsID,
+			"profile":     "default",
+		}, &readyResult); readyErr == nil && readyResult.Ready {
+			break
+		}
+		time.Sleep(3 * time.Second)
+	}
+
+	cmdLine := formatCommand(cmdArgs[0], cmdArgs[1:])
+	payload := "cd /workspace >/dev/null 2>&1 || true\n" + cmdLine + "\nexit\n"
+	token := strings.TrimSpace(os.Getenv("NEXUS_AUTH_RELAY_TOKEN"))
+	runWorkspacePTYSession("nexus run", wsID, token, "bash", payload, timeout, false)
 }
 
 func runInit(opts initOptions) error {
@@ -221,10 +311,8 @@ func runInit(opts initOptions) error {
 		return fmt.Errorf("create .nexus directory: %w", err)
 	}
 
-	for _, dir := range []string{"lifecycles", "probe", "check", "e2e"} {
-		if err := os.MkdirAll(filepath.Join(nexusDir, dir), 0o755); err != nil {
-			return fmt.Errorf("create .nexus/%s directory: %w", dir, err)
-		}
+	if err := os.MkdirAll(filepath.Join(nexusDir, "lifecycles"), 0o755); err != nil {
+		return fmt.Errorf("create .nexus/lifecycles directory: %w", err)
 	}
 
 	workspaceCfg := config.WorkspaceConfig{
@@ -238,13 +326,10 @@ func runInit(opts initOptions) error {
 	workspaceJSON = append(workspaceJSON, '\n')
 
 	files := map[string]string{
-		filepath.Join(nexusDir, "workspace.json"):                 string(workspaceJSON),
-		filepath.Join(nexusDir, "lifecycles", "setup.sh"):         "#!/usr/bin/env bash\nset -euo pipefail\necho 'setup: no-op'\n",
-		filepath.Join(nexusDir, "lifecycles", "start.sh"):         "#!/usr/bin/env bash\nset -euo pipefail\necho 'start: no-op'\n",
-		filepath.Join(nexusDir, "lifecycles", "teardown.sh"):      "#!/usr/bin/env bash\nset -euo pipefail\necho 'teardown: no-op'\n",
-		filepath.Join(nexusDir, "probe", "01-runtime-backend.sh"): "#!/usr/bin/env bash\nset -euo pipefail\necho \"runtime-backend probe: backend=${NEXUS_RUNTIME_BACKEND:-unknown}\"\n",
-		filepath.Join(nexusDir, "check", "20-tooling-runtime.sh"): "#!/usr/bin/env bash\nset -euo pipefail\ncommand -v bash >/dev/null 2>&1\ncommand -v curl >/dev/null 2>&1 || true\necho 'tooling-runtime check passed'\n",
-		filepath.Join(nexusDir, "e2e", "run.sh"):                  "#!/usr/bin/env bash\nset -euo pipefail\necho 'e2e: no-op'\n",
+		filepath.Join(nexusDir, "workspace.json"):            string(workspaceJSON),
+		filepath.Join(nexusDir, "lifecycles", "setup.sh"):    "#!/usr/bin/env bash\nset -euo pipefail\necho 'setup: no-op'\n",
+		filepath.Join(nexusDir, "lifecycles", "start.sh"):    "#!/usr/bin/env bash\nset -euo pipefail\necho 'start: no-op'\n",
+		filepath.Join(nexusDir, "lifecycles", "teardown.sh"): "#!/usr/bin/env bash\nset -euo pipefail\necho 'teardown: no-op'\n",
 	}
 
 	for path, content := range files {
@@ -297,7 +382,7 @@ func runExec(opts execOptions) error {
 		if shouldReexecExecWithKVMGroup(execCtx.backend, err) {
 			cmdPath := setupCommandPath()
 			reexecArgs := make([]string, 0, len(opts.args)+8)
-			reexecArgs = append(reexecArgs, "exec", "--project-root", opts.projectRoot, "--timeout", opts.timeout.String(), "--", opts.command)
+			reexecArgs = append(reexecArgs, "run", opts.projectRoot, "--timeout", opts.timeout.String(), "--", opts.command)
 			reexecArgs = append(reexecArgs, opts.args...)
 			if reexecErr := execKVMGroupReexecRunner(cmdPath, reexecArgs); reexecErr == nil {
 				return nil
@@ -372,10 +457,6 @@ func run(opts options) error {
 		}
 	}
 
-	if opts.composeFile == "" {
-		opts.composeFile = "docker-compose.yml"
-	}
-
 	requiredFiles := []string{
 		filepath.Join(opts.projectRoot, ".nexus", "workspace.json"),
 	}
@@ -443,11 +524,10 @@ func run(opts options) error {
 	}
 
 	publishedPorts := make([]compose.PublishedPort, 0)
-	composePath := filepath.Join(opts.projectRoot, opts.composeFile)
 	discoverCtx, discoverCancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer discoverCancel()
 	if ports, discoverErr := compose.DiscoverPublishedPorts(discoverCtx, opts.projectRoot); discoverErr != nil {
-		fmt.Printf("doctor warning: compose port discovery failed for %s: %v\n", composePath, discoverErr)
+		fmt.Printf("doctor warning: compose port discovery failed: %v\n", discoverErr)
 	} else {
 		publishedPorts = ports
 	}
@@ -482,7 +562,7 @@ func run(opts options) error {
 		return err
 	}
 
-	fmt.Printf("doctor suite passed: %s (discovered %d compose ports)\n", opts.suite, len(publishedPorts))
+	fmt.Printf("doctor passed (discovered %d compose ports)\n", len(publishedPorts))
 	return nil
 }
 
@@ -1861,34 +1941,6 @@ func writeReport(reportPath string, results []checkResult) error {
 	return nil
 }
 
-func parseRequiredPorts(raw string) ([]int, error) {
-	parts := strings.Split(raw, ",")
-	ports := make([]int, 0, len(parts))
-	seen := map[int]bool{}
-	for _, part := range parts {
-		trimmed := strings.TrimSpace(part)
-		if trimmed == "" {
-			continue
-		}
-		port, err := strconv.Atoi(trimmed)
-		if err != nil {
-			return nil, fmt.Errorf("invalid required host port %q", trimmed)
-		}
-		if port <= 0 || port > 65535 {
-			return nil, fmt.Errorf("required host port out of range: %d", port)
-		}
-		if seen[port] {
-			continue
-		}
-		seen[port] = true
-		ports = append(ports, port)
-	}
-	if len(ports) == 0 {
-		return nil, fmt.Errorf("no required host ports provided")
-	}
-	return ports, nil
-}
-
 func assertNoManualACP(lifecycleDir string) error {
 	entries, err := os.ReadDir(lifecycleDir)
 	if err != nil {
@@ -2125,16 +2177,3 @@ func ensureDotEnv(projectRoot string) error {
 	return nil
 }
 
-func missingRequiredPorts(required []int, discovered []compose.PublishedPort) []int {
-	found := map[int]bool{}
-	for _, p := range discovered {
-		found[p.HostPort] = true
-	}
-	missing := make([]int, 0)
-	for _, p := range required {
-		if !found[p] {
-			missing = append(missing, p)
-		}
-	}
-	return missing
-}

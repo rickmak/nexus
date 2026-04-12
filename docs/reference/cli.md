@@ -7,39 +7,85 @@ Direct control for creating, starting, and accessing isolated workspaces.
 ```bash
 curl -fsSL https://raw.githubusercontent.com/inizio/nexus/main/install.sh | bash
 cd /path/to/project
-nexus init && nexus create && nexus list && nexus start <workspace-id>
+nexus init && nexus create && nexus shell <id>
 ```
 
-`nexus create` prints the workspace id used by `start`, `ssh`, `tunnel`, `stop`, `remove`.
+`nexus create` prints the workspace id used by every subsequent command.
 
-**Create and host auth bundle:** `nexus create` runs `authbundle.BuildFromHome()` on **the machine running the CLI**, then sends it as `hostAuthBundle`. End users do not invoke a separate bundle command. SDK `workspace.create` without `hostAuthBundle` sends no tarball; advanced packing rules are in [`host-auth-bundle.md`](host-auth-bundle.md) (see also [`sdk.md`](sdk.md)).
+## Commands
 
-## Common commands
+### Workspace lifecycle
 
-```bash
-nexus init [project-root] [--force]
+```
 nexus create [--backend firecracker]
-nexus list
-nexus start|stop|remove|ssh|tunnel <workspace-id>
-nexus fork --id <workspace-id> --name <child-name> [--ref <child-ref>]
-nexus exec --project-root <abs-path> [--timeout 10m] -- <command> [args...]
-nexus doctor --project-root <abs-path> --suite <name> \
-  [--compose-file docker-compose.yml] [--required-host-ports 5173,5174] [--report-json path]
 ```
+Creates a workspace from the current directory. Reads host credentials automatically (git config, SSH keys) and forwards them into the workspace. Optional `--backend` overrides runtime selection.
 
-- **`nexus ssh`:** optional `--shell`, `--command` (non-interactive one shot).
-- **`nexus tunnel`:** applies compose port forwards; blocks until Ctrl-C.
-- **`nexus init`:** default path is cwd; `--force` overwrites `.nexus` scaffold. Host setup may escalate privileges (`sudo`); use `sudo -E nexus init --force` only where non-interactive sudo is unavailable.
+```
+nexus list
+```
+Lists all workspaces with id, name, state, backend, and local worktree path.
 
-## `nexus doctor` and backends
+```
+nexus start <id>
+nexus stop <id>
+nexus remove <id>
+nexus pause <id>
+nexus resume <id>
+nexus restore <id>
+```
+Start a stopped workspace, stop a running one, or permanently remove it. `pause` snapshots and suspends; `resume` wakes it back up; `restore` restores from the last snapshot.
 
-`--project-root` and `--suite` are required. There is no top-level `--timeout` on `doctor` (unlike `nexus exec`); individual probes use their own timeouts inside the implementation.
+```
+nexus fork <id> <name> [--ref <ref>]
+```
+Forks a workspace into a new branch. `<name>` becomes the workspace name and, by default, the git ref. Use `--ref` to specify a different ref.
 
-On a **cold Firecracker** workspace, the first run can take **several minutes** while the guest and tooling bootstrap—silence on the terminal can mean runtime setup, not only your `.nexus/probe` scripts. **Seatbelt** (often selected on macOS when nested virtualization is unavailable) is usually much faster. Backend selection follows `nexus create` / host capabilities; see [`workspace-config.md`](workspace-config.md) for runtime notes.
+### Execution
+
+```
+nexus shell <id> [--timeout <dur>]
+```
+Opens an interactive bash session in the workspace via PTY. Optional `--timeout` sets a max wall time (e.g. `90s`). Auth relay token read from `$NEXUS_AUTH_RELAY_TOKEN` when set.
+
+```
+nexus exec <id> [--timeout <dur>] -- <command> [args...]
+```
+Runs a single non-interactive command in the workspace and streams output. The `--` separator is required. Auth relay token read from `$NEXUS_AUTH_RELAY_TOKEN` when set.
+
+```
+nexus run [--backend <name>] [--timeout <dur>] -- <command> [args...]
+```
+Creates an ephemeral workspace from the current directory, runs the command, then removes the workspace. Exit code matches the command's. Useful for one-off jobs that should leave no state behind.
+
+### Port forwarding
+
+```
+nexus tunnel <id>
+```
+Applies compose-defined port forwards for the workspace and blocks until Ctrl-C, then closes them. Useful in CI pipelines where a compose project needs ports surfaced to the host.
+
+### Maintenance
+
+```
+nexus init [path] [--force]
+```
+Scaffolds `.nexus/workspace.json` and `lifecycles/` in the target directory (defaults to cwd). `--force` overwrites existing files.
+
+```
+nexus doctor [--report-json <path>]
+```
+Runs health checks on the local runtime environment and prints a report. Optional `--report-json` writes the full result as JSON.
+
+## Environment variables
+
+| Variable | Description |
+|---|---|
+| `NEXUS_DAEMON_PORT` | Daemon port override (default `7874`) |
+| `NEXUS_DAEMON_TOKEN` | Auth token override (auto-managed when unset) |
+| `NEXUS_AUTH_RELAY_TOKEN` | Relay token for `shell` / `exec` commands |
 
 ## Related
 
 - SDK: [`sdk.md`](sdk.md)
-- Host auth bundle: [`host-auth-bundle.md`](host-auth-bundle.md)
 - Workspace config: [`workspace-config.md`](workspace-config.md)
-
