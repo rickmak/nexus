@@ -455,6 +455,7 @@ func createWorkspace(backend string) {
 	var result struct {
 		Workspace workspacemgr.Workspace `json:"workspace"`
 	}
+	fmt.Println("Creating workspace... (this may take a few minutes on first run)")
 	if err := daemonRPC(conn, "workspace.create", map[string]any{"spec": spec}, &result); err != nil {
 		if renderPreflightCreateError(err) {
 			os.Exit(1)
@@ -464,7 +465,7 @@ func createWorkspace(backend string) {
 	}
 
 	ws := result.Workspace
-	fmt.Printf("created workspace %s  (id: %s)\n", ws.WorkspaceName, ws.ID)
+	fmt.Printf("✓ Created workspace %s (id: %s)\n", ws.WorkspaceName, ws.ID)
 
 	lwMgr, lwErr := localws.NewManager(localws.Config{})
 	if lwErr != nil {
