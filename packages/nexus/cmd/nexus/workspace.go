@@ -18,9 +18,10 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/inizio/nexus/packages/nexus/pkg/credsbundle"
 	"github.com/inizio/nexus/packages/nexus/pkg/daemonclient"
 	"github.com/inizio/nexus/packages/nexus/pkg/localws"
-	"github.com/inizio/nexus/packages/nexus/pkg/credsbundle"
+	"github.com/inizio/nexus/packages/nexus/pkg/projectmgr"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspacemgr"
 	"github.com/spf13/cobra"
 )
@@ -181,6 +182,7 @@ var listCmd = &cobra.Command{
 }
 
 var createBackend string
+var listFlat bool
 
 var createCmd = &cobra.Command{
 	Use:   "create",
@@ -301,6 +303,7 @@ func init() {
 	forkCmd.Flags().StringVar(&forkRef, "ref", "", "child workspace git ref (defaults to child name)")
 	shellCmd.Flags().DurationVar(&shellTimeout, "timeout", 0, "max wall time waiting for PTY output and exit (e.g. 90s); 0 = no limit")
 	execCmd.Flags().DurationVar(&execTimeout, "timeout", 0, "max wall time for the command; 0 = no limit")
+	listCmd.Flags().BoolVar(&listFlat, "flat", false, "show flat list instead of hierarchical")
 	rootCmd.AddCommand(
 		listCmd,
 		createCmd,
@@ -325,6 +328,14 @@ func listWorkspaces() {
 	}
 	defer conn.Close()
 
+	if listFlat {
+		listWorkspacesFlat(conn)
+		return
+	}
+	listWorkspacesHierarchical(conn)
+}
+
+func listWorkspacesFlat(conn *websocket.Conn) {
 	var result struct {
 		Workspaces []workspacemgr.Workspace `json:"workspaces"`
 	}
@@ -349,6 +360,63 @@ func listWorkspaces() {
 		fmt.Printf("%-36s  %-20s  %-10s  %-10s  %s\n",
 			ws.ID, ws.WorkspaceName, ws.State, ws.Backend, wt)
 	}
+}
+
+func listWorkspacesHierarchical(conn *websocket.Conn) {
+	var projectsResult struct {
+		Projects []projectmgr.Project `json:"projects"`
+	}
+	if err := daemonRPC(conn, "project.list", map[string]any{}, &projectsResult); err != nil {
+		fmt.Fprintf(os.Stderr, "nexus list: %v\n", err)
+		os.Exit(1)
+	}
+
+	var workspacesResult struct {
+		Workspaces []workspacemgr.Workspace `json:"workspaces"`
+	}
+	if err := daemonRPC(conn, "workspace.list", map[string]any{}, &workspacesResult); err != nil {
+		fmt.Fprintf(os.Stderr, "nexus list: %v\n", err)
+		os.Exit(1)
+	}
+
+	if len(projectsResult.Projects) == 0 {
+		fmt.Println("no projects")
+		return
+	}
+
+	workspacesByProject := make(map[string][]workspacemgr.Workspace)
+	for _, ws := range workspacesResult.Workspaces {
+		pid := ws.ProjectID
+		if pid == "" {
+			pid = "orphan"
+		}
+		workspacesByProject[pid] = append(workspacesByProject[pid], ws)
+	}
+
+	for _, p := range projectsResult.Projects {
+		fmt.Printf("PROJECT: %s (%s)\n", p.Name, p.PrimaryRepo)
+		workspaces := workspacesByProject[p.ID]
+		if len(workspaces) == 0 {
+			fmt.Println("  (no workspaces)")
+			continue
+		}
+		for _, ws := range workspaces {
+			fmt.Printf("  %-20s  %-10s  %-10s  %s\n",
+				ws.WorkspaceName, ws.State, ws.Backend, ws.Ref)
+		}
+		fmt.Println()
+	}
+
+	if orphans, ok := workspacesByProject["orphan"]; ok && len(orphans) > 0 {
+		fmt.Println("PROJECT: (legacy workspaces)")
+		for _, ws := range orphans {
+			fmt.Printf("  %-20s  %-10s  %-10s  %s\n",
+				ws.WorkspaceName, ws.State, ws.Backend, ws.Ref)
+		}
+	}
+
+	totalWs := len(workspacesResult.Workspaces)
+	fmt.Printf("%d projects, %d workspaces total\n", len(projectsResult.Projects), totalWs)
 }
 
 func createWorkspace(backend string) {
