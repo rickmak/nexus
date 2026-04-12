@@ -23,7 +23,7 @@ import (
 	"github.com/inizio/nexus/packages/nexus/pkg/buildinfo"
 	"github.com/inizio/nexus/packages/nexus/pkg/compose"
 	"github.com/inizio/nexus/packages/nexus/pkg/config"
-	"github.com/inizio/nexus/packages/nexus/pkg/runtime/authbundle"
+	"github.com/inizio/nexus/packages/nexus/pkg/credsbundle"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/firecracker"
 	"github.com/inizio/nexus/packages/nexus/pkg/update"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspacemgr"
@@ -406,7 +406,7 @@ func runRun(backend string, timeout time.Duration, cmdArgs []string) error {
 	}
 	defer conn.Close()
 
-	hostAuthBundle, err := authbundle.BuildFromHome()
+	configBundle, err := credsbundle.Build()
 	if err != nil {
 		return fmt.Errorf("nexus run: %w", err)
 	}
@@ -417,7 +417,7 @@ func runRun(backend string, timeout time.Duration, cmdArgs []string) error {
 		WorkspaceName: workspaceName,
 		AgentProfile:  "default",
 		Backend:       backend,
-		ConfigBundle:  hostAuthBundle,
+		ConfigBundle:  configBundle,
 	}
 	var createResult struct {
 		Workspace workspacemgr.Workspace `json:"workspace"`

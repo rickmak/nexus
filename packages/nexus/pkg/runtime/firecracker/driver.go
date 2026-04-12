@@ -7,13 +7,11 @@ import (
 	"log"
 	"net"
 	"os"
-	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/inizio/nexus/packages/nexus/pkg/agentprofile"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
 	"github.com/inizio/nexus/packages/nexus/pkg/secrets/discovery"
 	"github.com/inizio/nexus/packages/nexus/pkg/secrets/server"
@@ -156,124 +154,10 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 		}
 	}
 
-	if shouldBootstrapGuestTooling(req.Options) {
-		if err := d.bootstrapGuestToolingAndAuth(ctx, req.WorkspaceID, req.ConfigBundle); err != nil {
-			return err
-		}
-	}
-
 	// TODO: Connect to agent via vsock when AgentClient dial is implemented
 	_ = inst
 
 	return nil
-}
-
-func shouldBootstrapGuestTooling(options map[string]string) bool {
-	if options == nil {
-		return false
-	}
-	raw := strings.TrimSpace(options["host_cli_sync"])
-	if raw == "" {
-		return false
-	}
-	raw = strings.ToLower(raw)
-	return raw == "1" || raw == "true" || raw == "yes" || raw == "on"
-}
-
-func (d *Driver) bootstrapGuestToolingAndAuth(ctx context.Context, workspaceID string, authBundle string) error {
-	if strings.TrimSpace(authBundle) == "" {
-		return nil
-	}
-
-	conn, err := d.waitForAgentConn(ctx, workspaceID, 30*time.Second)
-	if err != nil {
-		return fmt.Errorf("bootstrap firecracker guest agent connection failed: %w", err)
-	}
-	defer conn.Close()
-
-	client := NewAgentClient(conn)
-	env := []string{}
-	if strings.TrimSpace(authBundle) != "" {
-		env = append(env, "NEXUS_HOST_AUTH_BUNDLE="+authBundle)
-	}
-
-	request := ExecRequest{
-		ID:      fmt.Sprintf("bootstrap-%d", time.Now().UnixNano()),
-		Command: "sh",
-		Args:    []string{"-lc", buildGuestCLIBootstrapCommand()},
-		WorkDir: "/workspace",
-		Env:     env,
-	}
-	result, execErr := client.Exec(ctx, request)
-	if execErr != nil {
-		return fmt.Errorf("bootstrap firecracker guest tooling failed: %w", execErr)
-	}
-	if result.ExitCode != 0 {
-		detail := strings.TrimSpace(result.Stderr)
-		if detail == "" {
-			detail = strings.TrimSpace(result.Stdout)
-		}
-		if detail == "" {
-			detail = fmt.Sprintf("exit code %d", result.ExitCode)
-		}
-		return fmt.Errorf("bootstrap firecracker guest tooling failed: %s", detail)
-	}
-
-	return nil
-}
-
-func (d *Driver) waitForAgentConn(ctx context.Context, workspaceID string, timeout time.Duration) (net.Conn, error) {
-	deadline := time.Now().Add(timeout)
-	var lastErr error
-	for time.Now().Before(deadline) {
-		conn, err := d.AgentConn(ctx, workspaceID)
-		if err == nil {
-			return conn, nil
-		}
-		lastErr = err
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-time.After(250 * time.Millisecond):
-		}
-	}
-	if lastErr != nil {
-		return nil, lastErr
-	}
-	return nil, errors.New("agent connection timed out")
-}
-
-func detectHostCLIAvailability() map[string]bool {
-	out := make(map[string]bool)
-	for _, bin := range agentprofile.AllBinaries() {
-		_, err := exec.LookPath(bin)
-		out[bin] = err == nil
-	}
-	return out
-}
-
-func buildGuestCLIBootstrapCommand() string {
-	parts := []string{
-		"set -e",
-		"mkdir -p ~/.config ~/.local/share",
-		`if [ -n "${NEXUS_HOST_AUTH_BUNDLE:-}" ]; then ` +
-			`(printf '%s' "$NEXUS_HOST_AUTH_BUNDLE" | base64 -d 2>/dev/null || printf '%s' "$NEXUS_HOST_AUTH_BUNDLE" | base64 -D 2>/dev/null) >/tmp/nexus-auth.tar.gz && ` +
-			`tar -xzf /tmp/nexus-auth.tar.gz -C "$HOME" >/dev/null 2>&1 || true; ` +
-			`rm -f /tmp/nexus-auth.tar.gz >/dev/null 2>&1 || true; fi`,
-		`if command -v npm >/dev/null 2>&1; then NPM_BIN=$(npm bin -g 2>/dev/null || true); if [ -n "$NPM_BIN" ] && [ -d "$NPM_BIN" ]; then export PATH="$NPM_BIN:$PATH"; fi; fi`,
-	}
-
-	pkgs := agentprofile.AllInstallPkgs()
-	if len(pkgs) > 0 {
-		joined := strings.Join(pkgs, " ")
-		parts = append(parts, "if command -v npm >/dev/null 2>&1; then npm i -g "+joined+" >/dev/null 2>&1 || true; fi")
-	}
-
-	for _, bin := range agentprofile.AllBinaries() {
-		parts = append(parts, "command -v "+bin+" >/dev/null 2>&1")
-	}
-
-	return strings.Join(parts, "; ")
 }
 
 func (d *Driver) GrowWorkspace(ctx context.Context, workspaceID string, newSizeBytes int64) error {
