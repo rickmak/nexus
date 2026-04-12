@@ -138,7 +138,7 @@ func Rollback(ctx context.Context) error {
 	port := daemonPort()
 	_ = stopRunningDaemonFn(port)
 	if token, tokenErr := daemonToken(); tokenErr == nil {
-		_ = daemonclient.EnsureRunning(port, token, "")
+		_ = daemonclient.EnsureRunning(port, "", token)
 	}
 	return nil
 }
@@ -317,7 +317,7 @@ func restartAndProbeDaemon(ctx context.Context, expectedVersion string) (bool, e
 		return false, err
 	}
 	_ = stopRunningDaemonFn(port)
-	if err := daemonclient.EnsureRunning(port, token, ""); err != nil {
+	if err := daemonclient.EnsureRunning(port, "", token); err != nil {
 		return false, err
 	}
 	healthURL := "http://localhost:" + strconv.Itoa(port) + "/healthz"
@@ -365,7 +365,7 @@ func daemonToken() (string, error) {
 	if token := strings.TrimSpace(os.Getenv("NEXUS_DAEMON_TOKEN")); token != "" {
 		return token, nil
 	}
-	return daemonclient.LoadOrCreateToken()
+	return daemonclient.ReadDaemonToken()
 }
 
 func stopRunningDaemon(port int) error {

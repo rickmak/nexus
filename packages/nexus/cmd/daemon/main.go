@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -14,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/inizio/nexus/packages/nexus/pkg/daemonclient"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/firecracker"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/limafirecracker"
@@ -39,16 +42,58 @@ func main() {
 	port := flag.Int("port", 8080, "Port to listen on")
 	defaultWorkspaceDir := resolveDefaultWorkspaceDir()
 	workspaceDir := flag.String("workspace-dir", defaultWorkspaceDir, "Workspace directory path")
-	token := flag.String("token", "", "JWT secret token for authentication")
+	tokenFlag := flag.String("token", "", "JWT secret (optional; if unset, a token is loaded or created under --data-dir)")
+	defaultDataDir, err := daemonclient.DefaultDataDir()
+	if err != nil {
+		log.Fatalf("Error: data directory: %v", err)
+	}
+	dataDir := flag.String("data-dir", defaultDataDir, "Daemon data directory (stores token file)")
 	flag.Parse()
 
-	if *token == "" {
-		log.Fatal("Error: --token is required")
+	token := strings.TrimSpace(*tokenFlag)
+	if token == "" {
+		var tokErr error
+		token, tokErr = loadOrCreateToken(*dataDir)
+		if tokErr != nil {
+			log.Fatalf("Error: %v", tokErr)
+		}
 	}
 
-	if err := runServer(*port, *workspaceDir, *token); err != nil {
+	if err := runServer(*port, *workspaceDir, token); err != nil {
 		log.Fatalf("Server error: %v", err)
 	}
+}
+
+func generateToken() (string, error) {
+	bytes := make([]byte, 32)
+	if _, err := rand.Read(bytes); err != nil {
+		return "", err
+	}
+	return base64.URLEncoding.EncodeToString(bytes), nil
+}
+
+func loadOrCreateToken(dataDir string) (string, error) {
+	tokenPath := filepath.Join(dataDir, "token")
+
+	if data, err := os.ReadFile(tokenPath); err == nil {
+		tok := strings.TrimSpace(string(data))
+		if tok != "" {
+			return tok, nil
+		}
+	}
+
+	token, err := generateToken()
+	if err != nil {
+		return "", fmt.Errorf("generate token: %w", err)
+	}
+
+	if err := os.MkdirAll(dataDir, 0o700); err != nil {
+		return "", fmt.Errorf("create data directory: %w", err)
+	}
+	if err := os.WriteFile(tokenPath, []byte(token), 0o600); err != nil {
+		return "", fmt.Errorf("write token: %w", err)
+	}
+	return token, nil
 }
 
 func resolveDefaultWorkspaceDir() string {
