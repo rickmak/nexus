@@ -155,10 +155,14 @@ func daemonRPC(conn *websocket.Conn, method string, params interface{}, out inte
 	if err := conn.WriteJSON(req); err != nil {
 		return fmt.Errorf("rpc send: %w", err)
 	}
+	if err := conn.SetReadDeadline(time.Now().Add(2 * time.Minute)); err != nil {
+		return fmt.Errorf("rpc set deadline: %w", err)
+	}
 	var resp rpcResponse
 	if err := conn.ReadJSON(&resp); err != nil {
 		return fmt.Errorf("rpc recv: %w", err)
 	}
+	conn.SetReadDeadline(time.Time{})
 	if resp.Error != nil {
 		return fmt.Errorf("rpc error %d: %s", resp.Error.Code, resp.Error.Message)
 	}
