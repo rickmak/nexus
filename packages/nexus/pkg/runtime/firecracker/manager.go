@@ -27,6 +27,8 @@ var tapTeardownFunc func(tapName, subnetCIDR string) = realTeardownTAP
 // initialCID is the starting CID for guest VMs.
 const initialCID uint32 = 1000
 
+const VendingVSockPort uint32 = 10790
+
 // SpawnSpec defines the configuration for spawning a new Firecracker VM.
 type SpawnSpec struct {
 	WorkspaceID string

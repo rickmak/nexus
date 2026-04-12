@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"net"
+	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -13,6 +15,9 @@ import (
 
 	"github.com/inizio/nexus/packages/nexus/pkg/agentprofile"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
+	"github.com/inizio/nexus/packages/nexus/pkg/secrets/discovery"
+	"github.com/inizio/nexus/packages/nexus/pkg/secrets/server"
+	"github.com/inizio/nexus/packages/nexus/pkg/secrets/vending"
 	"github.com/mdlayher/vsock"
 )
 
@@ -31,11 +36,12 @@ type ManagerInterface interface {
 }
 
 type Driver struct {
-	runner       CommandRunner
-	manager      ManagerInterface
-	projectRoots map[string]string
-	agents       map[string]*AgentClient
-	mu           sync.RWMutex
+	runner         CommandRunner
+	manager        ManagerInterface
+	projectRoots   map[string]string
+	agents         map[string]*AgentClient
+	vendingServers map[string]*server.Server
+	mu             sync.RWMutex
 }
 
 
@@ -71,9 +77,10 @@ func WithManager(manager ManagerInterface) Option {
 
 func NewDriver(runner CommandRunner, opts ...Option) *Driver {
 	d := &Driver{
-		runner:       runner,
-		projectRoots: make(map[string]string),
-		agents:       make(map[string]*AgentClient),
+		runner:         runner,
+		projectRoots:   make(map[string]string),
+		agents:         make(map[string]*AgentClient),
+		vendingServers: make(map[string]*server.Server),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -127,6 +134,27 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 	d.mu.Lock()
 	d.projectRoots[req.WorkspaceID] = req.ProjectRoot
 	d.mu.Unlock()
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		log.Printf("[secrets] Warning: user home dir: %v", err)
+	} else {
+		configs, discoverErr := discovery.Discover(homeDir)
+		if discoverErr != nil {
+			log.Printf("[secrets] Warning: credential discovery failed: %v", discoverErr)
+		} else if len(configs) > 0 {
+			svc := vending.NewService(configs)
+			vendServer := server.New(svc, VendingVSockPort)
+			if startErr := vendServer.Start(); startErr != nil {
+				log.Printf("[secrets] Warning: failed to start vending: %v", startErr)
+			} else {
+				log.Printf("[secrets] Started vending for %d providers", len(configs))
+				d.mu.Lock()
+				d.vendingServers[req.WorkspaceID] = vendServer
+				d.mu.Unlock()
+			}
+		}
+	}
 
 	if shouldBootstrapGuestTooling(req.Options) {
 		if err := d.bootstrapGuestToolingAndAuth(ctx, req.WorkspaceID, req.ConfigBundle); err != nil {
@@ -296,6 +324,10 @@ func (d *Driver) Stop(ctx context.Context, workspaceID string) error {
 	}
 
 	d.mu.Lock()
+	if vendServer, ok := d.vendingServers[workspaceID]; ok {
+		_ = vendServer.Stop()
+		delete(d.vendingServers, workspaceID)
+	}
 	delete(d.agents, workspaceID)
 	d.mu.Unlock()
 
@@ -324,6 +356,10 @@ func (d *Driver) Fork(ctx context.Context, workspaceID, childWorkspaceID string)
 
 func (d *Driver) Destroy(ctx context.Context, workspaceID string) error {
 	d.mu.Lock()
+	if vendServer, ok := d.vendingServers[workspaceID]; ok {
+		_ = vendServer.Stop()
+		delete(d.vendingServers, workspaceID)
+	}
 	delete(d.projectRoots, workspaceID)
 	delete(d.agents, workspaceID)
 	d.mu.Unlock()
