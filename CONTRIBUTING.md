@@ -45,6 +45,7 @@ When behavior changes, update as needed:
 - `docs/reference/cli.md`
 - `docs/reference/sdk.md`
 - `docs/reference/workspace-config.md`
+- `docs/guides/release-signing.md` (when release-signing flow changes)
 
 ## Architecture
 

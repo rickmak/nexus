@@ -94,6 +94,16 @@ jobs:
           - os: macos-latest
             target: darwin-arm64
     steps:
+      - name: Verify update signing secrets
+        shell: bash
+        env:
+          NEXUS_UPDATE_MANIFEST_PUBLIC_KEY_B64: ${{ secrets.NEXUS_UPDATE_MANIFEST_PUBLIC_KEY_B64 }}
+        run: |
+          if [[ -z "${NEXUS_UPDATE_MANIFEST_PUBLIC_KEY_B64}" ]]; then
+            echo "Missing required secret: NEXUS_UPDATE_MANIFEST_PUBLIC_KEY_B64" >&2
+            echo "See docs/guides/release-signing.md for setup instructions." >&2
+            exit 1
+          fi
       - name: Checkout code
         uses: actions/checkout@v4
         with:
@@ -133,6 +143,22 @@ jobs:
     needs: [semantic-release, build]
     runs-on: ubuntu-latest
     steps:
+      - name: Verify update signing secrets
+        shell: bash
+        env:
+          NEXUS_UPDATE_MANIFEST_PRIVATE_KEY_B64: ${{ secrets.NEXUS_UPDATE_MANIFEST_PRIVATE_KEY_B64 }}
+          NEXUS_UPDATE_MANIFEST_PUBLIC_KEY_B64: ${{ secrets.NEXUS_UPDATE_MANIFEST_PUBLIC_KEY_B64 }}
+        run: |
+          if [[ -z "${NEXUS_UPDATE_MANIFEST_PRIVATE_KEY_B64}" ]]; then
+            echo "Missing required secret: NEXUS_UPDATE_MANIFEST_PRIVATE_KEY_B64" >&2
+            echo "See docs/guides/release-signing.md for setup instructions." >&2
+            exit 1
+          fi
+          if [[ -z "${NEXUS_UPDATE_MANIFEST_PUBLIC_KEY_B64}" ]]; then
+            echo "Missing required secret: NEXUS_UPDATE_MANIFEST_PUBLIC_KEY_B64" >&2
+            echo "See docs/guides/release-signing.md for setup instructions." >&2
+            exit 1
+          fi
       - name: Checkout code
         uses: actions/checkout@v4
         with:
