@@ -6,14 +6,12 @@ import (
 	"fmt"
 	"log"
 	"net"
-	"os"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
-	"github.com/inizio/nexus/packages/nexus/pkg/secrets/discovery"
 	"github.com/inizio/nexus/packages/nexus/pkg/secrets/server"
 	"github.com/inizio/nexus/packages/nexus/pkg/secrets/vending"
 	"github.com/mdlayher/vsock"
@@ -34,12 +32,11 @@ type ManagerInterface interface {
 }
 
 type Driver struct {
-	runner         CommandRunner
-	manager        ManagerInterface
-	projectRoots   map[string]string
-	agents         map[string]*AgentClient
-	vendingServers map[string]*server.Server
-	mu             sync.RWMutex
+	runner       CommandRunner
+	manager      ManagerInterface
+	projectRoots map[string]string
+	agents       map[string]*AgentClient
+	mu           sync.RWMutex
 }
 
 
@@ -75,10 +72,9 @@ func WithManager(manager ManagerInterface) Option {
 
 func NewDriver(runner CommandRunner, opts ...Option) *Driver {
 	d := &Driver{
-		runner:         runner,
-		projectRoots:   make(map[string]string),
-		agents:         make(map[string]*AgentClient),
-		vendingServers: make(map[string]*server.Server),
+		runner:       runner,
+		projectRoots: make(map[string]string),
+		agents:       make(map[string]*AgentClient),
 	}
 	for _, opt := range opts {
 		opt(d)
@@ -133,29 +129,21 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 	d.projectRoots[req.WorkspaceID] = req.ProjectRoot
 	d.mu.Unlock()
 
-	homeDir, err := os.UserHomeDir()
+	// Start singleton host vending server (shared across all workspaces)
+	hostServer, err := server.GetHostServer(VendingVSockPort)
 	if err != nil {
-		log.Printf("[secrets] Warning: user home dir: %v", err)
-	} else {
-		configs, discoverErr := discovery.Discover(homeDir)
-		if discoverErr != nil {
-			log.Printf("[secrets] Warning: credential discovery failed: %v", discoverErr)
-		} else if len(configs) > 0 {
-			svc := vending.NewService(configs)
-			// Use CID-based port for multi-workspace isolation
-			// Each workspace gets a unique port: 10790 + CID
-			vendingPort := VendingVSockPort + inst.CID
-			vendServer := server.New(svc, vendingPort)
-			if startErr := vendServer.Start(); startErr != nil {
-				log.Printf("[secrets] Warning: failed to start vending on port %d: %v", vendingPort, startErr)
-			} else {
-				log.Printf("[secrets] Started vending for %d providers on port %d (CID: %d)", len(configs), vendingPort, inst.CID)
-				d.mu.Lock()
-				d.vendingServers[req.WorkspaceID] = vendServer
-				d.mu.Unlock()
-			}
+		log.Printf("[secrets] Warning: failed to initialize vending: %v", err)
+	} else if !hostServer.IsRunning() {
+		if startErr := hostServer.Start(); startErr != nil {
+			log.Printf("[secrets] Warning: failed to start vending server: %v", startErr)
+		} else {
+			svc, _ := vending.GetHostVendingService()
+			providers := svc.ListProviders("")
+			log.Printf("[secrets] Started host vending server on port %d with providers: %v", VendingVSockPort, providers)
 		}
 	}
+
+	// Pass vending URL to guest via config bundle (handled by runtime)
 
 	// TODO: Connect to agent via vsock when AgentClient dial is implemented
 	_ = inst
@@ -211,12 +199,13 @@ func (d *Driver) Stop(ctx context.Context, workspaceID string) error {
 	}
 
 	d.mu.Lock()
-	if vendServer, ok := d.vendingServers[workspaceID]; ok {
-		_ = vendServer.Stop()
-		delete(d.vendingServers, workspaceID)
-	}
 	delete(d.agents, workspaceID)
 	d.mu.Unlock()
+
+	// Cleanup workspace tokens from singleton vending service
+	if svc, err := vending.GetHostVendingService(); err == nil {
+		svc.CleanupWorkspace(workspaceID)
+	}
 
 	return d.manager.Stop(ctx, workspaceID)
 }
@@ -243,13 +232,14 @@ func (d *Driver) Fork(ctx context.Context, workspaceID, childWorkspaceID string)
 
 func (d *Driver) Destroy(ctx context.Context, workspaceID string) error {
 	d.mu.Lock()
-	if vendServer, ok := d.vendingServers[workspaceID]; ok {
-		_ = vendServer.Stop()
-		delete(d.vendingServers, workspaceID)
-	}
 	delete(d.projectRoots, workspaceID)
 	delete(d.agents, workspaceID)
 	d.mu.Unlock()
+
+	// Cleanup workspace tokens from singleton vending service
+	if svc, err := vending.GetHostVendingService(); err == nil {
+		svc.CleanupWorkspace(workspaceID)
+	}
 
 	// Stop the VM if manager is available
 	if d.manager != nil {
