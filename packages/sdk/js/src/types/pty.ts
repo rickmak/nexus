@@ -1,10 +1,8 @@
 export interface PTYOpenParams {
   workspaceId: string;
-  shell?: string;
   workdir?: string;
   cols?: number;
   rows?: number;
-  authRelayToken?: string;
 }
 
 export interface PTYOpenResult {

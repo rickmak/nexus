@@ -2,7 +2,6 @@ export interface ExecOptions {
   cwd?: string;
   env?: Record<string, string>;
   timeout?: number;
-  authRelayToken?: string;
 }
 
 export interface ExecResult {

@@ -20,7 +20,6 @@ export interface WorkspaceCreateSpec {
   policy?: WorkspacePolicy;
   backend?: string;
   authBinding?: Record<string, string>;
-  configBundle?: string;
 }
 
 export interface WorkspaceRecord {
@@ -42,10 +41,6 @@ export interface WorkspaceRecord {
 }
 
 export interface WorkspaceCreateResult {
-  workspace: WorkspaceRecord;
-}
-
-export interface WorkspaceOpenResult {
   workspace: WorkspaceRecord;
 }
 
@@ -79,22 +74,12 @@ export interface WorkspaceReadyResult {
   lastResults: Record<string, number>;
 }
 
-export interface Capability {
-  name: string;
-  available: boolean;
-  metadata?: Record<string, unknown>;
-}
-
-export interface CapabilitiesListResult {
-  capabilities: Capability[];
-}
-
 export interface WorkspaceStopResult {
   stopped: boolean;
 }
 
 export interface WorkspaceStartResult {
-  started: boolean;
+  workspace: WorkspaceRecord;
 }
 
 export interface WorkspaceRestoreResult {
@@ -113,47 +98,4 @@ export interface WorkspaceResumeResult {
 export interface WorkspaceForkResult {
   forked: boolean;
   workspace: WorkspaceRecord;
-}
-
-export interface WorkspaceRelationNode {
-  workspaceId: string;
-  parentWorkspaceId?: string;
-  lineageRootId?: string;
-  derivedFromRef?: string;
-  worktreeRef?: string;
-  state: WorkspaceState;
-  backend?: string;
-  workspaceName: string;
-  rootPath: string;
-  localWorktreePath?: string;
-  createdAt: string;
-  updatedAt: string;
-}
-
-export interface WorkspaceRelationsGroup {
-  repoId: string;
-  repoKind?: string;
-  repo: string;
-  displayName: string;
-  remoteUrl?: string;
-  nodes: WorkspaceRelationNode[];
-  lineageRoots: string[];
-}
-
-export interface WorkspaceRelationsListResult {
-  relations: WorkspaceRelationsGroup[];
-}
-
-export interface AuthRelayMintParams {
-  workspaceId: string;
-  binding: string;
-  ttlSeconds?: number;
-}
-
-export interface AuthRelayMintResult {
-  token: string;
-}
-
-export interface AuthRelayRevokeResult {
-  revoked: boolean;
 }

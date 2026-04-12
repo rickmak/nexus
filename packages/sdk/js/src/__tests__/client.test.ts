@@ -56,21 +56,8 @@ describe('WorkspaceClient', () => {
 
       expect(client.isConnected).toBe(false);
       expect(client.connectionState).toBe('disconnected');
-      expect(client.ssh).toBeDefined();
+      expect(client.shell).toBeDefined();
       expect(client.workspaces).toBeDefined();
-    });
-
-    it('should create a client with custom reconnect config', () => {
-      client = new WorkspaceClient({
-        endpoint: 'ws://localhost:8080',
-        workspaceId: 'test-workspace',
-        token: 'test-token',
-        reconnect: false,
-        reconnectDelay: 500,
-        maxReconnectAttempts: 5,
-      });
-
-      expect(client.isConnected).toBe(false);
     });
 
     it('should create control-plane client without workspaceId', () => {
