@@ -142,11 +142,14 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 			log.Printf("[secrets] Warning: credential discovery failed: %v", discoverErr)
 		} else if len(configs) > 0 {
 			svc := vending.NewService(configs)
-			vendServer := server.New(svc, VendingVSockPort)
+			// Use CID-based port for multi-workspace isolation
+			// Each workspace gets a unique port: 10790 + CID
+			vendingPort := VendingVSockPort + inst.CID
+			vendServer := server.New(svc, vendingPort)
 			if startErr := vendServer.Start(); startErr != nil {
-				log.Printf("[secrets] Warning: failed to start vending: %v", startErr)
+				log.Printf("[secrets] Warning: failed to start vending on port %d: %v", vendingPort, startErr)
 			} else {
-				log.Printf("[secrets] Started vending for %d providers", len(configs))
+				log.Printf("[secrets] Started vending for %d providers on port %d (CID: %d)", len(configs), vendingPort, inst.CID)
 				d.mu.Lock()
 				d.vendingServers[req.WorkspaceID] = vendServer
 				d.mu.Unlock()
