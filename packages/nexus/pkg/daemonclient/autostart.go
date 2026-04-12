@@ -38,6 +38,16 @@ func RunDir() (string, error) {
 	return filepath.Join(configHome, "nexus", "run"), nil
 }
 
+// defaultWorkspaceDir returns the default directory for workspace storage.
+// It respects $XDG_DATA_HOME if set; otherwise falls back to ~/.nexus/workspaces.
+func defaultWorkspaceDir() string {
+	if dataHome := os.Getenv("XDG_DATA_HOME"); dataHome != "" {
+		return filepath.Join(dataHome, "nexus", "workspaces")
+	}
+	home, _ := os.UserHomeDir()
+	return filepath.Join(home, ".nexus", "workspaces")
+}
+
 // TokenPath returns the path of the per-user daemon token file.
 func TokenPath() (string, error) {
 	d, err := RunDir()
@@ -137,8 +147,7 @@ func EnsureRunning(port int, token, workspaceDir string) error {
 	}
 
 	if workspaceDir == "" {
-		home, _ := os.UserHomeDir()
-		workspaceDir = filepath.Join(home, "nexus-workspaces")
+		workspaceDir = defaultWorkspaceDir()
 	}
 
 	cmd := exec.Command(daemonBin,
