@@ -30,6 +30,7 @@ def sha256_file(path: pathlib.Path) -> str:
 
 
 def build_manifest(version: str, artifacts_dir: pathlib.Path, base_url: str) -> dict:
+    minimum_updater = os.getenv("NEXUS_MINIMUM_UPDATER_VERSION", "0.0.0").strip() or "0.0.0"
     artifacts = {}
     for child in sorted(artifacts_dir.iterdir()):
         if not child.is_file():
@@ -57,7 +58,7 @@ def build_manifest(version: str, artifacts_dir: pathlib.Path, base_url: str) -> 
         "schemaVersion": 1,
         "version": version,
         "publishedAt": datetime.now(tz=timezone.utc).isoformat(),
-        "minimumUpdaterVersion": "1.0.0",
+        "minimumUpdaterVersion": minimum_updater,
         "artifacts": artifacts,
     }
     return manifest
