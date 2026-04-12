@@ -105,3 +105,32 @@ export interface Capability {
   name: string;
   available: boolean;
 }
+
+export interface WorkspaceRelationNode {
+  workspaceId: string;
+  parentWorkspaceId?: string;
+  lineageRootId?: string;
+  derivedFromRef?: string;
+  worktreeRef?: string;
+  state: string;
+  backend?: string;
+  workspaceName: string;
+  rootPath: string;
+  localWorktreePath?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface WorkspaceRelationsGroup {
+  repoId: string;
+  repoKind?: string;
+  repo: string;
+  displayName: string;
+  remoteUrl?: string;
+  nodes: WorkspaceRelationNode[];
+  lineageRoots: string[];
+}
+
+export interface WorkspaceRelationsListResult {
+  relations: WorkspaceRelationsGroup[];
+}
