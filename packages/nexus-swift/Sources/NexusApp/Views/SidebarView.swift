@@ -226,43 +226,62 @@ struct StatusDot: View {
 
 private struct SidebarFooter: View {
     @EnvironmentObject var appState: AppState
+    @State private var showDaemonPanel = false
 
     private var connectionLabel: String {
         switch appState.connectionState {
-        case .starting:    return "Starting…"
-        case .connecting:  return "Connecting…"
-        case .connected:   return "Connected"
+        case .starting:     return "Starting…"
+        case .connecting:   return "Connecting…"
+        case .connected:    return "Connected"
         case .disconnected: return "Offline"
+        }
+    }
+
+    private var dotColor: Color {
+        switch appState.daemonStatus {
+        case .running:           return Theme.green
+        case .outdated:          return Theme.orange
+        case .offline, .unknown: return Color.gray
         }
     }
 
     var body: some View {
         HStack(spacing: 2) {
             FooterBtn(icon: "questionmark.circle") {}
-
-            // Settings — native Menu popup
             FooterMenuBtn()
-
             Spacer()
 
-            // Connection indicator pill
-            HStack(spacing: 5) {
-                if appState.connectionState == .starting {
-                    ProgressView()
-                        .scaleEffect(0.45)
-                        .frame(width: 6, height: 6)
-                } else {
-                    Circle()
-                        .fill(appState.connectionState == .connected ? Theme.green : Theme.orange)
-                        .frame(width: 6)
+            // Clickable pill → opens DaemonSettingsPanel
+            Button {
+                showDaemonPanel.toggle()
+            } label: {
+                HStack(spacing: 5) {
+                    if appState.connectionState == .starting {
+                        ProgressView()
+                            .scaleEffect(0.45)
+                            .frame(width: 6, height: 6)
+                    } else {
+                        Circle().fill(dotColor).frame(width: 6)
+                    }
+                    Text(connectionLabel)
+                        .font(.system(size: 10))
+                        .foregroundColor(Theme.labelTertiary)
                 }
-                Text(connectionLabel)
-                    .font(.system(size: 10))
-                    .foregroundColor(Theme.labelTertiary)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(showDaemonPanel ? Color.black.opacity(0.08) : .clear)
+                )
             }
-            .padding(.trailing, 10)
+            .buttonStyle(.plain)
+            .popover(isPresented: $showDaemonPanel, arrowEdge: .bottom) {
+                DaemonSettingsPanel()
+                    .environmentObject(appState)
+            }
             .accessibilityIdentifier("connection_status")
             .accessibilityLabel(connectionLabel)
+            .padding(.trailing, 4)
         }
         .padding(.horizontal, 6)
         .frame(height: 34)
