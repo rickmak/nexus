@@ -30,7 +30,7 @@ func limaHome() (string, error) {
 	return filepath.Join(home, ".lima"), nil
 }
 
-// limaSSHConfigPath returns ~/.lima/INSTANCE/ssh.config.
+// limaSSHConfigPath returns ~/.lima/INSTANCE/ssh.config (Lima-generated).
 func limaSSHConfigPath(instanceName string) (string, error) {
 	dir, err := limaHome()
 	if err != nil {
@@ -39,9 +39,37 @@ func limaSSHConfigPath(instanceName string) (string, error) {
 	return filepath.Join(dir, instanceName, "ssh.config"), nil
 }
 
-// LimaSSHHost returns the SSH host alias Lima uses: "lima-<instance>".
-func LimaSSHHost(instanceName string) string {
-	return "lima-" + instanceName
+// nexusSSHConfigPath returns a nexus-managed SSH config for instanceName.
+// It rewrites Lima's "Host lima-INSTANCE" to plain "Host INSTANCE" so all
+// ssh invocations use the bare instance name (e.g. "nexus") rather than
+// "lima-nexus".  The file is regenerated each call so port changes after a
+// Lima restart are always picked up.
+func nexusSSHConfigPath(instanceName string) (string, error) {
+	limaCfg, err := limaSSHConfigPath(instanceName)
+	if err != nil {
+		return "", err
+	}
+	raw, err := os.ReadFile(limaCfg)
+	if err != nil {
+		return "", fmt.Errorf("lima ssh.config not found for %q: %w", instanceName, err)
+	}
+
+	// Replace "Host lima-INSTANCE" → "Host INSTANCE" (keeps the same block).
+	rewritten := strings.ReplaceAll(string(raw), "Host lima-"+instanceName, "Host "+instanceName)
+
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	dir := filepath.Join(home, ".nexus", "ssh")
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	out := filepath.Join(dir, instanceName+".ssh.config")
+	if err := os.WriteFile(out, []byte(rewritten), 0o600); err != nil {
+		return "", err
+	}
+	return out, nil
 }
 
 // DirectSSHInteractiveArgs returns the ssh(1) argument slice that opens an
@@ -50,12 +78,9 @@ func LimaSSHHost(instanceName string) string {
 // Equivalent to what `limactl shell --reconnect --workdir WORKDIR INSTANCE`
 // does internally, but without the limactl wrapper overhead or log noise.
 func DirectSSHInteractiveArgs(instanceName, workdir, shell string) ([]string, error) {
-	cfgPath, err := limaSSHConfigPath(instanceName)
+	cfgPath, err := nexusSSHConfigPath(instanceName)
 	if err != nil {
 		return nil, err
-	}
-	if _, err := os.Stat(cfgPath); err != nil {
-		return nil, fmt.Errorf("lima ssh.config not found for %q: %w", instanceName, err)
 	}
 
 	sh := strings.TrimSpace(shell)
@@ -73,7 +98,7 @@ func DirectSSHInteractiveArgs(instanceName, workdir, shell string) ([]string, er
 	return []string{
 		"-F", cfgPath,
 		"-t", // force remote PTY allocation; required when a command is given
-		LimaSSHHost(instanceName),
+		instanceName,
 		"--",
 		"sh", "-c", remoteCmd,
 	}, nil
@@ -84,17 +109,14 @@ func DirectSSHInteractiveArgs(instanceName, workdir, shell string) ([]string, er
 //
 // Equivalent to `limactl shell INSTANCE -- sh -lc SCRIPT`.
 func DirectSSHScriptArgs(instanceName, script string) ([]string, error) {
-	cfgPath, err := limaSSHConfigPath(instanceName)
+	cfgPath, err := nexusSSHConfigPath(instanceName)
 	if err != nil {
 		return nil, err
-	}
-	if _, err := os.Stat(cfgPath); err != nil {
-		return nil, fmt.Errorf("lima ssh.config not found for %q: %w", instanceName, err)
 	}
 
 	return []string{
 		"-F", cfgPath,
-		LimaSSHHost(instanceName),
+		instanceName,
 		"--",
 		"sh", "-lc", script,
 	}, nil
