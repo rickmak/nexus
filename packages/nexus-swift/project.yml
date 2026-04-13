@@ -46,6 +46,10 @@ targets:
       - path: Sources/NexusApp
     postCompileScripts:
       - name: Copy nexus-daemon to bundle Resources
+        inputFiles:
+          - $(SRCROOT)/Resources/nexus-daemon
+        outputFiles:
+          - $(BUILT_PRODUCTS_DIR)/$(CONTENTS_FOLDER_PATH)/Resources/nexus-daemon
         script: |
           DAEMON_SRC="${SRCROOT}/Resources/nexus-daemon"
           DAEMON_DST="${BUILT_PRODUCTS_DIR}/${CONTENTS_FOLDER_PATH}/Resources/nexus-daemon"
