@@ -11,6 +11,7 @@ public final class AppState: ObservableObject {
     @Published public var repos: [Repo] = []
     @Published public var selectedWorkspaceID: String?
     @Published public var connectionState: ConnectionState = .disconnected
+    @Published public var daemonStatus: DaemonStatus = .unknown
     @Published public var showNewWorkspace = false
     @Published public var sidebarVisible = true
     @Published public var showInspector = true
@@ -95,48 +96,84 @@ public final class AppState: ObservableObject {
     /// kill any stale daemon, launch a fresh one (which writes a new token),
     /// re-discover the URL, and connect.
     func ensureDaemonAndLoad() async {
-        // Fast path: daemon is running and we can authenticate
         connectionState = .connecting
+
+        // Step 1: Check daemon version compatibility (unauthenticated HTTP).
+        if let wsClient = client as? WebSocketDaemonClient {
+            if let info = await wsClient.fetchDaemonInfo() {
+                if info.isCompatible {
+                    daemonStatus = .running(info: info)
+                } else {
+                    daemonStatus = .outdated(running: info)
+                    connectionState = .disconnected
+                    error = "Daemon protocol v\(info.protocolVersion) is older than required v\(DaemonInfo.requiredProtocol). Use the daemon panel to update."
+                    return
+                }
+            } else {
+                daemonStatus = .offline
+            }
+        }
+
+        // Step 2: Fast path — try to connect using current credentials.
         do {
             try await attemptLoad()
             return
         } catch {}
 
-        // When an explicit daemon URL is injected (e.g. in XCUITest), never kill
-        // or restart the daemon — retry with backoff then surface failure.
+        // Step 3: If a daemon URL was injected (XCUITest or external daemon), never
+        // kill or restart — just retry briefly then report failure.
         if ProcessInfo.processInfo.environment["NEXUS_DAEMON_URL"] != nil {
             for delay in [0.5, 1.0, 2.0] as [Double] {
                 try? await Task.sleep(for: .seconds(delay))
-                do {
-                    try await attemptLoad()
-                    return
-                } catch {}
+                do { try await attemptLoad(); return } catch {}
             }
             connectionState = .disconnected
-            self.error = "Cannot reach daemon at injected URL"
+            error = "Cannot reach daemon at injected URL"
             return
         }
 
-        // Either the daemon isn't running, or it's running but the token is
-        // missing/stale (e.g. token file was deleted).  Either way, kill any
-        // existing process so the fresh daemon can write a new token file.
+        // Step 4: No injected URL — we own the daemon lifecycle.
+        // Only kill and restart if the daemon is truly offline.
+        // If it's running but we can't authenticate, leave it alone.
         connectionState = .starting
-        DaemonLauncher.killRunning()
-        // Brief pause to let the killed process release its port binding.
-        try? await Task.sleep(for: .seconds(0.4))
+        if daemonStatus == .offline {
+            DaemonLauncher.killRunning()   // clears stale PID files
+            try? await Task.sleep(for: .seconds(0.4))
+            do {
+                try await DaemonLauncher.ensureRunning()
+            } catch {
+                connectionState = .disconnected
+                self.error = error.localizedDescription
+                return
+            }
+            let newURL = WebSocketDaemonClient.discoverURL()
+            client = WebSocketDaemonClient(daemonURL: newURL)
+        }
+        await load()
+    }
 
+    /// Kills the running daemon, starts a fresh one from the bundled binary,
+    /// and reconnects. Called by the daemon management UI.
+    public func restartDaemon() async {
+        DaemonLauncher.killRunning()
+        try? await Task.sleep(for: .seconds(0.5))
         do {
             try await DaemonLauncher.ensureRunning()
+            let newURL = WebSocketDaemonClient.discoverURL()
+            client = WebSocketDaemonClient(daemonURL: newURL)
+            await load()
         } catch {
             connectionState = .disconnected
             self.error = error.localizedDescription
-            return
         }
+    }
 
-        // Re-discover the URL after the daemon wrote its PID file
-        let newURL = WebSocketDaemonClient.discoverURL()
-        client = WebSocketDaemonClient(daemonURL: newURL)
-        await load()
+    /// Kills the running daemon without restarting.
+    public func stopDaemon() {
+        DaemonLauncher.killRunning()
+        connectionState = .disconnected
+        repos = []
+        daemonStatus = .offline
     }
 
     /// Throws on failure; used by ensureDaemonAndLoad's fast-path probe.
@@ -224,4 +261,12 @@ public final class AppState: ObservableObject {
 
 public enum ConnectionState: Equatable {
     case starting, disconnected, connecting, connected
+}
+
+/// The compatibility status of the running daemon.
+public enum DaemonStatus: Equatable {
+    case unknown
+    case running(info: DaemonInfo)
+    case outdated(running: DaemonInfo)  // protocolVersion < requiredProtocol
+    case offline
 }

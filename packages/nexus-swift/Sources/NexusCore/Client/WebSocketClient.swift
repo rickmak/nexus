@@ -368,3 +368,44 @@ public struct WorkspaceInfo: Sendable {
         self.ports         = ports
     }
 }
+
+// MARK: - Version info (unauthenticated HTTP endpoint)
+
+/// Version and protocol information returned by the daemon's `/version` endpoint.
+public struct DaemonInfo: Decodable, Equatable {
+    public let name: String
+    public let version: String
+    public let commit: String
+    public let builtAt: String
+    public let protocolVersion: Int
+
+    /// Protocol version this build of the Swift app requires.
+    /// Must match `ProtocolVersion` in `packages/nexus/pkg/buildinfo/buildinfo.go`.
+    public static let requiredProtocol = 2
+
+    /// Dev builds (go run / go build without ldflags) always report "0.0.0-dev".
+    /// Treat them as always compatible so local development is never blocked.
+    public var isCompatible: Bool {
+        version == "0.0.0-dev" || protocolVersion >= Self.requiredProtocol
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case name, version, commit, builtAt
+        case protocolVersion = "protocol"
+    }
+}
+
+extension WebSocketDaemonClient {
+    /// Fetches `/version` over plain HTTP (no auth).
+    /// Returns `nil` if the daemon is unreachable or the response can't be decoded.
+    public func fetchDaemonInfo() async -> DaemonInfo? {
+        guard let host = daemonURL.host,
+              let port = daemonURL.port else { return nil }
+        let scheme = daemonURL.scheme == "wss" ? "https" : "http"
+        guard let url = URL(string: "\(scheme)://\(host):\(port)/version") else { return nil }
+        var req = URLRequest(url: url)
+        req.timeoutInterval = 2
+        guard let (data, _) = try? await URLSession.shared.data(for: req) else { return nil }
+        return try? JSONDecoder().decode(DaemonInfo.self, from: data)
+    }
+}
