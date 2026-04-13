@@ -24,6 +24,7 @@ struct TerminalView: View {
                     onError: { err in ptyError = err }
                 )
                 .id(workspace.id + workspace.state.rawValue)
+                .accessibilityIdentifier("terminal_view") // SwiftUI wrapper ID
                 .accessibilityLabel("Terminal — \(workspace.name)")
 
                 // Visible + accessible PTY error banner (e.g. "target is busy")
