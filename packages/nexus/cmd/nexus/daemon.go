@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -111,42 +112,92 @@ func daemonRestartCmd() *cobra.Command {
 // ── status ────────────────────────────────────────────────────────────────────
 
 func daemonStatusCmd() *cobra.Command {
-	return &cobra.Command{
+	var jsonOut bool
+	cmd := &cobra.Command{
 		Use:   "status",
 		Short: "Show daemon status (port, PID, version, uptime)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			port := daemonPort()
 			out := cmd.OutOrStdout()
 
-			if !daemonclient.IsRunning(port) {
+			running := daemonclient.IsRunning(port)
+			pidStr := daemonReadPID(port)
+			pid, _ := strconv.Atoi(pidStr)
+			versionJSON := daemonFetchVersion(port) // raw JSON from /version
+
+			// Parse protocol from the raw /version JSON body.
+			protocol := 0
+			versionStr := ""
+			if versionJSON != "" {
+				var info struct {
+					Version  string `json:"version"`
+					Protocol int    `json:"protocol"`
+				}
+				if err := json.Unmarshal([]byte(versionJSON), &info); err == nil {
+					protocol = info.Protocol
+					versionStr = info.Version
+				}
+			}
+
+			uptime := daemonUptime(pidStr)
+			runDir, _ := daemonclient.RunDir()
+			logPath := ""
+			if runDir != "" {
+				logPath = filepath.Join(runDir, "daemon.log")
+			}
+
+			if jsonOut {
+				type statusOutput struct {
+					Running  bool   `json:"running"`
+					Port     int    `json:"port"`
+					PID      int    `json:"pid,omitempty"`
+					Version  string `json:"version,omitempty"`
+					Protocol int    `json:"protocol,omitempty"`
+					Uptime   string `json:"uptime,omitempty"`
+					Log      string `json:"log,omitempty"`
+				}
+				st := statusOutput{
+					Running:  running,
+					Port:     port,
+					PID:      pid,
+					Version:  versionStr,
+					Protocol: protocol,
+					Uptime:   uptime,
+					Log:      logPath,
+				}
+				enc := json.NewEncoder(out)
+				enc.SetIndent("", "  ")
+				return enc.Encode(st)
+			}
+
+			// Human-readable output (preserve existing format)
+			if !running {
 				fmt.Fprintf(out, "status:   stopped\nport:     :%d\n", port)
-				runDir, _ := daemonclient.RunDir()
-				if runDir != "" {
-					fmt.Fprintf(out, "log:      %s\n", filepath.Join(runDir, "daemon.log"))
+				if logPath != "" {
+					fmt.Fprintf(out, "log:      %s\n", logPath)
 				}
 				return nil
 			}
-
-			pid := daemonReadPID(port)
-			version := daemonFetchVersion(port)
-			uptime := daemonUptime(pid)
-
 			fmt.Fprintf(out, "status:   running\n")
 			fmt.Fprintf(out, "port:     :%d\n", port)
-			fmt.Fprintf(out, "pid:      %s\n", pid)
-			if version != "" {
-				fmt.Fprintf(out, "version:  %s\n", version)
+			fmt.Fprintf(out, "pid:      %s\n", pidStr)
+			if versionStr != "" {
+				fmt.Fprintf(out, "version:  %s\n", versionStr)
+			}
+			if protocol > 0 {
+				fmt.Fprintf(out, "protocol: %d\n", protocol)
 			}
 			if uptime != "" {
 				fmt.Fprintf(out, "uptime:   %s\n", uptime)
 			}
-			runDir, _ := daemonclient.RunDir()
-			if runDir != "" {
-				fmt.Fprintf(out, "log:      %s\n", filepath.Join(runDir, "daemon.log"))
+			if logPath != "" {
+				fmt.Fprintf(out, "log:      %s\n", logPath)
 			}
 			return nil
 		},
 	}
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "output machine-readable JSON")
+	return cmd
 }
 
 // ── logs ──────────────────────────────────────────────────────────────────────
