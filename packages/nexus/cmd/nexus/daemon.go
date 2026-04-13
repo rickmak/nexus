@@ -123,7 +123,10 @@ func daemonStatusCmd() *cobra.Command {
 			running := daemonclient.IsRunning(port)
 			pidStr := daemonReadPID(port)
 			pid, _ := strconv.Atoi(pidStr)
-			versionJSON := daemonFetchVersion(port) // raw JSON from /version
+			var versionJSON string
+			if running {
+				versionJSON = daemonFetchVersion(port) // raw JSON from /version
+			}
 
 			// Parse protocol from the raw /version JSON body.
 			protocol := 0
@@ -196,7 +199,7 @@ func daemonStatusCmd() *cobra.Command {
 			return nil
 		},
 	}
-	cmd.Flags().BoolVar(&jsonOut, "json", false, "output machine-readable JSON")
+	cmd.Flags().BoolVar(&jsonOut, "json", false, "render machine-readable output")
 	return cmd
 }
 
@@ -309,7 +312,7 @@ func daemonFetchVersion(port int) string {
 		return ""
 	}
 	defer resp.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
 	return strings.TrimSpace(string(raw))
 }
 
