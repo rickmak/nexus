@@ -21,6 +21,7 @@ public final class AppState: ObservableObject {
     public private(set) var client: any DaemonClient
 
     private var refreshTask: Task<Void, Never>?
+    private var isRestarting = false
 
     public init() {
         self.client = WebSocketDaemonClient(daemonURL: WebSocketDaemonClient.discoverURL())
@@ -148,6 +149,12 @@ public final class AppState: ObservableObject {
             }
             let newURL = WebSocketDaemonClient.discoverURL()
             client = WebSocketDaemonClient(daemonURL: newURL)
+            if let wsClient = client as? WebSocketDaemonClient,
+               let info = await wsClient.fetchDaemonInfo() {
+                daemonStatus = .running(info: info)
+            } else {
+                daemonStatus = .unknown
+            }
         }
         await load()
     }
@@ -155,22 +162,32 @@ public final class AppState: ObservableObject {
     /// Kills the running daemon, starts a fresh one from the bundled binary,
     /// and reconnects. Called by the daemon management UI.
     public func restartDaemon() async {
+        guard !isRestarting else { return }
+        isRestarting = true
+        defer { isRestarting = false }
         DaemonLauncher.killRunning()
         try? await Task.sleep(for: .seconds(0.5))
         do {
             try await DaemonLauncher.ensureRunning()
             let newURL = WebSocketDaemonClient.discoverURL()
             client = WebSocketDaemonClient(daemonURL: newURL)
+            if let wsClient = client as? WebSocketDaemonClient,
+               let info = await wsClient.fetchDaemonInfo() {
+                daemonStatus = .running(info: info)
+            } else {
+                daemonStatus = .unknown
+            }
             await load()
         } catch {
             connectionState = .disconnected
+            daemonStatus = .offline
             self.error = error.localizedDescription
         }
     }
 
     /// Kills the running daemon without restarting.
-    public func stopDaemon() {
-        DaemonLauncher.killRunning()
+    public func stopDaemon() async {
+        await Task.detached { DaemonLauncher.killRunning() }.value
         connectionState = .disconnected
         repos = []
         daemonStatus = .offline
