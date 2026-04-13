@@ -16,9 +16,9 @@ import (
 )
 
 func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
-	var token string
-	if auth := r.Header.Get("Authorization"); strings.HasPrefix(auth, "Bearer ") {
-		token = strings.TrimPrefix(auth, "Bearer ")
+	token := r.Header.Get("Authorization")
+	if strings.HasPrefix(token, "Bearer ") {
+		token = strings.TrimPrefix(token, "Bearer ")
 	}
 	if token == "" {
 		http.Error(w, "missing token", http.StatusUnauthorized)

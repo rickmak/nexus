@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"log"
 	"strings"
 	"sync"
 	"time"
@@ -252,6 +253,9 @@ func (d *Driver) serveShellProtocol(ctx context.Context, workspaceID string, con
 			perWsPath := guestWorkdirForID(workspaceID)
 			localPath := ""
 			if strings.TrimSpace(workdir) == "" || strings.TrimSpace(workdir) == "/workspace" || strings.TrimSpace(workdir) == perWsPath {
+				// Prefer the caller-supplied local_path (set by the PTY handler
+				// from ws.LocalWorktreePath). Fall back to the in-memory
+				// projectRoot which is only populated while the driver is alive.
 				if v, _ := req["local_path"].(string); strings.TrimSpace(v) != "" {
 					localPath = strings.TrimSpace(v)
 				} else {
@@ -290,10 +294,7 @@ func (d *Driver) serveShellProtocol(ctx context.Context, workspaceID string, con
 						continue
 					}
 					if n > 0 {
-						clean := shared.SanitizeLimaShellChunk(string(buf[:n]))
-						if clean != "" {
-							_ = writeJSON(map[string]any{"id": s.id, "type": "chunk", "stream": "stdout", "data": clean})
-						}
+						_ = writeJSON(map[string]any{"id": s.id, "type": "chunk", "stream": "stdout", "data": string(buf[:n])})
 					}
 					if err != nil {
 						break
@@ -393,7 +394,7 @@ func startLimaShell(ctx context.Context, instanceName, workdir, localPath, shell
 		}
 	}
 
-	return shared.TryLimactlShellPTY(ctx, shared.TryLimactlPTYOptions{
+	return shared.TrySSHShellPTY(ctx, shared.TrySSHPTYOptions{
 		Candidates:          candidates,
 		LaunchShell:         launchShell,
 		Workdir:             workdir,
@@ -423,13 +424,20 @@ func prepareWorkspacePath(ctx context.Context, instance, targetPath, localPath s
 		return fmt.Errorf("target path is required")
 	}
 
+	// Use lazy unmount (-l / MNT_DETACH) so that a previous shell session
+	// whose bash still has /workspace as its CWD (making it "busy") does not
+	// block the new bind mount.  -l detaches the mount from the VFS tree
+	// immediately; old processes keep their open file descriptors, but the
+	// directory entry is free for the new mount.
 	script := fmt.Sprintf(
-		"set -e; MNTPT=%s; if mountpoint -q \"$MNTPT\" 2>/dev/null; then sudo umount \"$MNTPT\"; fi; sudo mkdir -p \"$MNTPT\"; sudo mount --bind %s \"$MNTPT\"",
+		"set -e; MNTPT=%s; if mountpoint -q \"$MNTPT\" 2>/dev/null; then sudo umount -l \"$MNTPT\"; fi; sudo mkdir -p \"$MNTPT\"; sudo mount --bind %s \"$MNTPT\"",
 		shared.ShellQuote(targetPath),
 		shared.ShellQuote(localPath),
 	)
-	out, err := shared.LimactlShellScript(ctx, instance, script)
+	out, err := shared.DirectSSHScript(ctx, instance, script)
 	if err != nil {
+		log.Printf("[DEBUG scanPorts] Command error: %v", err)
+		log.Printf("[DEBUG scanPorts] Raw output (on error): %s", string(out))
 		return fmt.Errorf("prepare workspace path %s -> %s failed: %s", localPath, targetPath, strings.TrimSpace(string(out)))
 	}
 	return nil
@@ -444,8 +452,10 @@ func teardownWorkspacePath(ctx context.Context, instance, workspaceID string) er
 		"MNTPT=%s; if mountpoint -q \"$MNTPT\" 2>/dev/null; then sudo umount -l \"$MNTPT\" 2>/dev/null || sudo umount \"$MNTPT\" 2>/dev/null || true; fi; sudo rmdir \"$MNTPT\" 2>/dev/null || true",
 		shared.ShellQuote(targetPath),
 	)
-	out, err := shared.LimactlShellScript(ctx, instance, script)
+	out, err := shared.DirectSSHScript(ctx, instance, script)
 	if err != nil {
+		log.Printf("[DEBUG scanPorts] Command error: %v", err)
+		log.Printf("[DEBUG scanPorts] Raw output (on error): %s", string(out))
 		return fmt.Errorf("teardown workspace path for %s failed: %s", workspaceID, strings.TrimSpace(string(out)))
 	}
 	return nil
@@ -483,6 +493,7 @@ func buildSeatbeltBootstrapScript(configBundle string) string {
 	parts := []string{
 		"set -e",
 		buildCredentialSymlinkCleanup(),
+		`(sudo hostnamectl set-hostname nexus 2>/dev/null || (printf 'nexus\n' | sudo tee /etc/hostname >/dev/null 2>&1 && sudo hostname nexus 2>/dev/null)) || true`,
 	}
 
 	if strings.TrimSpace(configBundle) != "" {
@@ -592,18 +603,23 @@ func (d *Driver) workspaceInstance(workspaceID string) string {
 
 func (d *Driver) scanPorts(ctx context.Context, workspaceID string) []map[string]any {
 	instance := d.workspaceInstance(workspaceID)
-
+	log.Printf("[DEBUG scanPorts] Using instance: %s", instance)
 	// Use ss to list listening TCP ports
-	script := `ss -tlnp 2>/dev/null | awk 'NR>1 {split($4, a, ":"); print a[length(a)], $NF}' | while read port process; do
+	script := `ss -tlnp 2>/dev/null | awk 'NR>1 {split($4, a, ":"); print a[length(a)], $NF}' | while read port process; do \
 		if [ -n "$port" ] && [ "$port" != "0" ] && [ -n "$process" ]; then
-			echo "{\"port\": $port, \"process\": \"$process\"}"
+			process_escaped=$(echo "$process" | sed 's/"/\\"/g')
+			echo "{\"port\": $port, \"process\": \"$process_escaped\"}"
 		fi
 	done`
 
-	out, err := shared.LimactlShellScript(ctx, instance, script)
+	log.Printf("[DEBUG scanPorts] Executing script: %s", script)
+	out, err := shared.DirectSSHScript(ctx, instance, script)
 	if err != nil {
+		log.Printf("[DEBUG scanPorts] Command error: %v", err)
+		log.Printf("[DEBUG scanPorts] Raw output (on error): %s", string(out))
 		return nil
 	}
+	log.Printf("[DEBUG scanPorts] Raw output: %s", string(out))
 
 	var ports []map[string]any
 	for _, line := range strings.Split(string(out), "\n") {

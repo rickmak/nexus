@@ -248,10 +248,7 @@ func (d *Driver) serveShellProtocol(ctx context.Context, workspaceID string, con
 						continue
 					}
 					if n > 0 {
-						clean := shared.SanitizeLimaShellChunk(string(buf[:n]))
-						if clean != "" {
-							_ = writeJSON(map[string]any{"id": s.id, "type": "chunk", "stream": "stdout", "data": clean})
-						}
+						_ = writeJSON(map[string]any{"id": s.id, "type": "chunk", "stream": "stdout", "data": string(buf[:n])})
 					}
 					if err != nil {
 						break
@@ -354,7 +351,7 @@ func startLimaShell(ctx context.Context, instanceName, workdir, localPath, shell
 		return ptmx, err
 	}
 
-	return shared.TryLimactlShellPTY(ctx, shared.TryLimactlPTYOptions{
+	return shared.TrySSHShellPTY(ctx, shared.TrySSHPTYOptions{
 		Candidates:  candidates,
 		LaunchShell: launchShell,
 		Workdir:     workdir,

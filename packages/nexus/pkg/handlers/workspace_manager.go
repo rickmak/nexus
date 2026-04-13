@@ -336,10 +336,15 @@ func ensureLocalRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace
 		return &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
 	}
 
+	projectRoot := strings.TrimSpace(ws.LocalWorktreePath)
+	if projectRoot == "" {
+		projectRoot = ws.Repo
+	}
+
 	req := runtime.CreateRequest{
 		WorkspaceID:   ws.ID,
 		WorkspaceName: ws.WorkspaceName,
-		ProjectRoot:   ws.RootPath,
+		ProjectRoot:   projectRoot,
 		ConfigBundle:  configBundle,
 		Options: map[string]string{
 			"host_cli_sync": "true",

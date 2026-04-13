@@ -42,7 +42,7 @@ func (r *CommandRunner) Run(ctx context.Context, dir string, cmd string, args ..
 }
 
 func main() {
-	port := flag.Int("port", 8080, "Port to listen on")
+	port := flag.Int("port", 63987, "Port to listen on")
 	defaultWorkspaceDir := resolveDefaultWorkspaceDir()
 	workspaceDir := flag.String("workspace-dir", defaultWorkspaceDir, "Workspace directory path")
 	tokenFlag := flag.String("token", "", "JWT secret (optional; if unset, a token is loaded or created under --data-dir)")

@@ -88,7 +88,7 @@ func renderPreflightCreateError(err error) bool {
 	return true
 }
 
-const defaultDaemonPort = 7874
+const defaultDaemonPort = 63987
 
 func daemonPort() int {
 	if v := os.Getenv("NEXUS_DAEMON_PORT"); v != "" {
