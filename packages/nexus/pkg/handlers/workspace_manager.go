@@ -131,7 +131,7 @@ func HandleWorkspaceRemove(ctx context.Context, req WorkspaceRemoveParams, mgr *
 	}
 
 	if factory != nil && strings.TrimSpace(ws.Backend) != "" {
-		if driver, selErr := factory.SelectDriver([]string{ws.Backend}, nil); selErr == nil {
+		if driver, selErr := selectDriverForWorkspaceBackend(factory, ws.Backend); selErr == nil {
 			destroyCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
 			defer cancel()
 			if destroyErr := driver.Destroy(destroyCtx, req.ID); destroyErr != nil {
@@ -276,7 +276,7 @@ func HandleWorkspaceFork(ctx context.Context, req WorkspaceForkParams, mgr *work
 			return nil, rpcErr
 		}
 
-		driver, selErr := factory.SelectDriver([]string{parent.Backend}, nil)
+		driver, selErr := selectDriverForWorkspaceBackend(factory, parent.Backend)
 		if selErr != nil {
 			return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", selErr)}
 		}
@@ -293,7 +293,7 @@ func ensureLocalRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace
 		return nil
 	}
 
-	driver, err := factory.SelectDriver([]string{ws.Backend}, nil)
+	driver, err := selectDriverForWorkspaceBackend(factory, ws.Backend)
 	if err != nil {
 		return &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
 	}
@@ -331,7 +331,7 @@ func suspendRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace, fa
 		return rpcErr
 	}
 
-	driver, err := factory.SelectDriver([]string{ws.Backend}, nil)
+	driver, err := selectDriverForWorkspaceBackend(factory, ws.Backend)
 	if err != nil {
 		return &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
 	}
@@ -354,7 +354,7 @@ func resumeRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace, fac
 		return rpcErr
 	}
 
-	driver, err := factory.SelectDriver([]string{ws.Backend}, nil)
+	driver, err := selectDriverForWorkspaceBackend(factory, ws.Backend)
 	if err != nil {
 		return &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
 	}
@@ -370,4 +370,15 @@ func resumeRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace, fac
 	}
 
 	return nil
+}
+
+func selectDriverForWorkspaceBackend(factory *runtime.Factory, backend string) (runtime.Driver, error) {
+	trimmed := strings.TrimSpace(backend)
+	if trimmed == "" {
+		return nil, fmt.Errorf("workspace backend is empty")
+	}
+	if driver, ok := factory.DriverForBackend(trimmed); ok {
+		return driver, nil
+	}
+	return factory.SelectDriver([]string{trimmed}, nil)
 }

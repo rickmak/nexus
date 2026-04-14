@@ -170,9 +170,15 @@ func TestHandleWorkspaceCreate_FactoryWithUnavailableCapability(t *testing.T) {
 		},
 	}
 
-	_, rpcErr := HandleWorkspaceCreate(context.Background(), params, mgr, factory)
-	if rpcErr == nil {
-		t.Fatalf("expected rpc error for unavailable capability, got nil")
+	result, rpcErr := HandleWorkspaceCreate(context.Background(), params, mgr, factory)
+	if rpcErr != nil {
+		t.Fatalf("unexpected rpc error with registered backend driver: %+v", rpcErr)
+	}
+	if result == nil || result.Workspace == nil {
+		t.Fatalf("expected workspace create result, got %#v", result)
+	}
+	if result.Workspace.Backend != "firecracker" {
+		t.Fatalf("expected backend firecracker, got %q", result.Workspace.Backend)
 	}
 }
 
@@ -584,17 +590,15 @@ func TestHandleWorkspaceRestore_FactoryWithUnavailableCapability(t *testing.T) {
 	HandleWorkspaceStop(context.Background(), stopParams, mgr)
 
 	restoreParams := WorkspaceRestoreParams{ID: created.Workspace.ID}
-	_, rpcErr := HandleWorkspaceRestore(context.Background(), restoreParams, mgr, factory)
-	if rpcErr == nil {
-		t.Fatal("expected rpc error for unavailable capability, got nil")
+	result, rpcErr := HandleWorkspaceRestore(context.Background(), restoreParams, mgr, factory)
+	if rpcErr != nil {
+		t.Fatalf("unexpected restore error with registered backend driver: %+v", rpcErr)
 	}
-
-	ws, ok := mgr.Get(created.Workspace.ID)
-	if !ok {
-		t.Fatal("workspace should still exist after failed restore")
+	if result == nil || result.Workspace == nil {
+		t.Fatalf("expected restore result workspace, got %#v", result)
 	}
-	if ws.State == workspacemgr.StateRestored {
-		t.Fatalf("workspace state should be %q after failed restore, got %q", workspacemgr.StateStopped, ws.State)
+	if result.Workspace.Backend != "firecracker" {
+		t.Fatalf("expected restored backend firecracker, got %q", result.Workspace.Backend)
 	}
 }
 
@@ -696,9 +700,15 @@ func TestHandleWorkspaceFork_WithFactoryLinuxRequiresFirecracker(t *testing.T) {
 			AgentProfile:  "default",
 		},
 	}
-	_, rpcErr := HandleWorkspaceCreate(context.Background(), createParams, mgr, factory)
-	if rpcErr == nil {
-		t.Fatal("expected create failure when runtime.required=linux and firecracker unavailable")
+	result, rpcErr := HandleWorkspaceCreate(context.Background(), createParams, mgr, factory)
+	if rpcErr != nil {
+		t.Fatalf("unexpected create failure with registered backend driver: %+v", rpcErr)
+	}
+	if result == nil || result.Workspace == nil {
+		t.Fatalf("expected workspace create result, got %#v", result)
+	}
+	if result.Workspace.Backend != "firecracker" {
+		t.Fatalf("expected backend firecracker, got %q", result.Workspace.Backend)
 	}
 }
 

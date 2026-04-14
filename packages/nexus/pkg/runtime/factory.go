@@ -66,9 +66,6 @@ func (f *Factory) selectBackend(required []string) (string, error) {
 			if _, ok := f.drivers[backend]; !ok {
 				continue
 			}
-			if !f.isCapabilityAvailable("runtime." + backend) {
-				continue
-			}
 			return backend, nil
 		}
 	}
@@ -79,24 +76,9 @@ func (f *Factory) selectBackend(required []string) (string, error) {
 func (f *Factory) expandRuntimeRequirement(raw string) []string {
 	switch strings.ToLower(strings.TrimSpace(raw)) {
 	case "linux":
-		if !f.isCapabilityAvailable("runtime.linux") {
-			return nil
-		}
-		if f.isCapabilityAvailable("runtime.firecracker") {
-			return []string{"firecracker"}
-		}
-		return nil
+		return []string{"firecracker"}
 	case "darwin":
-		if !f.isCapabilityAvailable("runtime.seatbelt") && !f.isCapabilityAvailable("runtime.firecracker") {
-			return nil
-		}
-		if f.isCapabilityAvailable("runtime.firecracker") {
-			return []string{"firecracker"}
-		}
-		if f.isCapabilityAvailable("runtime.seatbelt") {
-			return []string{"seatbelt"}
-		}
-		return nil
+		return []string{"firecracker", "seatbelt"}
 	case "seatbelt":
 		return []string{"seatbelt"}
 	case "firecracker":

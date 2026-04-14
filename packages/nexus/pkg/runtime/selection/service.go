@@ -216,6 +216,9 @@ func SelectBackend(ctx context.Context, repo string, requiredBackends []string, 
 		return "", runtimePreflightFailure(preflight, nil)
 	}
 
+	if driver, ok := factory.DriverForBackend(selectedBackend); ok {
+		return driver.Backend(), nil
+	}
 	driver, err := factory.SelectDriver([]string{selectedBackend}, requiredCaps)
 	if err != nil {
 		return "", &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v (required=%v)", err, requiredBackends)}
