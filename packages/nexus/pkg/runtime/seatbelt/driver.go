@@ -439,10 +439,11 @@ func prepareWorkspacePath(ctx context.Context, instance, targetPath, localPath s
 		return fmt.Errorf("target path is required")
 	}
 
-	// Use lazy unmount (-l / MNT_DETACH) so a previous shell still holding cwd
-	// in the old tree doesn't block rebinding the stable mount path.
+	// Avoid remount churn when /workspace is already bound to the same source.
+	// Repeated lazy unmount/remount cycles can invalidate cwd for long-running
+	// tools (e.g. opencode), which then fail with "cwd was deleted".
 	script := fmt.Sprintf(
-		"set -e; MNTPT=%s; SRC=%s; if mountpoint -q \"$MNTPT\" 2>/dev/null; then sudo umount -l \"$MNTPT\"; fi; sudo mkdir -p \"$MNTPT\"; sudo mount --bind \"$SRC\" \"$MNTPT\"",
+		"set -e; MNTPT=%s; SRC=%s; sudo mkdir -p \"$MNTPT\"; CUR=$(findmnt -n -o SOURCE --target \"$MNTPT\" 2>/dev/null || true); if [ -n \"$CUR\" ]; then CUR_CANON=$(readlink -f \"$CUR\" 2>/dev/null || echo \"$CUR\"); SRC_CANON=$(readlink -f \"$SRC\" 2>/dev/null || echo \"$SRC\"); if [ \"$CUR_CANON\" = \"$SRC_CANON\" ]; then exit 0; fi; sudo umount -l \"$MNTPT\"; fi; sudo mount --bind \"$SRC\" \"$MNTPT\"",
 		shared.ShellQuote(targetPath),
 		shared.ShellQuote(localPath),
 	)

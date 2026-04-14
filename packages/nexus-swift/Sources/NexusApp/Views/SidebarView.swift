@@ -253,8 +253,7 @@ private struct SidebarFooter: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            FooterBtn(icon: "questionmark.circle") {}
-            FooterMenuBtn()
+            FooterMenuBtn(showDaemonPanel: $showDaemonPanel)
             Spacer()
 
             // Clickable pill → opens DaemonSettingsPanel
@@ -344,23 +343,9 @@ private struct SidebarFooter: View {
     }
 }
 
-private struct FooterBtn: View {
-    let icon: String; let action: () -> Void
-    @State private var hover = false
-    var body: some View {
-        Button(action: action) {
-            Image(systemName: icon)
-                .font(.system(size: 13))
-                .foregroundColor(hover ? Theme.labelSecondary : Theme.labelTertiary)
-                .frame(width: 28, height: 28)
-        }
-        .buttonStyle(.plain)
-        .onHover { hover = $0 }
-    }
-}
-
 private struct FooterMenuBtn: View {
     @EnvironmentObject var appState: AppState
+    @Binding var showDaemonPanel: Bool
     @State private var hover = false
 
     var body: some View {
@@ -370,16 +355,10 @@ private struct FooterMenuBtn: View {
             Divider()
 
             Button("Connect to Daemon…") {
-                // future: open connection sheet
+                showDaemonPanel = true
             }
             Button("Disconnect") {
-                // future: drop WS connection
-            }
-
-            Divider()
-
-            Button("Preferences…") {
-                // future: open preferences window
+                Task { await appState.stopDaemon() }
             }
 
             Divider()

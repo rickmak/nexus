@@ -22,6 +22,14 @@ public final class AppState: ObservableObject {
 
     public func refocusTerminal() { refocusTerminalAction?() }
 
+    /// Live terminal title from shell escape sequences (e.g. `\033]0;…\007`).
+    /// Nil when no PTY is active or the shell has not set a title.
+    @Published public var terminalTitle: String?
+
+    /// Live working directory reported by the shell (OSC 7 / `hostCurrentDirectoryUpdate`).
+    /// Nil when not reported.
+    @Published public var terminalDirectory: String?
+
     // MARK: - Published state
     @Published public var repos: [Repo] = []
     @Published public var selectedWorkspaceID: String?

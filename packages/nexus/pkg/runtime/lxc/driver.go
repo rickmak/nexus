@@ -322,7 +322,7 @@ func startLimaShell(ctx context.Context, instanceName, workdir, localPath, shell
 		for _, candidate := range candidates {
 			setupArgs := []string{"shell", candidate, "--",
 				"sudo", "bash", "-c",
-				fmt.Sprintf("mkdir -p /workspace && mount --bind %q /workspace", localPath),
+				fmt.Sprintf("set -e; MNTPT=/workspace; SRC=%q; mkdir -p \"$MNTPT\"; CUR=$(findmnt -n -o SOURCE --target \"$MNTPT\" 2>/dev/null || true); if [ -n \"$CUR\" ]; then CUR_CANON=$(readlink -f \"$CUR\" 2>/dev/null || echo \"$CUR\"); SRC_CANON=$(readlink -f \"$SRC\" 2>/dev/null || echo \"$SRC\"); if [ \"$CUR_CANON\" = \"$SRC_CANON\" ]; then exit 0; fi; umount -l \"$MNTPT\"; fi; mount --bind \"$SRC\" \"$MNTPT\"", localPath),
 			}
 			setupCmd := exec.CommandContext(ctx, "limactl", setupArgs...)
 			if out, err := setupCmd.CombinedOutput(); err != nil {
