@@ -11,6 +11,40 @@ import (
 	"github.com/creack/pty"
 )
 
+func isSocketPath(path string) bool {
+	if strings.TrimSpace(path) == "" {
+		return false
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return false
+	}
+	return info.Mode()&os.ModeSocket != 0
+}
+
+func daemonSSHAuthSock() string {
+	if sock := strings.TrimSpace(os.Getenv("SSH_AUTH_SOCK")); isSocketPath(sock) {
+		return sock
+	}
+	if out, err := exec.Command("launchctl", "getenv", "SSH_AUTH_SOCK").Output(); err == nil {
+		if sock := strings.TrimSpace(string(out)); isSocketPath(sock) {
+			return sock
+		}
+	}
+	return ""
+}
+
+func withSSHAuthSockEnv(cmd *exec.Cmd) {
+	if cmd == nil {
+		return
+	}
+	sock := daemonSSHAuthSock()
+	if sock == "" {
+		return
+	}
+	cmd.Env = append(os.Environ(), "SSH_AUTH_SOCK="+sock)
+}
+
 // limaHome returns the Lima home directory, respecting $LIMA_HOME.
 func limaHome() (string, error) {
 	if d := os.Getenv("LIMA_HOME"); d != "" {
@@ -81,6 +115,18 @@ func DirectSSHInteractiveArgs(instanceName, workdir, shell string) ([]string, er
 		sh = "bash"
 	}
 
+	ensureSSHAgent := strings.Join([]string{
+		`if [ -z "${SSH_AUTH_SOCK:-}" ]; then`,
+		`  export SSH_AUTH_SOCK="$HOME/.ssh/nexus-agent.sock";`,
+		`fi;`,
+		`if [ ! -S "${SSH_AUTH_SOCK:-}" ]; then`,
+		`  mkdir -p "$HOME/.ssh"; chmod 700 "$HOME/.ssh" 2>/dev/null || true;`,
+		`  rm -f "$SSH_AUTH_SOCK"; ssh-agent -a "$SSH_AUTH_SOCK" >/tmp/nexus-ssh-agent.log 2>&1 || true;`,
+		`fi;`,
+		`if [ -S "${SSH_AUTH_SOCK:-}" ] && command -v ssh-add >/dev/null 2>&1; then`,
+		`  ssh-add -q "$HOME/.ssh/id_ed25519" "$HOME/.ssh/id_rsa" "$HOME/.ssh/id_ecdsa" >/dev/null 2>&1 || true;`,
+		`fi`,
+	}, " ")
 	interactiveInnerCmd := "exec " + sh + " -i"
 	wd := strings.TrimSpace(workdir)
 	if wd != "" {
@@ -94,13 +140,15 @@ func DirectSSHInteractiveArgs(instanceName, workdir, shell string) ([]string, er
 
 	// Ensure new shell processes pick up docker group privileges immediately
 	// when docker is installed and accessible through the docker group.
-	innerCmd := "if command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1 && getent group docker >/dev/null 2>&1; then exec sg docker -c " + ShellQuote(interactiveInnerCmd) + "; fi; " + interactiveInnerCmd
+	innerCmd := ensureSSHAgent + "; if command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1 && getent group docker >/dev/null 2>&1; then exec sg docker -c " + ShellQuote(interactiveInnerCmd) + "; fi; " + interactiveInnerCmd
 	fullCmd := sh + " -l -c " + ShellQuote(innerCmd)
 	return []string{
 		"-F", cfgPath,
 		"-o", "LogLevel=ERROR",
+		"-o", "ForwardAgent=yes",
 		"-o", "ControlMaster=no",
 		"-o", "ControlPath=none",
+		"-A",
 		"-t", // force remote PTY allocation; required when a command is given
 		instanceName,
 		fullCmd,
@@ -135,7 +183,9 @@ func DirectSSHScript(ctx context.Context, instanceName, script string) ([]byte, 
 	if err != nil {
 		return nil, err
 	}
-	return exec.CommandContext(ctx, "ssh", args...).CombinedOutput()
+	cmd := exec.CommandContext(ctx, "ssh", args...)
+	withSSHAuthSockEnv(cmd)
+	return cmd.CombinedOutput()
 }
 
 // DirectSSHScriptWithInput runs script inside instanceName and streams input to
@@ -195,6 +245,7 @@ func TryDirectSSHShellPTY(ctx context.Context, opt TrySSHPTYOptions) (*exec.Cmd,
 		}
 
 		cmd := exec.CommandContext(ctx, "ssh", args...)
+		withSSHAuthSockEnv(cmd)
 		ptmx, ptyErr := opt.PtyStart(cmd, &pty.Winsize{Rows: 30, Cols: 120})
 		if ptyErr == nil {
 			return cmd, ptmx, nil
