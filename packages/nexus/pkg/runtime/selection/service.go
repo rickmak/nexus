@@ -205,7 +205,13 @@ func SelectBackend(ctx context.Context, repo string, requiredBackends []string, 
 		}
 		selectedBackend = "firecracker"
 	case runtime.PreflightUnsupportedNested:
-		selectedBackend = "seatbelt"
+		if runtimeSetupGOOS == "darwin" {
+			// On macOS, treat the firecracker alias (Lima-backed) as the primary backend.
+			// Do not silently downgrade to seatbelt when nested virtualization is unsupported.
+			selectedBackend = "firecracker"
+		} else {
+			selectedBackend = "seatbelt"
+		}
 	default:
 		return "", runtimePreflightFailure(preflight, nil)
 	}

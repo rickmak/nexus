@@ -26,12 +26,12 @@ type DiscoveredPort struct {
 
 // PortMonitor periodically scans workspaces for listening ports and auto-exposes them.
 type PortMonitor struct {
-	mgr      *Manager
 	scanner  PortScanner
 	interval time.Duration
 
 	mu         sync.RWMutex
 	workspaces map[string]*workspaceMonitor
+	latest     map[string][]DiscoveredPort
 }
 
 type workspaceMonitor struct {
@@ -42,15 +42,15 @@ type workspaceMonitor struct {
 }
 
 // NewPortMonitor creates a new port monitor.
-func NewPortMonitor(mgr *Manager, scanner PortScanner, interval time.Duration) *PortMonitor {
+func NewPortMonitor(_ *Manager, scanner PortScanner, interval time.Duration) *PortMonitor {
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
 	return &PortMonitor{
-		mgr:        mgr,
 		scanner:    scanner,
 		interval:   interval,
 		workspaces: make(map[string]*workspaceMonitor),
+		latest:     make(map[string][]DiscoveredPort),
 	}
 }
 
@@ -97,6 +97,16 @@ func (pm *PortMonitor) IsMonitoring(workspaceID string) bool {
 	return exists
 }
 
+// ListDiscovered returns the latest discovered ports for a workspace.
+func (pm *PortMonitor) ListDiscovered(workspaceID string) []DiscoveredPort {
+	pm.mu.RLock()
+	defer pm.mu.RUnlock()
+	ports := pm.latest[workspaceID]
+	out := make([]DiscoveredPort, len(ports))
+	copy(out, ports)
+	return out
+}
+
 func (pm *PortMonitor) monitorLoop(ctx context.Context, workspaceID string) {
 	ticker := time.NewTicker(pm.interval)
 	defer ticker.Stop()
@@ -128,53 +138,19 @@ func (pm *PortMonitor) scanWorkspace(workspaceID string) {
 
 	log.Printf("[PortMonitor] Discovered %d ports for workspace %s: %+v", len(discovered), workspaceID, discovered)
 
-	// Track which forwards we've seen this scan
-	seenIDs := make(map[string]bool)
-
+	filtered := make([]DiscoveredPort, 0, len(discovered))
 	for _, port := range discovered {
 		if port.Port <= 0 {
-			log.Printf("[PortMonitor] Skipping invalid port (port=%d) for workspace %s", port.Port, workspaceID)
 			continue
 		}
-
-		// Try to auto-expose this port
-		// For auto-detected ports, we use the same local and remote port by default
-		spec := ExposeSpec{
-			WorkspaceID: workspaceID,
-			Service:     port.Process,
-			RemotePort:  port.Port,
-			LocalPort:   port.Port,
-			Host:        "127.0.0.1",
-		}
-
-		log.Printf("[PortMonitor] AutoExpose attempt for workspace %s: port=%d, process=%s", workspaceID, port.Port, port.Process)
-		fwd, err := pm.mgr.AutoExpose(spec)
-		if err != nil {
-			log.Printf("[PortMonitor] AutoExpose failed for workspace %s port %d: %v", workspaceID, port.Port, err)
-			// Port might already be exposed or in use, try to find existing
-			continue
-		}
-		log.Printf("[PortMonitor] AutoExpose success for workspace %s: port=%d -> forwardID=%s", workspaceID, port.Port, fwd.ID)
-		seenIDs[fwd.ID] = true
+		filtered = append(filtered, port)
 	}
-
-	// Update last seen for existing auto-detected forwards
-	existing := pm.mgr.List(workspaceID)
-	log.Printf("[PortMonitor] Found %d existing forwards for workspace %s", len(existing), workspaceID)
-	for _, fwd := range existing {
-		if fwd.Source == ForwardSourceAutoDetected && seenIDs[fwd.ID] {
-			pm.mgr.UpdateLastSeen(fwd.ID)
-		}
-	}
-
-	// Cleanup stale auto-detected forwards (not seen in last 2 scan intervals)
-	cutoff := time.Now().UTC().Add(-2 * pm.interval)
-	pm.mgr.CleanupStaleAutoDetected(workspaceID, cutoff)
 
 	pm.mu.Lock()
 	if mon, exists := pm.workspaces[workspaceID]; exists {
 		mon.lastScan = time.Now().UTC()
 	}
+	pm.latest[workspaceID] = filtered
 	pm.mu.Unlock()
 
 	log.Printf("[PortMonitor] Scan complete for workspace %s", workspaceID)

@@ -59,7 +59,10 @@ func (s *Server) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 
 func (c *Connection) readPump(srv *Server) {
 	defer func() {
-		c.CloseAllPTY()
+		if srv.ptyRegistry != nil {
+			srv.ptyRegistry.UnsubscribeConn(c)
+		}
+		c.DetachAllPTY()
 		c.conn.Close()
 		srv.mu.Lock()
 		delete(srv.connections, c.clientID)

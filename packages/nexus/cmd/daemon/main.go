@@ -8,6 +8,7 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -166,13 +167,20 @@ func runServer(port int, workspaceDir string, token string) error {
 	srv.SetRuntimeFactory(factory)
 
 	// Initialize live port monitoring
-	portScanner := spotlight.NewShellPortScanner(seatbeltDriver.AgentConn)
+	agentConnFn := seatbeltDriver.AgentConn
+	if connector, ok := firecrackerRuntimeDriver.(interface {
+		AgentConn(context.Context, string) (net.Conn, error)
+	}); ok {
+		agentConnFn = connector.AgentConn
+	}
+	portScanner := spotlight.NewShellPortScanner(agentConnFn)
 	portMonitor := spotlight.NewPortMonitor(srv.SpotlightManager(), portScanner, 5*time.Second)
 	srv.SetPortMonitor(portMonitor)
 
 	// Resume port monitoring and re-apply compose ports for workspaces that
 	// were already running when the daemon (re)started.
 	srv.ResumeRunningWorkspaces(context.Background())
+	srv.StartPTYMaintenance(context.Background(), 2*time.Minute)
 
 	liveIDs := map[string]struct{}{}
 	for _, id := range srv.WorkspaceIDs() {

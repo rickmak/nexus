@@ -21,6 +21,18 @@ func NewDriver(inner runtime.Driver) *Driver {
 
 func (d *Driver) Backend() string { return "firecracker" }
 
+func (d *Driver) GuestWorkdir(workspaceID string) string {
+	if d.inner == nil {
+		return "/workspace"
+	}
+	if provider, ok := d.inner.(runtime.GuestWorkdirProvider); ok {
+		if workdir := strings.TrimSpace(provider.GuestWorkdir(workspaceID)); workdir != "" {
+			return workdir
+		}
+	}
+	return "/workspace"
+}
+
 func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 	if d.inner == nil {
 		return fmt.Errorf("inner driver is required")

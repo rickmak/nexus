@@ -140,21 +140,12 @@ func EnsureLimaInstanceRunning(ctx context.Context, instance string, limactlOutp
 
 	out, err := limactlOutput(ctx, "list", "--json", instance)
 	if err != nil {
-		if startOut, startErr := limactlCombined(ctx, "start", "--yes", "--name", instance, "template:default"); startErr != nil {
-			return fmt.Errorf(
-				"lima list failed for %s: %w; lima start failed for %s: %s",
-				instance, err, instance, strings.TrimSpace(string(startOut)),
-			)
-		}
-		return nil
+		return fmt.Errorf("lima list failed for %s: %w", instance, err)
 	}
 	trimmed := strings.TrimSpace(string(out))
 
 	if trimmed == "" || trimmed == "[]" {
-		if startOut, startErr := limactlCombined(ctx, "start", "--yes", "--name", instance, "template:default"); startErr != nil {
-			return fmt.Errorf("lima start failed for %s: %s", instance, strings.TrimSpace(string(startOut)))
-		}
-		return nil
+		return fmt.Errorf("lima instance %s is missing; run `nexus init --force` to create it with Nexus runtime settings", instance)
 	}
 
 	if strings.Contains(trimmed, `"status":"Running"`) {
@@ -170,4 +161,3 @@ func EnsureLimaInstanceRunning(ctx context.Context, instance string, limactlOutp
 
 	return nil
 }
-

@@ -47,6 +47,9 @@ type Workspace struct {
 	// MutagenSessionID is the mutagen sync session name for this workspace.
 	// Empty if no sync session has been established.
 	MutagenSessionID string `json:"mutagenSessionId,omitempty"`
+	// TunnelPorts stores user-selected host ports that should be tunnelable.
+	// Tunnels are only activated when this workspace holds the global tunnel lease.
+	TunnelPorts []int `json:"tunnelPorts,omitempty"`
 
 	// NEW: Optional fields for future multi-user support
 	// In personal mode, OwnerUserID is "local" and TenantID is empty

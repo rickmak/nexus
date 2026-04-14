@@ -11,7 +11,7 @@ func TestRootCommandIncludesWorkspaceSubcommands(t *testing.T) {
 	usage := rootCmd.UsageString()
 	for _, name := range []string{
 		"create", "list", "start", "stop", "shell", "exec", "run", "fork",
-		"doctor", "init", "remove", "tunnel", "pause", "resume", "restore",
+		"doctor", "init", "remove", "tunnel", "restore",
 		"version", "update",
 	} {
 		if !strings.Contains(usage, name) {
@@ -54,7 +54,7 @@ func TestRunWorkspaceStartCommandCallsWorkspaceStartRPC(t *testing.T) {
 	}
 }
 
-func TestRunWorkspaceTunnelCommandCallsApplyComposeRPC(t *testing.T) {
+func TestRunWorkspaceTunnelCommandActivatesAndDeactivates(t *testing.T) {
 	origEnsure := ensureDaemonFn
 	origRPC := daemonRPCFn
 	origWait := waitForInterruptFn
@@ -66,7 +66,6 @@ func TestRunWorkspaceTunnelCommandCallsApplyComposeRPC(t *testing.T) {
 
 	waitForInterruptFn = func() {}
 	calledMethods := make([]string, 0, 2)
-	closedTunnelID := ""
 
 	ensureDaemonFn = func() (*websocket.Conn, error) {
 		return nil, nil
@@ -74,7 +73,7 @@ func TestRunWorkspaceTunnelCommandCallsApplyComposeRPC(t *testing.T) {
 	daemonRPCFn = func(_ *websocket.Conn, method string, params interface{}, out interface{}) error {
 		calledMethods = append(calledMethods, method)
 		switch method {
-		case "spotlight.applyComposePorts":
+		case "workspace.tunnels.activate":
 			payload, ok := params.(map[string]any)
 			if !ok {
 				t.Fatalf("expected map params, got %T", params)
@@ -84,34 +83,21 @@ func TestRunWorkspaceTunnelCommandCallsApplyComposeRPC(t *testing.T) {
 				t.Fatalf("expected workspace id ws-456, got %q", calledID)
 			}
 			if typed, ok := out.(*struct {
-				Forwards []struct {
-					ID         string `json:"id"`
-					Service    string `json:"service"`
-					Host       string `json:"host"`
-					LocalPort  int    `json:"localPort"`
-					RemotePort int    `json:"remotePort"`
-				} `json:"forwards"`
-				Errors []struct {
-					Service    string `json:"service"`
-					HostPort   int    `json:"hostPort"`
-					TargetPort int    `json:"targetPort"`
-					Message    string `json:"message"`
-				} `json:"errors"`
+				Active            bool   `json:"active"`
+				ActiveWorkspaceID string `json:"activeWorkspaceId"`
 			}); ok {
-				typed.Forwards = append(typed.Forwards, struct {
-					ID         string `json:"id"`
-					Service    string `json:"service"`
-					Host       string `json:"host"`
-					LocalPort  int    `json:"localPort"`
-					RemotePort int    `json:"remotePort"`
-				}{ID: "tun-123", Service: "web", Host: "127.0.0.1", LocalPort: 8080, RemotePort: 80})
+				typed.Active = true
+				typed.ActiveWorkspaceID = "ws-456"
 			}
-		case "spotlight.close":
+		case "workspace.tunnels.deactivate":
 			payload, ok := params.(map[string]any)
 			if !ok {
 				t.Fatalf("expected map params, got %T", params)
 			}
-			closedTunnelID, _ = payload["id"].(string)
+			calledID, _ := payload["workspaceId"].(string)
+			if calledID != "ws-456" {
+				t.Fatalf("expected workspace id ws-456, got %q", calledID)
+			}
 		default:
 			t.Fatalf("unexpected rpc method %q", method)
 		}
@@ -123,11 +109,8 @@ func TestRunWorkspaceTunnelCommandCallsApplyComposeRPC(t *testing.T) {
 	if len(calledMethods) != 2 {
 		t.Fatalf("expected 2 rpc calls, got %d (%v)", len(calledMethods), calledMethods)
 	}
-	if calledMethods[0] != "spotlight.applyComposePorts" || calledMethods[1] != "spotlight.close" {
+	if calledMethods[0] != "workspace.tunnels.activate" || calledMethods[1] != "workspace.tunnels.deactivate" {
 		t.Fatalf("unexpected rpc method sequence: %v", calledMethods)
-	}
-	if closedTunnelID != "tun-123" {
-		t.Fatalf("expected closed tunnel id tun-123, got %q", closedTunnelID)
 	}
 }
 

@@ -52,6 +52,16 @@ public final class AppState: ObservableObject {
         Task { await self.load() }
     }
 
+    private func applyLoadedWorkspaces(_ workspaces: [Workspace], relations: [RelationsGroup]) {
+        repos = Repo.fromRelations(relations, workspaces: workspaces)
+        connectionState = .connected
+        error = nil
+
+        if selectedWorkspaceID == nil {
+            selectedWorkspaceID = repos.first?.workspaces.first?.id
+        }
+    }
+
     // MARK: - Load
 
     public func load() async {
@@ -63,27 +73,29 @@ public final class AppState: ObservableObject {
             let relations   = try await relationsFetch
 
             // Fetch ports concurrently for all active workspaces
-            await withTaskGroup(of: (String, [ForwardedPort]).self) { group in
+            var activeTunnelWorkspaceID = ""
+            await withTaskGroup(of: (String, [ForwardedPort], String).self) { group in
                 for ws in workspaces where ws.state.isActive {
                     group.addTask { [c = self.client] in
+                        // `workspace.ready` triggers daemon-side compose port auto-apply.
+                        try? await c.markWorkspaceReady(id: ws.id)
                         let ports = (try? await c.listPorts(workspaceId: ws.id)) ?? []
-                        return (ws.id, ports)
+                        let status = (try? await c.tunnelStatus(workspaceId: ws.id))
+                        return (ws.id, ports, status?.activeWorkspaceId ?? "")
                     }
                 }
-                for await (id, ports) in group {
+                for await (id, ports, activeID) in group {
                     if let idx = workspaces.firstIndex(where: { $0.id == id }) {
                         workspaces[idx].ports = ports
                     }
+                    if !activeID.isEmpty { activeTunnelWorkspaceID = activeID }
                 }
             }
-
-            repos = Repo.fromRelations(relations, workspaces: workspaces)
-            connectionState = .connected
-            error = nil
-
-            if selectedWorkspaceID == nil || !workspaces.contains(where: { $0.id == selectedWorkspaceID }) {
-                selectedWorkspaceID = repos.first?.workspaces.first?.id
+            for i in workspaces.indices {
+                workspaces[i].hasActiveTunnels = (workspaces[i].id == activeTunnelWorkspaceID)
             }
+
+            applyLoadedWorkspaces(workspaces, relations: relations)
         } catch {
             connectionState = .disconnected
             if self.error == nil {
@@ -176,7 +188,7 @@ public final class AppState: ObservableObject {
         await load()
     }
 
-    /// Kills the running daemon, starts a fresh one from the bundled binary,
+    /// Kills the running daemon, starts a fresh one from the resolved binary,
     /// and reconnects. Called by the daemon management UI.
     public func restartDaemon() async {
         guard !isRestarting else { return }
@@ -218,27 +230,28 @@ public final class AppState: ObservableObject {
         var workspaces  = try await wsFetch
         let relations   = try await relationsFetch
 
-        await withTaskGroup(of: (String, [ForwardedPort]).self) { group in
+        var activeTunnelWorkspaceID = ""
+        await withTaskGroup(of: (String, [ForwardedPort], String).self) { group in
             for ws in workspaces where ws.state.isActive {
                 group.addTask { [c = self.client] in
+                    try? await c.markWorkspaceReady(id: ws.id)
                     let ports = (try? await c.listPorts(workspaceId: ws.id)) ?? []
-                    return (ws.id, ports)
+                    let status = (try? await c.tunnelStatus(workspaceId: ws.id))
+                    return (ws.id, ports, status?.activeWorkspaceId ?? "")
                 }
             }
-            for await (id, ports) in group {
+            for await (id, ports, activeID) in group {
                 if let idx = workspaces.firstIndex(where: { $0.id == id }) {
                     workspaces[idx].ports = ports
                 }
+                if !activeID.isEmpty { activeTunnelWorkspaceID = activeID }
             }
         }
-
-        repos = Repo.fromRelations(relations, workspaces: workspaces)
-        connectionState = .connected
-        error = nil
-
-        if selectedWorkspaceID == nil || !workspaces.contains(where: { $0.id == selectedWorkspaceID }) {
-            selectedWorkspaceID = repos.first?.workspaces.first?.id
+        for i in workspaces.indices {
+            workspaces[i].hasActiveTunnels = (workspaces[i].id == activeTunnelWorkspaceID)
         }
+
+        applyLoadedWorkspaces(workspaces, relations: relations)
     }
 
     // MARK: - Workspace actions
@@ -261,17 +274,39 @@ public final class AppState: ObservableObject {
         await perform { try await self.client.stopWorkspace(id: workspace.id) }
     }
 
-    public func pause(_ workspace: Workspace) async {
-        await perform { try await self.client.pauseWorkspace(id: workspace.id) }
-    }
-
-    public func resume(_ workspace: Workspace) async {
-        await perform { try await self.client.resumeWorkspace(id: workspace.id) }
-    }
-
     public func remove(_ workspace: Workspace) async {
         if selectedWorkspaceID == workspace.id { selectedWorkspaceID = nil }
         await perform { try await self.client.removeWorkspace(id: workspace.id) }
+    }
+
+    public func addPort(_ port: Int, workspace: Workspace) async {
+        await perform {
+            try await self.client.addPort(workspaceId: workspace.id, port: port)
+        }
+    }
+
+    public func removePort(_ port: Int, workspace: Workspace) async {
+        await perform {
+            try await self.client.removePort(workspaceId: workspace.id, port: port)
+        }
+    }
+
+    public func activateTunnels(_ workspace: Workspace) async {
+        do {
+            let status = try await client.activateTunnels(workspaceId: workspace.id)
+            if !status.active && status.activeWorkspaceId != workspace.id && !status.activeWorkspaceId.isEmpty {
+                self.error = "Tunnels are active in another workspace (\(status.activeWorkspaceId)). Deactivate there first."
+            }
+            await load()
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
+
+    public func deactivateTunnels(_ workspace: Workspace) async {
+        await perform {
+            _ = try await self.client.deactivateTunnels(workspaceId: workspace.id)
+        }
     }
 
     private func perform(_ op: @escaping () async throws -> Void) async {

@@ -339,28 +339,6 @@ final class WorkspaceLifecycleTests: XCTestCase {
         // Restore state
         try await client.startWorkspace(id: running.id)
     }
-
-    // Test pause/resume lifecycle on a running workspace.
-    func testPauseAndResumeRunningWorkspace() async throws {
-        let workspaces = try await client.listWorkspaces()
-        guard let running = workspaces.first(where: { $0.state == .running }) else {
-            throw XCTSkip("No running workspaces to test pause/resume lifecycle")
-        }
-
-        do {
-            try await client.pauseWorkspace(id: running.id)
-        } catch let err as RPCError where err.message.contains("not accessible") || err.message.contains("runtime") {
-            throw XCTSkip("Workspace \(running.id) exists in daemon but runtime is unavailable: \(err.message)")
-        }
-
-        let afterPause = try await client.listWorkspaces()
-        let paused = afterPause.first { $0.id == running.id }
-        XCTAssertNotNil(paused)
-        XCTAssertEqual(paused?.state, .paused)
-
-        // Restore state
-        try await client.resumeWorkspace(id: running.id)
-    }
 }
 
 final class PortDetectionTests: XCTestCase {

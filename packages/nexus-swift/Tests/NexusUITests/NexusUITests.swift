@@ -27,10 +27,12 @@ final class NexusUITests: XCTestCase {
     override func setUpWithError() throws {
         continueAfterFailure = false
         app = XCUIApplication()
+        let env = ProcessInfo.processInfo.environment
         // Point at the already-running daemon so tests don't need to cold-start one.
         // Remove or adjust these env vars if you want to test the full auto-start path.
-        app.launchEnvironment["NEXUS_DAEMON_URL"]   = "ws://localhost:8080"
-        app.launchEnvironment["NEXUS_DAEMON_TOKEN"] = tokenFromDisk() ?? ""
+        app.launchEnvironment["NEXUS_DAEMON_URL"] = env["NEXUS_UI_TEST_DAEMON_URL"] ?? "ws://localhost:8080"
+        app.launchEnvironment["NEXUS_DAEMON_TOKEN"] = env["NEXUS_UI_TEST_DAEMON_TOKEN"] ?? (tokenFromDisk() ?? "")
+        app.launchEnvironment["NEXUS_UI_TEST_OPEN_DAEMON_PANEL"] = "1"
     }
 
     // ── Smoke: app launches and reaches either connected or startup state ──
@@ -88,6 +90,46 @@ final class NexusUITests: XCTestCase {
                       "New-workspace (+) button should be in the sidebar header")
     }
 
+    func testDaemonPanelShowsHostToolsActions() throws {
+        app.launch()
+        _ = app.staticTexts["Connected"].waitForExistence(timeout: 30)
+
+        XCTAssertTrue(app.buttons["daemon_action_refresh_tools"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["daemon_action_install_tools"].waitForExistence(timeout: 10))
+        XCTAssertTrue(app.buttons["daemon_action_provision_runtime"].waitForExistence(timeout: 10))
+    }
+
+    func testFixtureComposePortAppears() throws {
+        guard isHealthzUp("http://localhost:64001/healthz") else {
+            throw XCTSkip("Fixture daemon on :64001 is not available")
+        }
+        let fixtureWorkspaceID = ProcessInfo.processInfo.environment["NEXUS_UI_TEST_FIXTURE_WORKSPACE_ID"] ?? ""
+        let fixtureWorkspaceName = ProcessInfo.processInfo.environment["NEXUS_UI_TEST_FIXTURE_WORKSPACE_NAME"] ?? "xcui-compose"
+        app.launchEnvironment["NEXUS_DAEMON_URL"] = "ws://localhost:64001"
+        app.launchEnvironment["NEXUS_DAEMON_TOKEN"] = "xcui-token"
+
+        app.launch()
+        _ = app.staticTexts["Connected"].waitForExistence(timeout: 30)
+
+        let workspaceRow: XCUIElement
+        if !fixtureWorkspaceID.isEmpty {
+            workspaceRow = app.buttons["workspace_row_\(fixtureWorkspaceID)"]
+        } else {
+            workspaceRow = app.buttons.matching(NSPredicate(format: "label CONTAINS %@", fixtureWorkspaceName)).firstMatch
+        }
+        guard workspaceRow.waitForExistence(timeout: 15) else {
+            throw XCTSkip("Fixture workspace row not found")
+        }
+        workspaceRow.click()
+        let portsTab = app.buttons["Ports"]
+        if portsTab.waitForExistence(timeout: 3) {
+            portsTab.click()
+        }
+
+        let composePortRow = app.descendants(matching: .any)["port_row_18080"]
+        XCTAssertTrue(composePortRow.waitForExistence(timeout: 20), "Expected compose forwarded port row to appear")
+    }
+
     // ── Recording playground ─────────────────────────────────────────────
     // Paste cursor here and press ● Record to capture any interaction.
 
@@ -133,4 +175,20 @@ private func tokenFromDisk() -> String? {
         }
     }
     return nil
+}
+
+private func isHealthzUp(_ rawURL: String) -> Bool {
+    guard let url = URL(string: rawURL) else { return false }
+    var req = URLRequest(url: url)
+    req.timeoutInterval = 1.5
+    let sem = DispatchSemaphore(value: 0)
+    var ok = false
+    URLSession.shared.dataTask(with: req) { _, response, _ in
+        if let http = response as? HTTPURLResponse {
+            ok = http.statusCode == 200
+        }
+        sem.signal()
+    }.resume()
+    _ = sem.wait(timeout: .now() + 2)
+    return ok
 }

@@ -102,13 +102,22 @@ func HandleSpotlightApplyComposePorts(ctx context.Context, p SpotlightApplyCompo
 			host = "127.0.0.1"
 		}
 
-		fwd, exposeErr := mgr.Expose(ctx, spotlight.ExposeSpec{
-			WorkspaceID: p.WorkspaceID,
-			Service:     entry.Service,
-			RemotePort:  entry.TargetPort,
-			LocalPort:   entry.HostPort,
-			Host:        host,
-		})
+		var (
+			fwd       *spotlight.Forward
+			exposeErr error
+		)
+		for _, localPort := range composeLocalPortCandidates(entry.HostPort, entry.TargetPort) {
+			fwd, exposeErr = mgr.Expose(ctx, spotlight.ExposeSpec{
+				WorkspaceID: p.WorkspaceID,
+				Service:     entry.Service,
+				RemotePort:  entry.TargetPort,
+				LocalPort:   localPort,
+				Host:        host,
+			})
+			if exposeErr == nil {
+				break
+			}
+		}
 		if exposeErr != nil {
 			result.Errors = append(result.Errors, SpotlightApplyComposePortsError{
 				Service:    entry.Service,
@@ -122,4 +131,32 @@ func HandleSpotlightApplyComposePorts(ctx context.Context, p SpotlightApplyCompo
 	}
 
 	return result, nil
+}
+
+func composeLocalPortCandidates(hostPort, targetPort int) []int {
+	candidates := make([]int, 0, 5)
+	seen := map[int]struct{}{}
+	add := func(p int) {
+		if p <= 0 || p > 65535 {
+			return
+		}
+		if _, ok := seen[p]; ok {
+			return
+		}
+		seen[p] = struct{}{}
+		candidates = append(candidates, p)
+	}
+	add(hostPort)
+	if hostPort > 0 && hostPort < 1024 {
+		add(10000 + hostPort)
+		add(20000 + hostPort)
+		add(30000 + hostPort)
+	}
+	if targetPort >= 1024 {
+		add(targetPort)
+	}
+	if len(candidates) == 0 {
+		add(10000 + targetPort)
+	}
+	return candidates
 }

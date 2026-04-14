@@ -390,7 +390,7 @@ func printUsage() {
 	fmt.Fprintln(os.Stderr, "  nexus fork <id> <name> [--ref <ref>]")
 	fmt.Fprintln(os.Stderr, "  nexus shell <id> [--timeout <dur>]")
 	fmt.Fprintln(os.Stderr, "  nexus exec <id> [--timeout <dur>] -- <command> [args...]")
-	fmt.Fprintln(os.Stderr, "  nexus <list|create|start|stop|remove|pause|resume|restore|shell|exec|tunnel>")
+	fmt.Fprintln(os.Stderr, "  nexus <list|create|start|stop|remove|restore|shell|exec|tunnel>")
 }
 
 func runRun(backend string, timeout time.Duration, cmdArgs []string) error {

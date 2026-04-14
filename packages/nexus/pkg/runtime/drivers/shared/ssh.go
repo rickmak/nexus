@@ -1,10 +1,3 @@
-// Package shared – direct SSH helpers for Lima-backed runtimes.
-//
-// Rather than spawning `limactl shell` (a Go wrapper that adds log noise and
-// process-spawn overhead), we read the ssh.config Lima already writes at
-// ~/.lima/INSTANCE/ssh.config and exec ssh directly.
-// The ControlMaster socket Lima keeps open means the first SSH connection
-// does the key exchange; all subsequent connections are instant mux reuse.
 package shared
 
 import (
@@ -88,24 +81,29 @@ func DirectSSHInteractiveArgs(instanceName, workdir, shell string) ([]string, er
 		sh = "bash"
 	}
 
+	interactiveInnerCmd := "exec " + sh + " -i"
 	wd := strings.TrimSpace(workdir)
 	if wd != "" {
-		innerCmd := `export PROMPT_COMMAND="cd ` + ShellQuote(wd) + ` 2>/dev/null; unset PROMPT_COMMAND"; exec ` + sh + ` -i`
-		fullCmd := sh + " -l -c " + ShellQuote(innerCmd)
-		return []string{
-			"-F", cfgPath,
-			"-t", // force remote PTY allocation; required when a command is given
-			instanceName,
-			fullCmd,
-		}, nil
+		// Make the working directory a launch-time invariant rather than a shell
+		// startup side effect. Run the requested shell once as a login shell so it
+		// can initialize the environment, then exec a non-login interactive shell
+		// from the requested cwd. If cd fails, SSH exits instead of silently
+		// landing in ~.
+		interactiveInnerCmd = "cd " + ShellQuote(wd) + " && " + interactiveInnerCmd
 	}
 
-	// No workdir: pass "bash -l" as a single arg so SSH executes it directly.
+	// Ensure new shell processes pick up docker group privileges immediately
+	// when docker is installed and accessible through the docker group.
+	innerCmd := "if command -v docker >/dev/null 2>&1 && ! docker info >/dev/null 2>&1 && getent group docker >/dev/null 2>&1; then exec sg docker -c " + ShellQuote(interactiveInnerCmd) + "; fi; " + interactiveInnerCmd
+	fullCmd := sh + " -l -c " + ShellQuote(innerCmd)
 	return []string{
 		"-F", cfgPath,
-		"-t",
+		"-o", "LogLevel=ERROR",
+		"-o", "ControlMaster=no",
+		"-o", "ControlPath=none",
+		"-t", // force remote PTY allocation; required when a command is given
 		instanceName,
-		sh + " -l",
+		fullCmd,
 	}, nil
 }
 
@@ -121,6 +119,9 @@ func DirectSSHScriptArgs(instanceName, script string) ([]string, error) {
 
 	return []string{
 		"-F", cfgPath,
+		"-o", "LogLevel=ERROR",
+		"-o", "ControlMaster=no",
+		"-o", "ControlPath=none",
 		instanceName,
 		"--",
 		"sh", "-lc", script,
@@ -135,6 +136,21 @@ func DirectSSHScript(ctx context.Context, instanceName, script string) ([]byte, 
 		return nil, err
 	}
 	return exec.CommandContext(ctx, "ssh", args...).CombinedOutput()
+}
+
+// DirectSSHScriptWithInput runs script inside instanceName and streams input to
+// the remote process stdin. Useful for large payload delivery without embedding
+// payload bytes into SSH argv.
+func DirectSSHScriptWithInput(ctx context.Context, instanceName, script, input string) ([]byte, error) {
+	args, err := DirectSSHScriptArgs(instanceName, script)
+	if err != nil {
+		return nil, err
+	}
+	cmd := exec.CommandContext(ctx, "ssh", args...)
+	if input != "" {
+		cmd.Stdin = strings.NewReader(input)
+	}
+	return cmd.CombinedOutput()
 }
 
 // TryDirectSSHScript runs script in the first candidate Lima instance whose

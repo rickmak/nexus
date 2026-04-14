@@ -212,23 +212,47 @@ func TestFirecrackerDriver_StartIsNoOp(t *testing.T) {
 	}
 }
 
-func TestFirecrackerDriver_PauseNotSupported(t *testing.T) {
+func TestFirecrackerDriver_PauseDelegatesToStop(t *testing.T) {
 	fakeMgr := &fakeManager{}
 	d := NewDriver(nil, WithManager(fakeMgr))
 
+	d.mu.Lock()
+	d.projectRoots["ws-1"] = "/projects/ws-1"
+	d.mu.Unlock()
+
 	err := d.Pause(context.Background(), "ws-1")
-	if err == nil {
-		t.Fatal("expected error - pause not supported")
+	if err != nil {
+		t.Fatalf("pause should delegate to stop: %v", err)
+	}
+	if !fakeMgr.stopCalled {
+		t.Fatal("expected manager.Stop to be called by pause")
 	}
 }
 
-func TestFirecrackerDriver_ResumeNotSupported(t *testing.T) {
-	fakeMgr := &fakeManager{}
+func TestFirecrackerDriver_ResumeCreatesVMFromProjectRoot(t *testing.T) {
+	fakeMgr := &fakeManager{
+		instance: &Instance{
+			WorkspaceID: "ws-1",
+			WorkDir:     "/tmp/ws-1",
+			APISocket:   "/tmp/ws-1/firecracker.sock",
+			VSockPath:   "/tmp/ws-1/vsock.sock",
+			CID:         1000,
+		},
+	}
 	d := NewDriver(nil, WithManager(fakeMgr))
+	d.mu.Lock()
+	d.projectRoots["ws-1"] = "/projects/ws-1"
+	d.mu.Unlock()
 
 	err := d.Resume(context.Background(), "ws-1")
-	if err == nil {
-		t.Fatal("expected error - resume not supported")
+	if err != nil {
+		t.Fatalf("resume failed: %v", err)
+	}
+	if !fakeMgr.spawnCalled {
+		t.Fatal("expected manager.Spawn to be called by resume")
+	}
+	if fakeMgr.spawnSpec.ProjectRoot != "/projects/ws-1" {
+		t.Fatalf("expected resume to use saved project root, got %q", fakeMgr.spawnSpec.ProjectRoot)
 	}
 }
 
@@ -242,13 +266,24 @@ func TestFirecrackerDriver_ForkNotSupported(t *testing.T) {
 	}
 }
 
-func TestFirecrackerDriver_RestoreNotSupported(t *testing.T) {
-	fakeMgr := &fakeManager{}
+func TestFirecrackerDriver_RestoreDelegatesToResume(t *testing.T) {
+	fakeMgr := &fakeManager{
+		instance: &Instance{
+			WorkspaceID: "ws-1",
+			WorkDir:     "/tmp/ws-1",
+			APISocket:   "/tmp/ws-1/firecracker.sock",
+			VSockPath:   "/tmp/ws-1/vsock.sock",
+			CID:         1000,
+		},
+	}
 	d := NewDriver(nil, WithManager(fakeMgr))
+	d.mu.Lock()
+	d.projectRoots["ws-1"] = "/projects/ws-1"
+	d.mu.Unlock()
 
 	err := d.Restore(context.Background(), "ws-1")
-	if err == nil {
-		t.Fatal("expected error - restore not supported")
+	if err != nil {
+		t.Fatalf("restore should delegate to resume: %v", err)
 	}
 }
 

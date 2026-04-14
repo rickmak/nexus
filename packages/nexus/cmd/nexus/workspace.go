@@ -269,28 +269,10 @@ var execCmd = &cobra.Command{
 
 var tunnelCmd = &cobra.Command{
 	Use:   "tunnel <id>",
-	Short: "Forward spotlight compose ports for a workspace",
+	Short: "Activate tunnels for a workspace",
 	Args:  cobra.ExactArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		tunnelWorkspace(strings.TrimSpace(args[0]))
-	},
-}
-
-var pauseCmd = &cobra.Command{
-	Use:   "pause <id>",
-	Short: "Pause a workspace",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		pauseWorkspace(args[0])
-	},
-}
-
-var resumeCmd = &cobra.Command{
-	Use:   "resume <id>",
-	Short: "Resume a paused workspace",
-	Args:  cobra.ExactArgs(1),
-	Run: func(cmd *cobra.Command, args []string) {
-		resumeWorkspace(args[0])
 	},
 }
 
@@ -319,8 +301,6 @@ func init() {
 		shellCmd,
 		execCmd,
 		tunnelCmd,
-		pauseCmd,
-		resumeCmd,
 		restoreCmd,
 	)
 }
@@ -808,49 +788,28 @@ func tunnelWorkspace(workspaceID string) {
 		defer conn.Close()
 	}
 	var result struct {
-		Forwards []struct {
-			ID         string `json:"id"`
-			Service    string `json:"service"`
-			Host       string `json:"host"`
-			LocalPort  int    `json:"localPort"`
-			RemotePort int    `json:"remotePort"`
-		} `json:"forwards"`
-		Errors []struct {
-			Service    string `json:"service"`
-			HostPort   int    `json:"hostPort"`
-			TargetPort int    `json:"targetPort"`
-			Message    string `json:"message"`
-		} `json:"errors"`
+		Active            bool   `json:"active"`
+		ActiveWorkspaceID string `json:"activeWorkspaceId"`
 	}
-	if err := daemonRPCFn(conn, "spotlight.applyComposePorts", map[string]any{"workspaceId": workspaceID}, &result); err != nil {
+	if err := daemonRPCFn(conn, "workspace.tunnels.activate", map[string]any{"workspaceId": workspaceID}, &result); err != nil {
 		fmt.Fprintf(os.Stderr, "nexus tunnel: %v\n", err)
 		os.Exit(1)
 	}
-	if len(result.Forwards) == 0 {
-		fmt.Printf("no compose ports spotlighted for workspace %s\n", workspaceID)
-		return
-	}
-	for _, fwd := range result.Forwards {
-		host := strings.TrimSpace(fwd.Host)
-		if host == "" {
-			host = "127.0.0.1"
-		}
-		fmt.Printf("tunnel active %s %s:%d -> %d (%s)\n", fwd.Service, host, fwd.LocalPort, fwd.RemotePort, fwd.ID)
-	}
-	if len(result.Errors) > 0 {
-		for _, e := range result.Errors {
-			fmt.Fprintf(os.Stderr, "spotlight error %s %d->%d: %s\n", e.Service, e.HostPort, e.TargetPort, e.Message)
+	if !result.Active {
+		if result.ActiveWorkspaceID != "" {
+			fmt.Fprintf(os.Stderr, "nexus tunnel: another workspace already has active tunnels: %s\n", result.ActiveWorkspaceID)
+		} else {
+			fmt.Fprintln(os.Stderr, "nexus tunnel: failed to activate tunnels")
 		}
 		os.Exit(1)
 	}
-	fmt.Fprintln(os.Stdout, "press Ctrl-C to close tunnels")
+	fmt.Printf("tunnels active for workspace %s\n", workspaceID)
+	fmt.Fprintln(os.Stdout, "press Ctrl-C to deactivate tunnels")
 	waitForInterruptFn()
-	for _, fwd := range result.Forwards {
-		if err := daemonRPCFn(conn, "spotlight.close", map[string]any{"id": fwd.ID}, nil); err != nil {
-			fmt.Fprintf(os.Stderr, "nexus tunnel: close warning for %s: %v\n", fwd.ID, err)
-		} else {
-			fmt.Printf("closed tunnel %s\n", fwd.ID)
-		}
+	if err := daemonRPCFn(conn, "workspace.tunnels.deactivate", map[string]any{"workspaceId": workspaceID}, &result); err != nil {
+		fmt.Fprintf(os.Stderr, "nexus tunnel: deactivate warning: %v\n", err)
+	} else {
+		fmt.Printf("tunnels deactivated for workspace %s\n", workspaceID)
 	}
 }
 
@@ -859,34 +818,6 @@ func waitForInterrupt() {
 	signal.Notify(ch, os.Interrupt, syscall.SIGTERM)
 	<-ch
 	signal.Stop(ch)
-}
-
-func pauseWorkspace(id string) {
-	conn, err := ensureDaemon()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "nexus pause: %v\n", err)
-		os.Exit(1)
-	}
-	defer conn.Close()
-	if err := daemonRPC(conn, "workspace.pause", map[string]any{"id": id}, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "nexus pause: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("paused workspace %s\n", id)
-}
-
-func resumeWorkspace(id string) {
-	conn, err := ensureDaemon()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "nexus resume: %v\n", err)
-		os.Exit(1)
-	}
-	defer conn.Close()
-	if err := daemonRPC(conn, "workspace.resume", map[string]any{"id": id}, nil); err != nil {
-		fmt.Fprintf(os.Stderr, "nexus resume: %v\n", err)
-		os.Exit(1)
-	}
-	fmt.Printf("resumed workspace %s\n", id)
 }
 
 func restoreWorkspace(id string) {

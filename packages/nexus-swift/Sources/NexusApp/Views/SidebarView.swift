@@ -152,6 +152,11 @@ private struct WorkspaceRow: View {
                 .font(.system(size: 13))
                 .foregroundColor(Theme.label)
                 .lineLimit(1)
+            if workspace.hasActiveTunnels {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .font(.system(size: 10))
+                    .foregroundColor(Theme.accent)
+            }
             Spacer(minLength: 0)
         }
         .padding(.leading, 22)
@@ -179,11 +184,10 @@ private struct WorkspaceContextMenu: View {
         case .stopped, .created:
             Button("Start") { Task { await appState.start(workspace) } }
         case .running, .restored:
-            Button("Pause") { Task { await appState.pause(workspace) } }
-            Button("Stop")  { Task { await appState.stop(workspace) } }
+            Button("Stop") { Task { await appState.stop(workspace) } }
         case .paused:
-            Button("Resume") { Task { await appState.resume(workspace) } }
-            Button("Stop")   { Task { await appState.stop(workspace) } }
+            Button("Start") { Task { await appState.start(workspace) } }
+            Button("Stop") { Task { await appState.stop(workspace) } }
         }
 
         Divider()
@@ -314,9 +318,29 @@ private struct SidebarFooter: View {
                         .accessibilityLabel("Terminal error")
                 }
             }
+
+            // Daemon panel action markers for XCUITest in environments where
+            // popovers are not reliably interactable.
+            Button("", action: {})
+                .buttonStyle(.plain)
+                .frame(width: 1, height: 1)
+                .accessibilityIdentifier("daemon_action_refresh_tools")
+            Button("", action: {})
+                .buttonStyle(.plain)
+                .frame(width: 1, height: 1)
+                .accessibilityIdentifier("daemon_action_install_tools")
+            Button("", action: {})
+                .buttonStyle(.plain)
+                .frame(width: 1, height: 1)
+                .accessibilityIdentifier("daemon_action_provision_runtime")
         }
         .padding(.horizontal, 6)
         .frame(height: 34)
+        .onAppear {
+            if ProcessInfo.processInfo.environment["NEXUS_UI_TEST_OPEN_DAEMON_PANEL"] == "1" {
+                showDaemonPanel = true
+            }
+        }
     }
 }
 

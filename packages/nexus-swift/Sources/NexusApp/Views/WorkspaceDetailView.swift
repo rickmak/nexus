@@ -16,6 +16,8 @@ struct WorkspaceDetailView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .background(Theme.bgApp)
         }
+        // CRITICAL FIX: Force view recreation when workspace changes
+        .id("workspace-detail-\(workspace.id)")
         .background(Theme.bgApp)
         .accessibilityIdentifier("workspace_detail")
         .accessibilityLabel("Workspace \(workspace.name)")
@@ -48,9 +50,8 @@ private struct WorkspaceActionMenu: View {
 
     private var primaryIcon: String {
         switch workspace.state {
-        case .running, .restored: "pause.fill"
-        case .paused:             "play.fill"
-        case .stopped, .created:  "play.fill"
+        case .running, .restored: "ellipsis.circle"
+        case .paused, .stopped, .created: "play.fill"
         }
     }
 
@@ -62,15 +63,12 @@ private struct WorkspaceActionMenu: View {
                     Label("Start", systemImage: "play.fill")
                 }
             case .running, .restored:
-                Button { Task { await appState.pause(workspace) } } label: {
-                    Label("Pause", systemImage: "pause.fill")
-                }
                 Button { Task { await appState.stop(workspace) } } label: {
                     Label("Stop", systemImage: "stop.fill")
                 }
             case .paused:
-                Button { Task { await appState.resume(workspace) } } label: {
-                    Label("Resume", systemImage: "play.fill")
+                Button { Task { await appState.start(workspace) } } label: {
+                    Label("Start", systemImage: "play.fill")
                 }
                 Button { Task { await appState.stop(workspace) } } label: {
                     Label("Stop", systemImage: "stop.fill")
@@ -146,14 +144,15 @@ private struct SessionInfoStrip: View {
                 }
             }
 
-            if !workspace.ports.isEmpty {
+            let activePorts = workspace.ports.filter { $0.tunneled }
+            if !activePorts.isEmpty {
                 Divider().frame(height: 12).opacity(0.5)
                 HStack(spacing: 4) {
                     Image(systemName: "arrow.left.arrow.right")
                         .font(.system(size: 10))
                         .foregroundColor(Theme.labelTertiary)
-                    ForEach(workspace.ports) { port in
-                        Text(":\(port.port)")
+                    ForEach(activePorts) { port in
+                        Text("\(port.port)")
                             .font(.system(size: 11, design: .monospaced))
                             .foregroundColor(Theme.green)
                     }
@@ -181,12 +180,21 @@ private struct SessionInfoStrip: View {
 /// matching how Conductor embeds a terminal within a light window.
 private struct TerminalCard: View {
     let workspace: Workspace
+    @EnvironmentObject var appState: AppState
 
     var body: some View {
         // No ScrollView — terminal has its own built-in scrollback.
         // The NSViewRepresentable must fill its parent directly or it collapses to zero height.
-        TerminalView(workspace: workspace)
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        Group {
+            if let client = appState.client as? WebSocketDaemonClient {
+                MultiTabTerminalView(workspace: workspace, client: client)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                TerminalView(workspace: workspace)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+        }
+            .id("terminal-card-\(workspace.id)-\(workspace.state.rawValue)")
             .clipShape(RoundedRectangle(cornerRadius: 8))
             .overlay(
                 RoundedRectangle(cornerRadius: 8)

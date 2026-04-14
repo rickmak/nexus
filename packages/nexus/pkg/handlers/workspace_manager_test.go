@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -396,7 +397,7 @@ func TestHandleWorkspaceStart(t *testing.T) {
 	created, _ := HandleWorkspaceCreate(context.Background(), createParams, mgr, nil)
 
 	startParams := WorkspaceStartParams{ID: created.Workspace.ID}
-	result, rpcErr := HandleWorkspaceStart(context.Background(), startParams, mgr)
+	result, rpcErr := HandleWorkspaceStart(context.Background(), startParams, mgr, nil)
 	if rpcErr != nil {
 		t.Fatalf("unexpected rpc error: %+v", rpcErr)
 	}
@@ -408,7 +409,7 @@ func TestHandleWorkspaceStart(t *testing.T) {
 func TestHandleWorkspaceStart_NotFound(t *testing.T) {
 	mgr := workspacemgr.NewManager(t.TempDir())
 	startParams := WorkspaceStartParams{ID: "missing"}
-	_, rpcErr := HandleWorkspaceStart(context.Background(), startParams, mgr)
+	_, rpcErr := HandleWorkspaceStart(context.Background(), startParams, mgr, nil)
 	if rpcErr == nil {
 		t.Fatal("expected workspace not found error")
 	}
@@ -643,51 +644,6 @@ func TestHandleWorkspaceRestore_ConfigRequiredBackendHonored(t *testing.T) {
 	}
 }
 
-func TestHandleWorkspacePause(t *testing.T) {
-	mgr := workspacemgr.NewManager(t.TempDir())
-	createParams := WorkspaceCreateParams{
-		Spec: workspacemgr.CreateSpec{
-			Repo:          "git@example/repo.git",
-			WorkspaceName: "alpha",
-			AgentProfile:  "default",
-		},
-	}
-	created, _ := HandleWorkspaceCreate(context.Background(), createParams, mgr, nil)
-	_ = mgr.Start(created.Workspace.ID)
-
-	pauseParams := WorkspacePauseParams{ID: created.Workspace.ID}
-	result, rpcErr := HandleWorkspacePause(context.Background(), pauseParams, mgr, nil)
-	if rpcErr != nil {
-		t.Fatalf("unexpected rpc error: %+v", rpcErr)
-	}
-	if !result.Paused {
-		t.Fatal("expected paused=true")
-	}
-}
-
-func TestHandleWorkspaceResume(t *testing.T) {
-	mgr := workspacemgr.NewManager(t.TempDir())
-	createParams := WorkspaceCreateParams{
-		Spec: workspacemgr.CreateSpec{
-			Repo:          "git@example/repo.git",
-			WorkspaceName: "alpha",
-			AgentProfile:  "default",
-		},
-	}
-	created, _ := HandleWorkspaceCreate(context.Background(), createParams, mgr, nil)
-	_ = mgr.Start(created.Workspace.ID)
-	_ = mgr.Pause(created.Workspace.ID)
-
-	resumeParams := WorkspaceResumeParams{ID: created.Workspace.ID}
-	result, rpcErr := HandleWorkspaceResume(context.Background(), resumeParams, mgr, nil)
-	if rpcErr != nil {
-		t.Fatalf("unexpected rpc error: %+v", rpcErr)
-	}
-	if !result.Resumed {
-		t.Fatal("expected resumed=true")
-	}
-}
-
 func TestHandleWorkspaceFork(t *testing.T) {
 	mgr := workspacemgr.NewManager(t.TempDir())
 	createParams := WorkspaceCreateParams{
@@ -787,49 +743,6 @@ func TestHandleWorkspaceFork_WithFactoryLinuxBackendAfterRestartLikeState(t *tes
 	}
 	if result.Workspace.Backend != "firecracker" {
 		t.Fatalf("expected child backend 'firecracker', got %q", result.Workspace.Backend)
-	}
-}
-
-func TestHandleWorkspacePause_WithFactoryLinuxBackendAfterRestartLikeState(t *testing.T) {
-	mgrRoot := t.TempDir()
-	mgr := workspacemgr.NewManager(mgrRoot)
-	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
-
-	if err := os.MkdirAll(filepath.Join(mgrRoot, ".nexus"), 0o755); err != nil {
-		t.Fatalf("create .nexus dir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(mgrRoot, ".nexus", "workspace.json"), []byte(`{"version":1}`), 0o644); err != nil {
-		t.Fatalf("write config: %v", err)
-	}
-
-	lxcDriver := &mockDriver{backend: "firecracker"}
-	factory := runtime.NewFactory([]runtime.Capability{
-		{Name: "runtime.linux", Available: true},
-		{Name: "runtime.firecracker", Available: true},
-	}, map[string]runtime.Driver{
-		"firecracker": lxcDriver,
-	})
-
-	ws, err := mgr.Create(context.Background(), workspacemgr.CreateSpec{
-		Repo:          repo,
-		Ref:           "main",
-		WorkspaceName: "alpha",
-		AgentProfile:  "default",
-		Backend:       "firecracker",
-	})
-	if err != nil {
-		t.Fatalf("seed workspace failed: %v", err)
-	}
-
-	_ = mgr.Start(ws.ID)
-
-	pauseParams := WorkspacePauseParams{ID: ws.ID}
-	result, rpcErr := HandleWorkspacePause(context.Background(), pauseParams, mgr, factory)
-	if rpcErr != nil {
-		t.Fatalf("pause failed: %+v", rpcErr)
-	}
-	if result == nil || !result.Paused {
-		t.Fatalf("expected paused=true, got %#v", result)
 	}
 }
 
@@ -1000,7 +913,7 @@ func TestHandleWorkspaceCreate_InstallableMissingSetupFailureReturnsPreflightErr
 	}
 }
 
-func TestHandleWorkspaceCreate_UnsupportedNestedVirtFallsBackToSeatbelt(t *testing.T) {
+func TestHandleWorkspaceCreate_UnsupportedNestedVirtSelectsPlatformBackend(t *testing.T) {
 	mgr := workspacemgr.NewManager(t.TempDir())
 	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
@@ -1031,8 +944,12 @@ func TestHandleWorkspaceCreate_UnsupportedNestedVirtFallsBackToSeatbelt(t *testi
 	if rpcErr != nil {
 		t.Fatalf("unexpected rpc error: %+v", rpcErr)
 	}
-	if result.Workspace.Backend != "seatbelt" {
-		t.Fatalf("expected seatbelt backend, got %q", result.Workspace.Backend)
+	expectedBackend := "seatbelt"
+	if goruntime.GOOS == "darwin" {
+		expectedBackend = "firecracker"
+	}
+	if result.Workspace.Backend != expectedBackend {
+		t.Fatalf("expected %s backend, got %q", expectedBackend, result.Workspace.Backend)
 	}
 	if setupCalls != 0 {
 		t.Fatalf("expected zero setup attempts, got %d", setupCalls)
@@ -1093,8 +1010,12 @@ func TestHandleWorkspaceCreate_UsesInternalPreflightOverrideWhenEnabled(t *testi
 	if rpcErr != nil {
 		t.Fatalf("unexpected rpc error: %+v", rpcErr)
 	}
-	if result.Workspace.Backend != "seatbelt" {
-		t.Fatalf("expected seatbelt backend from override, got %q", result.Workspace.Backend)
+	expectedBackend := "seatbelt"
+	if goruntime.GOOS == "darwin" {
+		expectedBackend = "firecracker"
+	}
+	if result.Workspace.Backend != expectedBackend {
+		t.Fatalf("expected %s backend from override, got %q", expectedBackend, result.Workspace.Backend)
 	}
 }
 

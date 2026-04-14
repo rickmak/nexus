@@ -25,10 +25,11 @@ public enum DaemonLaunchError: Error, LocalizedError {
 ///
 /// Binary resolution order:
 ///   1. NEXUS_DAEMON_BIN environment variable (CI / developer override)
-///   2. App bundle Resources (production: `Contents/Resources/nexus-daemon`)
-///   3. Next to the running executable (co-installed / app bundle)
-///   4. $PATH via `which nexus-daemon`
-///   5. Dev layout: walk up from the executable looking for
+///   2. Local dev source daemon (when `NEXUS_USE_SOURCE_DAEMON=1` or DEBUG)
+///   3. Installer-managed daemon on $PATH (`which nexus-daemon`)
+///   4. App bundle Resources (legacy fallback)
+///   5. Next to the running executable (legacy co-install layout)
+///   6. Dev layout fallback: walk up from the executable looking for
 ///      `packages/nexus/nexus-daemon` or `nexus/nexus-daemon`
 ///      (covers `swift run` from packages/nexus-swift/).
 public struct DaemonLauncher {
@@ -104,13 +105,23 @@ public struct DaemonLauncher {
             if fm.isExecutableFile(atPath: u.path) { return u }
         }
 
-        // 1. Bundled resource (production app bundle: Contents/Resources/nexus-daemon)
+        // 1. Development override: prefer source daemon during local app development.
+        //    This keeps local Swift app runs aligned with active Go daemon sources.
+        if shouldPreferSourceDaemon(env: env), let devBinary = resolveDevBinary() {
+            return devBinary
+        }
+
+        // 2. Bundled resource (preferred over PATH to avoid stale system installs
+        // during local app development/testing).
         if let resourceURL = Bundle.main.resourceURL {
             let bundled = resourceURL.appendingPathComponent("nexus-daemon")
             if fm.isExecutableFile(atPath: bundled.path) { return bundled }
         }
 
-        // 2. Co-located with this executable (legacy co-install layout)
+        // 3. Installer-managed daemon on PATH.
+        if let path = which("nexus-daemon") { return URL(fileURLWithPath: path) }
+
+        // 4. Co-located with this executable (legacy co-install layout)
         let exeURL: URL = {
             if let u = Bundle.main.executableURL { return u.resolvingSymlinksInPath() }
             let cwd = FileManager.default.currentDirectoryPath
@@ -121,21 +132,8 @@ public struct DaemonLauncher {
         let colocated = exeURL.deletingLastPathComponent().appendingPathComponent("nexus-daemon")
         if fm.isExecutableFile(atPath: colocated.path) { return colocated }
 
-        // 3. $PATH
-        if let path = which("nexus-daemon") { return URL(fileURLWithPath: path) }
-
-        // 4. Dev layout: walk up from exe looking for the Go binary.
-        //    Covers `swift run` from packages/nexus-swift/ where the binary
-        //    lives at packages/nexus/nexus-daemon (4 levels up from the exe).
-        var dir = exeURL.deletingLastPathComponent()
-        for _ in 0..<8 {
-            for sub in ["packages/nexus/nexus-daemon", "nexus/nexus-daemon"] {
-                let c = dir.appendingPathComponent(sub)
-                if fm.isExecutableFile(atPath: c.path) { return c }
-            }
-            dir = dir.deletingLastPathComponent()
-        }
-        return nil
+        // 5. Dev layout fallback.
+        return resolveDevBinary()
     }
 
     // MARK: - Launch
@@ -245,5 +243,36 @@ public struct DaemonLauncher {
         let raw = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines)
         return raw?.isEmpty == false ? raw : nil
+    }
+
+    private static func shouldPreferSourceDaemon(env: [String: String]) -> Bool {
+        if env["NEXUS_USE_SOURCE_DAEMON"] == "1" {
+            return true
+        }
+#if DEBUG
+        return true
+#else
+        return false
+#endif
+    }
+
+    private static func resolveDevBinary() -> URL? {
+        let fm = FileManager.default
+        let exeURL: URL = {
+            if let u = Bundle.main.executableURL { return u.resolvingSymlinksInPath() }
+            let cwd = FileManager.default.currentDirectoryPath
+            let arg0 = ProcessInfo.processInfo.arguments.first ?? ""
+            let raw = arg0.hasPrefix("/") ? arg0 : "\(cwd)/\(arg0)"
+            return URL(fileURLWithPath: raw).standardized
+        }()
+        var dir = exeURL.deletingLastPathComponent()
+        for _ in 0..<8 {
+            for sub in ["packages/nexus/nexus-daemon", "nexus/nexus-daemon"] {
+                let candidate = dir.appendingPathComponent(sub)
+                if fm.isExecutableFile(atPath: candidate.path) { return candidate }
+            }
+            dir = dir.deletingLastPathComponent()
+        }
+        return nil
     }
 }
