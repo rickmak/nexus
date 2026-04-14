@@ -76,6 +76,21 @@ extension Color {
     }
 }
 
+// MARK: - NSColor Hex init (for SwiftTerm terminal styling)
+
+extension NSColor {
+    convenience init?(hex: String) {
+        let s = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
+        guard s.count == 6, let n = UInt64(s, radix: 16) else { return nil }
+        self.init(
+            red:   CGFloat((n >> 16) & 0xFF) / 255,
+            green: CGFloat((n >>  8) & 0xFF) / 255,
+            blue:  CGFloat( n        & 0xFF) / 255,
+            alpha: 1
+        )
+    }
+}
+
 // MARK: - Sidebar vibrancy
 
 struct SidebarMaterial: NSViewRepresentable {

@@ -34,7 +34,7 @@ struct BottomPanelView: View {
 
             Group {
                 switch activeTab {
-                case .ports: PortsPane(ports: workspace.ports)
+                case .ports: PortsPane(workspace: workspace)
                 case .log:   LogPane(workspace: workspace)
                 }
             }
@@ -74,48 +74,133 @@ private struct TabBtn: View {
 // MARK: - Ports
 
 private struct PortsPane: View {
-    let ports: [ForwardedPort]
+    let workspace: Workspace
+    @EnvironmentObject var appState: AppState
     var body: some View {
-        if ports.isEmpty {
-            Text("No forwarded ports")
-                .font(Theme.fontSm)
-                .foregroundColor(Theme.labelTertiary)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-        } else {
-            VStack(spacing: 0) {
-                ForEach(ports) { p in
-                    PortRow(port: p)
-                    Divider().overlay(Theme.separator).padding(.leading, 12)
-                }
+        VStack(spacing: 0) {
+            HStack {
+                Text(workspace.hasActiveTunnels ? "Tunnels Active" : "Tunnels Inactive")
+                    .font(Theme.fontSm)
+                    .foregroundColor(workspace.hasActiveTunnels ? Theme.green : Theme.labelTertiary)
                 Spacer()
+                if workspace.hasActiveTunnels {
+                    Button("Deactivate") { Task { await appState.deactivateTunnels(workspace) } }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10, weight: .medium))
+                } else {
+                    Button("Activate") { Task { await appState.activateTunnels(workspace) } }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10, weight: .medium))
+                }
             }
-            .padding(.top, 4)
+            .padding(.horizontal, 12)
+            .padding(.top, 8)
+            .padding(.bottom, 4)
+            Text("Only one workspace can have active tunnels at a time.")
+                .font(.system(size: 10))
+                .foregroundColor(Theme.labelTertiary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 12)
+                .padding(.bottom, 8)
+            Divider().overlay(Theme.separator)
+
+            if workspace.ports.isEmpty {
+                Text("No detected ports")
+                    .font(Theme.fontSm)
+                    .foregroundColor(Theme.labelTertiary)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                VStack(spacing: 0) {
+                    HStack(spacing: 8) {
+                        Text("Local")
+                            .frame(width: 64, alignment: .leading)
+                        Text("Remote")
+                            .frame(width: 64, alignment: .leading)
+                        Text("Process")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        Text("State")
+                            .frame(width: 56, alignment: .leading)
+                        Text("Actions")
+                            .frame(width: 108, alignment: .trailing)
+                    }
+                    .font(.system(size: 10, weight: .semibold, design: .monospaced))
+                    .foregroundColor(Theme.labelTertiary)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    Divider().overlay(Theme.separator)
+
+                    ForEach(workspace.ports) { p in
+                        PortRow(port: p, workspace: workspace)
+                        Divider().overlay(Theme.separator).padding(.leading, 12)
+                    }
+                    Spacer()
+                }
+            }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
     }
 }
 
 private struct PortRow: View {
     let port: ForwardedPort
+    let workspace: Workspace
+    @EnvironmentObject var appState: AppState
     @State private var hover = false
     var body: some View {
-        HStack(spacing: 6) {
-            Circle().fill(Theme.green).frame(width: 5)
+        HStack(spacing: 8) {
             Text("\(port.port)")
+                .frame(width: 64, alignment: .leading)
                 .font(.system(size: 11, weight: .medium, design: .monospaced))
                 .foregroundColor(Theme.label)
-            Text("·").foregroundColor(Theme.labelTertiary).font(.system(size: 11))
-            Text("localhost:\(port.port)")
+            Text("\(port.remotePort)")
+                .frame(width: 64, alignment: .leading)
                 .font(.system(size: 11, design: .monospaced))
                 .foregroundColor(Theme.labelSecondary)
-            Spacer()
-            Button("Open ↗") { NSWorkspace.shared.open(port.localURL) }
-                .buttonStyle(.plain)
-                .font(.system(size: 10, weight: .medium))
-                .foregroundColor(hover ? Theme.accent : Theme.labelSecondary)
-                .onHover { hover = $0 }
+            if let process = port.process, !process.isEmpty {
+                Text(process)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .font(.system(size: 10))
+                    .foregroundColor(Theme.labelTertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            } else {
+                Text("—")
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .font(.system(size: 10))
+                    .foregroundColor(Theme.labelTertiary)
+            }
+
+            HStack(spacing: 4) {
+                Circle().fill(port.tunneled ? Theme.green : Theme.labelTertiary).frame(width: 5)
+                Text(port.tunneled ? "On" : "Off")
+                    .font(.system(size: 10))
+                    .foregroundColor(port.tunneled ? Theme.green : Theme.labelTertiary)
+            }
+            .frame(width: 56, alignment: .leading)
+
+            HStack(spacing: 8) {
+                if port.preferred {
+                    Button("Remove") { Task { await appState.removePort(port.port, workspace: workspace) } }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(Theme.labelSecondary)
+                } else {
+                    Button("Add") { Task { await appState.addPort(port.port, workspace: workspace) } }
+                        .buttonStyle(.plain)
+                        .font(.system(size: 10, weight: .medium))
+                        .foregroundColor(Theme.accent)
+                }
+                Button("Open ↗") { NSWorkspace.shared.open(port.localURL) }
+                    .buttonStyle(.plain)
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundColor(hover ? Theme.accent : Theme.labelSecondary)
+                    .onHover { hover = $0 }
+            }
+            .frame(width: 108, alignment: .trailing)
         }
         .padding(.horizontal, 12)
         .padding(.vertical, 6)
+        .accessibilityIdentifier("port_row_\(port.port)")
     }
 }
 

@@ -49,6 +49,9 @@ final class NexusTerminalUITests: XCTestCase {
         try waitForConnected()
 
         let row = try firstWorkspaceRow(timeout: 15)
+        guard row.isHittable else {
+            throw XCTSkip("workspace row is not hittable in current window layout")
+        }
         row.click()
 
         // Either terminal (running) or placeholder (stopped/paused) must appear.

@@ -1,0 +1,8 @@
+# Xcode derived data and user settings
+*.xcuserstate
+xcuserdata/
+DerivedData/
+*.xcworkspace/xcuserdata/
+
+# SPM build artifacts
+.build/

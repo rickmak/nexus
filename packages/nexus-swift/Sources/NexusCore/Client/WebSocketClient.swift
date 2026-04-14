@@ -37,16 +37,51 @@ public final class WebSocketDaemonClient: DaemonClient, @unchecked Sendable {
                       ?? "\(home)/.config"
         let runDir = "\(configHome)/nexus/run"
 
-        if let entries = try? FileManager.default.contentsOfDirectory(atPath: runDir) {
-            for entry in entries where entry.hasPrefix("daemon-") && entry.hasSuffix(".pid") {
-                // entry = "daemon-63987.pid" → port = 63987
-                let inner = String(entry.dropFirst("daemon-".count).dropLast(".pid".count))
-                if let port = Int(inner) {
-                    return URL(string: "ws://localhost:\(port)")!
-                }
-            }
+        if let activePort = resolveActiveDaemonPort(runDir: runDir) {
+            return URL(string: "ws://localhost:\(activePort)")!
         }
         return URL(string: "ws://localhost:63987")!
+    }
+
+    private static func resolveActiveDaemonPort(runDir: String) -> Int? {
+        let fm = FileManager.default
+        guard let entries = try? fm.contentsOfDirectory(atPath: runDir) else { return nil }
+
+        let pidFiles = entries
+            .filter { $0.hasPrefix("daemon-") && $0.hasSuffix(".pid") }
+            .compactMap { entry -> (port: Int, mtime: Date)? in
+                let inner = String(entry.dropFirst("daemon-".count).dropLast(".pid".count))
+                guard let port = Int(inner) else { return nil }
+                let path = "\(runDir)/\(entry)"
+                let attrs = try? fm.attributesOfItem(atPath: path)
+                let mtime = (attrs?[.modificationDate] as? Date) ?? .distantPast
+                return (port, mtime)
+            }
+            .sorted { $0.mtime > $1.mtime }
+
+        for candidate in pidFiles {
+            if isDaemonHealthy(port: candidate.port) {
+                return candidate.port
+            }
+        }
+        return pidFiles.first?.port
+    }
+
+    private static func isDaemonHealthy(port: Int) -> Bool {
+        final class BoolBox: @unchecked Sendable { var value = false }
+        guard let url = URL(string: "http://localhost:\(port)/healthz") else { return false }
+        var request = URLRequest(url: url)
+        request.timeoutInterval = 0.4
+        let semaphore = DispatchSemaphore(value: 0)
+        let healthy = BoolBox()
+        URLSession.shared.dataTask(with: request) { _, response, _ in
+            if let http = response as? HTTPURLResponse {
+                healthy.value = http.statusCode == 200
+            }
+            semaphore.signal()
+        }.resume()
+        _ = semaphore.wait(timeout: .now() + 1)
+        return healthy.value
     }
 
     // MARK: - Auth token
@@ -223,26 +258,51 @@ public final class WebSocketDaemonClient: DaemonClient, @unchecked Sendable {
         _ = try await call("workspace.stop", params: ["id": id])
     }
 
-    public func pauseWorkspace(id: String) async throws {
-        _ = try await call("workspace.pause", params: ["id": id])
-    }
-
-    public func resumeWorkspace(id: String) async throws {
-        _ = try await call("workspace.resume", params: ["id": id])
-    }
-
     public func removeWorkspace(id: String) async throws {
         _ = try await call("workspace.remove", params: ["id": id])
     }
 
+    public func markWorkspaceReady(id: String) async throws {
+        _ = try await call("workspace.ready", params: ["workspaceId": id])
+    }
+
     public func listPorts(workspaceId: String) async throws -> [ForwardedPort] {
-        let result = try await call("spotlight.list", params: ["workspaceId": workspaceId])
-        guard let dict  = result as? [String: Any],
-              let items = dict["items"] as? [[String: Any]] else { return [] }
-        return items.compactMap { item -> ForwardedPort? in
-            guard let port = item["guestPort"] as? Int ?? item["port"] as? Int else { return nil }
-            return ForwardedPort(id: port)
+        let result = try await call("workspace.ports.list", params: ["workspaceId": workspaceId])
+        guard let dict = result as? [String: Any] else { return [] }
+        return parseForwardedPorts(from: dict["items"])
+    }
+
+    public func addPort(workspaceId: String, port: Int) async throws {
+        _ = try await call("workspace.ports.add", params: ["workspaceId": workspaceId, "port": port])
+    }
+
+    public func removePort(workspaceId: String, port: Int) async throws {
+        _ = try await call("workspace.ports.remove", params: ["workspaceId": workspaceId, "port": port])
+    }
+
+    public func activateTunnels(workspaceId: String) async throws -> TunnelStatus {
+        let result = try await call("workspace.tunnels.activate", params: ["workspaceId": workspaceId])
+        guard let dict = result as? [String: Any] else {
+            throw RPCError(message: "unexpected workspace.tunnels.activate response")
         }
+        return parseTunnelStatus(dict: dict)
+    }
+
+    public func deactivateTunnels(workspaceId: String) async throws -> TunnelStatus {
+        let result = try await call("workspace.tunnels.deactivate", params: ["workspaceId": workspaceId])
+        guard let dict = result as? [String: Any] else {
+            throw RPCError(message: "unexpected workspace.tunnels.deactivate response")
+        }
+        return parseTunnelStatus(dict: dict)
+    }
+
+    public func tunnelStatus(workspaceId: String) async throws -> TunnelStatus {
+        let result = try await call("workspace.ports.list", params: ["workspaceId": workspaceId])
+        guard let dict = result as? [String: Any] else {
+            throw RPCError(message: "unexpected workspace.ports.list response")
+        }
+        let activeWorkspaceId = dict["activeWorkspaceId"] as? String ?? ""
+        return TunnelStatus(active: activeWorkspaceId == workspaceId, activeWorkspaceId: activeWorkspaceId)
     }
 
     public func exec(workspaceId: String, command: String, args: [String]) async throws -> ExecOutput {
@@ -275,24 +335,53 @@ public final class WebSocketDaemonClient: DaemonClient, @unchecked Sendable {
         }
         let wsPath = dict["workspace_path"] as? String ?? ""
         let wsId   = dict["workspace_id"]   as? String ?? id
-        var ports: [ForwardedPort] = []
-        if let items = dict["spotlight"] as? [[String: Any]] {
-            ports = items.compactMap { item in
-                guard let p = item["guestPort"] as? Int ?? item["port"] as? Int else { return nil }
-                return ForwardedPort(id: p)
-            }
-        }
+        let ports = parseForwardedPorts(from: dict["spotlight"])
         return WorkspaceInfo(workspaceId: wsId, workspacePath: wsPath, ports: ports)
+    }
+
+    private func parseForwardedPorts(from raw: Any?) -> [ForwardedPort] {
+        guard let items = raw as? [[String: Any]] else { return [] }
+        return items.compactMap { item in
+            let value = item["port"] ?? item["localPort"]
+            let port: Int?
+            switch value {
+            case let n as Int:
+                port = n
+            case let n as NSNumber:
+                port = n.intValue
+            case let s as String:
+                port = Int(s)
+            default:
+                port = nil
+            }
+            guard let port, port > 0 else { return nil }
+            let remote: Int?
+            if let r = item["remotePort"] as? Int { remote = r }
+            else if let r = item["remotePort"] as? NSNumber { remote = r.intValue }
+            else { remote = nil }
+            let preferred = item["preferred"] as? Bool ?? false
+            let tunneled = item["tunneled"] as? Bool ?? false
+            let process = item["process"] as? String
+            return ForwardedPort(id: port, remotePort: remote, preferred: preferred, tunneled: tunneled, process: process)
+        }
+    }
+
+    private func parseTunnelStatus(dict: [String: Any]) -> TunnelStatus {
+        TunnelStatus(
+            active: dict["active"] as? Bool ?? false,
+            activeWorkspaceId: dict["activeWorkspaceId"] as? String ?? ""
+        )
     }
 
     // MARK: - PTY
 
     /// Opens a PTY session in the workspace.  Returns the session ID.
-    public func openPTY(workspaceId: String, cols: Int, rows: Int) async throws -> String {
+    public func openPTY(workspaceId: String, cols: Int, rows: Int, useTmux: Bool = false) async throws -> String {
         let result = try await call("pty.open", params: [
             "workspaceId": workspaceId,
             "cols": cols,
             "rows": rows,
+            "useTmux": useTmux,
         ])
         guard let dict = result as? [String: Any],
               let sid  = dict["sessionId"] as? String else {
@@ -311,6 +400,13 @@ public final class WebSocketDaemonClient: DaemonClient, @unchecked Sendable {
 
     public func closePTY(sessionId: String) async throws {
         _ = try await call("pty.close", params: ["sessionId": sessionId])
+    }
+
+    /// Reattaches the current websocket connection to an existing PTY session.
+    public func attachPTY(sessionId: String) async throws -> Bool {
+        let result = try await call("pty.attach", params: ["sessionId": sessionId])
+        guard let dict = result as? [String: Any] else { return false }
+        return dict["attached"] as? Bool ?? false
     }
 
     /// Register callbacks for output and exit events on a PTY session.
@@ -335,6 +431,115 @@ public final class WebSocketDaemonClient: DaemonClient, @unchecked Sendable {
             ptyDataBuffer.removeValue(forKey: sessionId)
         }
     }
+
+    // MARK: - Multi-tab PTY Session Management
+
+    /// Opens a PTY session with a custom name for tab display
+    public func openPTY(workspaceId: String, name: String, cols: Int, rows: Int, useTmux: Bool = false) async throws -> String {
+        let result = try await call("pty.open", params: [
+            "workspaceId": workspaceId,
+            "name": name,
+            "cols": cols,
+            "rows": rows,
+            "useTmux": useTmux,
+        ])
+        guard let dict = result as? [String: Any],
+              let sid  = dict["sessionId"] as? String else {
+            throw RPCError(message: "unexpected pty.open response")
+        }
+        return sid
+    }
+
+    /// Lists all PTY sessions for a workspace
+    public func listPTYSessions(workspaceId: String) async throws -> [PTYSessionInfo] {
+        let result = try await call("pty.list", params: ["workspaceId": workspaceId])
+        guard let dict = result as? [String: Any],
+              let sessions = dict["sessions"] as? [[String: Any]] else {
+            return []
+        }
+        return sessions.compactMap { PTYSessionInfo(from: $0) }
+    }
+
+    /// Gets info for a specific PTY session
+    public func getPTYSession(sessionId: String) async throws -> PTYSessionInfo {
+        let result = try await call("pty.get", params: ["sessionId": sessionId])
+        guard let dict = result as? [String: Any],
+              let session = dict["session"] as? [String: Any],
+              let info = PTYSessionInfo(from: session) else {
+            throw RPCError(message: "session not found")
+        }
+        return info
+    }
+
+    /// Renames a PTY session (updates tab name)
+    public func renamePTYSession(sessionId: String, name: String) async throws -> Bool {
+        let result = try await call("pty.rename", params: [
+            "sessionId": sessionId,
+            "name": name,
+        ])
+        guard let dict = result as? [String: Any] else { return false }
+        return dict["success"] as? Bool ?? false
+    }
+
+    // MARK: - Tmux Support
+
+    /// Executes a tmux command on a tmux-based session
+    public func tmuxCommand(sessionId: String, command: String, args: [String] = []) async throws -> TmuxCommandResult {
+        let result = try await call("pty.tmux", params: [
+            "sessionId": sessionId,
+            "command": command,
+            "args": args,
+        ])
+        guard let dict = result as? [String: Any] else {
+            throw RPCError(message: "unexpected tmux response")
+        }
+        return TmuxCommandResult(
+            success: dict["success"] as? Bool ?? false,
+            output: dict["output"] as? String,
+            error: dict["error"] as? String
+        )
+    }
+}
+
+// MARK: - PTY Session Info
+
+public struct PTYSessionInfo: Identifiable, Sendable {
+    public let id: String
+    public let workspaceId: String
+    public let name: String
+    public let shell: String
+    public let workDir: String
+    public let cols: Int
+    public let rows: Int
+    public let createdAt: String
+    public let isRemote: Bool
+    public let isTmux: Bool
+    public let tmuxSession: String?
+
+    public init?(from dict: [String: Any]) {
+        guard let id = dict["id"] as? String,
+              let workspaceId = dict["workspaceId"] as? String,
+              let name = dict["name"] as? String else { return nil }
+        self.id = id
+        self.workspaceId = workspaceId
+        self.name = name
+        self.shell = dict["shell"] as? String ?? "bash"
+        self.workDir = dict["workDir"] as? String ?? "/workspace"
+        self.cols = dict["cols"] as? Int ?? 80
+        self.rows = dict["rows"] as? Int ?? 24
+        self.createdAt = dict["createdAt"] as? String ?? ""
+        self.isRemote = dict["isRemote"] as? Bool ?? false
+        self.isTmux = dict["isTmux"] as? Bool ?? false
+        self.tmuxSession = dict["tmuxSession"] as? String
+    }
+}
+
+// MARK: - Tmux Command Result
+
+public struct TmuxCommandResult: Sendable {
+    public let success: Bool
+    public let output: String?
+    public let error: String?
 }
 
 // MARK: - Error type

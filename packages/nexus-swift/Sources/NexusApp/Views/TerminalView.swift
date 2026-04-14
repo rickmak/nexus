@@ -84,6 +84,8 @@ final class AutoFocusTerminalView: SwiftTerm.TerminalView {
 // MARK: - Daemon PTY via WebSocket
 
 struct DaemonPTYTerminalView: NSViewRepresentable {
+    typealias NSViewType = AutoFocusTerminalView
+
     let workspaceId: String
     let client: WebSocketDaemonClient
     let onError: (String) -> Void
@@ -269,24 +271,9 @@ private struct TerminalPlaceholder: View {
 
     private var message: String {
         switch workspace.state {
-        case .paused:             "Workspace is paused — resume to open a shell"
+        case .paused:             "Workspace is paused — start it to open a shell"
         case .stopped, .created: "Workspace is stopped — start it to open a shell"
         default:                 "Workspace not available"
         }
-    }
-}
-
-// MARK: - NSColor hex helper
-
-private extension NSColor {
-    convenience init?(hex: String) {
-        let s = hex.hasPrefix("#") ? String(hex.dropFirst()) : hex
-        guard s.count == 6, let n = UInt64(s, radix: 16) else { return nil }
-        self.init(
-            red:   CGFloat((n >> 16) & 0xFF) / 255,
-            green: CGFloat((n >>  8) & 0xFF) / 255,
-            blue:  CGFloat( n        & 0xFF) / 255,
-            alpha: 1
-        )
     }
 }

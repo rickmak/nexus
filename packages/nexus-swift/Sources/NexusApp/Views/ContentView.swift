@@ -19,7 +19,7 @@ struct ContentView: View {
                 mainContent
             }
         }
-        .frame(minWidth: 860, minHeight: 520)
+        .frame(minWidth: 1080, minHeight: 560)
         .sheet(isPresented: $appState.showNewWorkspace) {
             NewWorkspaceSheet().environmentObject(appState)
         }
@@ -28,13 +28,13 @@ struct ContentView: View {
     private var mainContent: some View {
         NavigationSplitView(columnVisibility: columnVisibility) {
             SidebarView()
-                .navigationSplitViewColumnWidth(min: 200, ideal: 220, max: 280)
+                .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 360)
         } detail: {
             if let ws = appState.selectedWorkspace {
                 WorkspaceDetailView(workspace: ws)
                     .inspector(isPresented: $appState.showInspector) {
                         InspectorView(workspace: ws)
-                            .inspectorColumnWidth(min: 220, ideal: 260, max: 320)
+                            .inspectorColumnWidth(min: 340, ideal: 420, max: 520)
                     }
             } else {
                 EmptyStateView(state: appState.connectionState, error: appState.error)

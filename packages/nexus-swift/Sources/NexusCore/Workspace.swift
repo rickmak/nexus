@@ -27,7 +27,7 @@ public enum WorkspaceStatus: String, Codable, Equatable, Sendable {
 // MARK: - Actions
 
 public enum WorkspaceAction: String, Sendable {
-    case start, stop, pause, resume, remove, fork, create
+    case start, stop, remove, fork, create
 }
 
 // MARK: - Workspace
@@ -44,6 +44,7 @@ public struct Workspace: Identifiable, Codable, Equatable, Sendable {
     public var repoId: String?
     public var projectId: String?
     public var ports: [ForwardedPort]
+    public var hasActiveTunnels: Bool
 
     public var name: String   { workspaceName }
     public var branch: String { ref.isEmpty ? "main" : ref }
@@ -68,6 +69,7 @@ public struct Workspace: Identifiable, Codable, Equatable, Sendable {
         repoId       = try c.decodeIfPresent(String.self, forKey: .repoId)
         projectId    = try c.decodeIfPresent(String.self, forKey: .projectId)
         ports        = []
+        hasActiveTunnels = false
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -87,7 +89,7 @@ public struct Workspace: Identifiable, Codable, Equatable, Sendable {
                 ref: String = "main", state: WorkspaceStatus = .stopped,
                 rootPath: String = "", agentProfile: String = "default",
                 repoId: String? = nil, projectId: String? = nil,
-                ports: [ForwardedPort] = []) {
+                ports: [ForwardedPort] = [], hasActiveTunnels: Bool = false) {
         self.id           = id
         self.workspaceName = workspaceName
         self.repo         = repo
@@ -98,6 +100,7 @@ public struct Workspace: Identifiable, Codable, Equatable, Sendable {
         self.repoId       = repoId
         self.projectId    = projectId
         self.ports        = ports
+        self.hasActiveTunnels = hasActiveTunnels
     }
 }
 
@@ -188,8 +191,18 @@ public struct RelationNode: Decodable, Sendable {
 
 public struct ForwardedPort: Identifiable, Codable, Equatable, Sendable {
     public let id: Int
+    public let remotePort: Int
+    public let preferred: Bool
+    public let tunneled: Bool
+    public let process: String?
     public var port: Int { id }
     public var localURL: URL { URL(string: "http://localhost:\(id)")! }
 
-    public init(id: Int) { self.id = id }
+    public init(id: Int, remotePort: Int? = nil, preferred: Bool = false, tunneled: Bool = false, process: String? = nil) {
+        self.id = id
+        self.remotePort = remotePort ?? id
+        self.preferred = preferred
+        self.tunneled = tunneled
+        self.process = process
+    }
 }
