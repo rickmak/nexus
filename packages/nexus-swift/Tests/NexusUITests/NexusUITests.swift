@@ -1,4 +1,5 @@
 import XCTest
+import Foundation
 
 // MARK: - Nexus UI Test Suite
 //
@@ -31,7 +32,7 @@ final class NexusUITests: XCTestCase {
         // Point at the already-running daemon so tests don't need to cold-start one.
         // Remove or adjust these env vars if you want to test the full auto-start path.
         app.launchEnvironment["NEXUS_DAEMON_URL"] = env["NEXUS_UI_TEST_DAEMON_URL"] ?? "ws://localhost:8080"
-        app.launchEnvironment["NEXUS_DAEMON_TOKEN"] = env["NEXUS_UI_TEST_DAEMON_TOKEN"] ?? (tokenFromDisk() ?? "")
+        app.launchEnvironment["NEXUS_DAEMON_TOKEN"] = env["NEXUS_UI_TEST_DAEMON_TOKEN"] ?? (resolveDaemonToken() ?? "")
         app.launchEnvironment["NEXUS_UI_TEST_OPEN_DAEMON_PANEL"] = "1"
     }
 
@@ -162,16 +163,26 @@ final class NexusUILaunchTests: XCTestCase {
 
 // MARK: - Helpers
 
-private func tokenFromDisk() -> String? {
-    let home = FileManager.default.homeDirectoryForCurrentUser.path
-    let paths = [
-        "\(home)/.local/share/nexus/token",
-        "\(home)/.config/nexus/run/token",
+private func resolveDaemonToken() -> String? {
+    if let env = ProcessInfo.processInfo.environment["NEXUS_DAEMON_TOKEN"]?
+        .trimmingCharacters(in: .whitespacesAndNewlines),
+       !env.isEmpty {
+        return env
+    }
+
+    let configuredService = ProcessInfo.processInfo.environment["NEXUS_DAEMON_TOKEN_KEYCHAIN_SERVICE"]?
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let services = [
+        configuredService,
+        "nexus-daemon-token",
+        "nexus/token",
+        "nexus-daemon",
+        "nexus",
     ]
-    for path in paths {
-        if let raw = try? String(contentsOfFile: path, encoding: .utf8) {
-            let tok = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !tok.isEmpty { return tok }
+    for maybeService in services {
+        guard let service = maybeService, !service.isEmpty else { continue }
+        if let token = readMacKeychainPassword(service: service), !token.isEmpty {
+            return token
         }
     }
     return nil
@@ -191,4 +202,27 @@ private func isHealthzUp(_ rawURL: String) -> Bool {
     }.resume()
     _ = sem.wait(timeout: .now() + 2)
     return ok
+}
+
+private func readMacKeychainPassword(service: String) -> String? {
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+    task.arguments = ["find-generic-password", "-s", service, "-w"]
+
+    let out = Pipe()
+    task.standardOutput = out
+    task.standardError = Pipe()
+
+    do {
+        try task.run()
+    } catch {
+        return nil
+    }
+    task.waitUntilExit()
+    guard task.terminationStatus == 0 else { return nil }
+
+    let data = out.fileHandleForReading.readDataToEndOfFile()
+    guard let raw = String(data: data, encoding: .utf8) else { return nil }
+    let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    return token.isEmpty ? nil : token
 }

@@ -4,8 +4,8 @@ import Foundation
 ///
 /// Token resolution order:
 ///   1. NEXUS_DAEMON_TOKEN env var (for dev / CI)
-///   2. $XDG_DATA_HOME/nexus/token  (daemon writes this on first start)
-///   3. ~/.config/nexus/run/token   (legacy path)
+///   2. macOS Keychain generic password (service configurable via
+///      NEXUS_DAEMON_TOKEN_KEYCHAIN_SERVICE)
 ///
 /// Port discovery: reads `daemon-PORT.pid` from the Nexus run dir to find the
 /// actual port the daemon is listening on.  Falls back to 63987 (n-e-x-u-s on a telephone keypad).
@@ -90,15 +90,45 @@ public final class WebSocketDaemonClient: DaemonClient, @unchecked Sendable {
         if let env = ProcessInfo.processInfo.environment["NEXUS_DAEMON_TOKEN"], !env.isEmpty {
             return env
         }
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let xdgData = ProcessInfo.processInfo.environment["XDG_DATA_HOME"] ?? "\(home)/.local/share"
-        for path in ["\(xdgData)/nexus/token", "\(home)/.config/nexus/run/token"] {
-            if let raw = try? String(contentsOfFile: path, encoding: .utf8) {
-                let tok = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !tok.isEmpty { return tok }
+        let configuredService = ProcessInfo.processInfo.environment["NEXUS_DAEMON_TOKEN_KEYCHAIN_SERVICE"]?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let services = [
+            configuredService,
+            "nexus-daemon-token",
+            "nexus/token",
+            "nexus-daemon",
+            "nexus",
+        ]
+        for maybeService in services {
+            guard let service = maybeService, !service.isEmpty else { continue }
+            if let token = readMacKeychainPassword(service: service), !token.isEmpty {
+                return token
             }
         }
         return ""
+    }
+
+    private static func readMacKeychainPassword(service: String) -> String? {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/security")
+        task.arguments = ["find-generic-password", "-s", service, "-w"]
+
+        let out = Pipe()
+        task.standardOutput = out
+        task.standardError = Pipe()
+
+        do {
+            try task.run()
+        } catch {
+            return nil
+        }
+        task.waitUntilExit()
+        guard task.terminationStatus == 0 else { return nil }
+
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        guard let raw = String(data: data, encoding: .utf8) else { return nil }
+        let token = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        return token.isEmpty ? nil : token
     }
 
     // MARK: - Connect / disconnect
