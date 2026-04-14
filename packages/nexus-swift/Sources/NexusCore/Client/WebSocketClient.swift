@@ -372,16 +372,12 @@ public final class WebSocketDaemonClient: DaemonClient, @unchecked Sendable {
     private func parseForwardedPorts(from raw: Any?) -> [ForwardedPort] {
         guard let items = raw as? [[String: Any]] else { return [] }
         return items.compactMap { item in
-            let value = item["port"] ?? item["localPort"]
             let port: Int?
-            switch value {
-            case let n as Int:
+            if let n = item["localPort"] as? Int {
                 port = n
-            case let n as NSNumber:
+            } else if let n = item["localPort"] as? NSNumber {
                 port = n.intValue
-            case let s as String:
-                port = Int(s)
-            default:
+            } else {
                 port = nil
             }
             guard let port, port > 0 else { return nil }
@@ -402,7 +398,6 @@ public final class WebSocketDaemonClient: DaemonClient, @unchecked Sendable {
             activeWorkspaceId: dict["activeWorkspaceId"] as? String ?? ""
         )
     }
-
     // MARK: - PTY
 
     /// Opens a PTY session in the workspace.  Returns the session ID.
