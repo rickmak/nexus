@@ -348,6 +348,23 @@ func (m *Manager) SetLocalWorktree(id, worktreePath, mutagenSessionID string) er
 	return nil
 }
 
+func (m *Manager) SetTunnelPorts(id string, ports []int) error {
+	m.mu.Lock()
+	ws, ok := m.workspaces[id]
+	if !ok {
+		m.mu.Unlock()
+		return fmt.Errorf("workspace not found: %s", id)
+	}
+	normalized := normalizeTunnelPorts(ports)
+	ws.TunnelPorts = normalized
+	ws.UpdatedAt = time.Now().UTC()
+	m.mu.Unlock()
+	if err := m.persistWorkspace(ws); err != nil {
+		return fmt.Errorf("persist tunnel ports: %w", err)
+	}
+	return nil
+}
+
 func (m *Manager) UpdateProjectID(id string, projectID string) error {
 	m.mu.Lock()
 	ws, ok := m.workspaces[id]
@@ -382,48 +399,6 @@ func (m *Manager) Start(id string) error {
 
 	if err := m.persistWorkspace(ws); err != nil {
 		return fmt.Errorf("persist start: %w", err)
-	}
-	return nil
-}
-
-func (m *Manager) Pause(id string) error {
-	m.mu.Lock()
-	ws, ok := m.workspaces[id]
-	if !ok {
-		m.mu.Unlock()
-		return fmt.Errorf("workspace not found: %s", id)
-	}
-	if ws.State == StateRemoved {
-		m.mu.Unlock()
-		return fmt.Errorf("cannot pause removed workspace: %s", id)
-	}
-	ws.State = StatePaused
-	ws.UpdatedAt = time.Now().UTC()
-	m.mu.Unlock()
-
-	if err := m.persistWorkspace(ws); err != nil {
-		return fmt.Errorf("persist pause: %w", err)
-	}
-	return nil
-}
-
-func (m *Manager) Resume(id string) error {
-	m.mu.Lock()
-	ws, ok := m.workspaces[id]
-	if !ok {
-		m.mu.Unlock()
-		return fmt.Errorf("workspace not found: %s", id)
-	}
-	if ws.State == StateRemoved {
-		m.mu.Unlock()
-		return fmt.Errorf("cannot resume removed workspace: %s", id)
-	}
-	ws.State = StateRunning
-	ws.UpdatedAt = time.Now().UTC()
-	m.mu.Unlock()
-
-	if err := m.persistWorkspace(ws); err != nil {
-		return fmt.Errorf("persist resume: %w", err)
 	}
 	return nil
 }
@@ -532,7 +507,33 @@ func cloneWorkspace(in *Workspace) *Workspace {
 		out.Policy.AuthProfiles = make([]AuthProfile, len(in.Policy.AuthProfiles))
 		copy(out.Policy.AuthProfiles, in.Policy.AuthProfiles)
 	}
+	if in.TunnelPorts != nil {
+		out.TunnelPorts = make([]int, len(in.TunnelPorts))
+		copy(out.TunnelPorts, in.TunnelPorts)
+	}
 	return &out
+}
+
+func normalizeTunnelPorts(ports []int) []int {
+	if len(ports) == 0 {
+		return nil
+	}
+	seen := make(map[int]struct{}, len(ports))
+	out := make([]int, 0, len(ports))
+	for _, p := range ports {
+		if p <= 0 || p > 65535 {
+			continue
+		}
+		if _, ok := seen[p]; ok {
+			continue
+		}
+		seen[p] = struct{}{}
+		out = append(out, p)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i] < out[j]
+	})
+	return out
 }
 
 func deriveRepoKind(repo string) string {

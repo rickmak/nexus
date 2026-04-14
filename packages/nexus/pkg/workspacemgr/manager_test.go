@@ -503,43 +503,6 @@ func TestManager_StopRestore_PreserveRunningState(t *testing.T) {
 	}
 }
 
-func TestManager_PauseResumeStateTransitions(t *testing.T) {
-	m := newTestManager(t)
-	ws, err := m.Create(context.Background(), CreateSpec{
-		Repo:          "git@example/repo.git",
-		WorkspaceName: "alpha",
-		AgentProfile:  "default",
-	})
-	if err != nil {
-		t.Fatalf("create returned error: %v", err)
-	}
-	if err := m.Start(ws.ID); err != nil {
-		t.Fatalf("start returned error: %v", err)
-	}
-
-	if err := m.Pause(ws.ID); err != nil {
-		t.Fatalf("pause returned error: %v", err)
-	}
-	paused, ok := m.Get(ws.ID)
-	if !ok {
-		t.Fatal("expected workspace after pause")
-	}
-	if paused.State != StatePaused {
-		t.Fatalf("expected paused state %q, got %q", StatePaused, paused.State)
-	}
-
-	if err := m.Resume(ws.ID); err != nil {
-		t.Fatalf("resume returned error: %v", err)
-	}
-	running, ok := m.Get(ws.ID)
-	if !ok {
-		t.Fatal("expected workspace after resume")
-	}
-	if running.State != StateRunning {
-		t.Fatalf("expected running state %q, got %q", StateRunning, running.State)
-	}
-}
-
 func TestManager_ForkPersistsParentWorkspaceID(t *testing.T) {
 	m := newTestManager(t)
 	parent, err := m.Create(context.Background(), CreateSpec{

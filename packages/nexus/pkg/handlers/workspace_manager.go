@@ -42,14 +42,6 @@ type WorkspaceRestoreParams struct {
 	ID string `json:"id"`
 }
 
-type WorkspacePauseParams struct {
-	ID string `json:"id"`
-}
-
-type WorkspaceResumeParams struct {
-	ID string `json:"id"`
-}
-
 type WorkspaceForkParams struct {
 	ID                 string `json:"id"`
 	ChildWorkspaceName string `json:"childWorkspaceName,omitempty"`
@@ -83,14 +75,6 @@ type WorkspaceStartResult struct {
 type WorkspaceRestoreResult struct {
 	Restored  bool                    `json:"restored"`
 	Workspace *workspacemgr.Workspace `json:"workspace,omitempty"`
-}
-
-type WorkspacePauseResult struct {
-	Paused bool `json:"paused"`
-}
-
-type WorkspaceResumeResult struct {
-	Resumed bool `json:"resumed"`
 }
 
 type WorkspaceForkResult struct {
@@ -172,11 +156,39 @@ func HandleWorkspaceStop(_ context.Context, req WorkspaceStopParams, mgr *worksp
 	return &WorkspaceStopResult{Stopped: true}, nil
 }
 
-func HandleWorkspaceStart(_ context.Context, req WorkspaceStartParams, mgr *workspacemgr.Manager) (*WorkspaceStartResult, *rpckit.RPCError) {
+func HandleWorkspaceStopWithRuntime(ctx context.Context, req WorkspaceStopParams, mgr *workspacemgr.Manager, factory *runtime.Factory) (*WorkspaceStopResult, *rpckit.RPCError) {
+	ws, ok := mgr.Get(req.ID)
+	if !ok {
+		return nil, rpckit.ErrWorkspaceNotFound
+	}
+	if factory != nil {
+		if rpcErr := suspendRuntimeWorkspace(ctx, ws, factory, mgr); rpcErr != nil {
+			return nil, rpcErr
+		}
+	}
+
+	if err := mgr.Stop(req.ID); err != nil {
+		return nil, rpckit.ErrWorkspaceNotFound
+	}
+
+	return &WorkspaceStopResult{Stopped: true}, nil
+}
+
+func HandleWorkspaceStart(ctx context.Context, req WorkspaceStartParams, mgr *workspacemgr.Manager, factory *runtime.Factory) (*WorkspaceStartResult, *rpckit.RPCError) {
+	ws, ok := mgr.Get(req.ID)
+	if !ok {
+		return nil, rpckit.ErrWorkspaceNotFound
+	}
+	if factory != nil {
+		if rpcErr := resumeRuntimeWorkspace(ctx, ws, factory, mgr); rpcErr != nil {
+			return nil, rpcErr
+		}
+	}
+
 	if err := mgr.Start(req.ID); err != nil {
 		return nil, rpckit.ErrWorkspaceNotFound
 	}
-	ws, ok := mgr.Get(req.ID)
+	ws, ok = mgr.Get(req.ID)
 	if !ok {
 		return nil, rpckit.ErrWorkspaceNotFound
 	}
@@ -236,63 +248,13 @@ func HandleWorkspaceRestore(ctx context.Context, req WorkspaceRestoreParams, mgr
 		ws = updated
 	}
 
+	if factory != nil {
+		if rpcErr := resumeRuntimeWorkspace(ctx, ws, factory, mgr); rpcErr != nil {
+			return nil, rpcErr
+		}
+	}
+
 	return &WorkspaceRestoreResult{Restored: true, Workspace: ws}, nil
-}
-
-func HandleWorkspacePause(ctx context.Context, req WorkspacePauseParams, mgr *workspacemgr.Manager, factory *runtime.Factory) (*WorkspacePauseResult, *rpckit.RPCError) {
-	_ = ctx
-	ws, ok := mgr.Get(req.ID)
-	if !ok {
-		return nil, rpckit.ErrWorkspaceNotFound
-	}
-
-	if factory != nil {
-		if rpcErr := ensureLocalRuntimeWorkspace(ctx, ws, factory, mgr, ""); rpcErr != nil {
-			return nil, rpcErr
-		}
-
-		driver, err := factory.SelectDriver([]string{ws.Backend}, nil)
-		if err != nil {
-			return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
-		}
-		if err := driver.Pause(context.Background(), ws.ID); err != nil {
-			return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("runtime pause failed: %v", err)}
-		}
-	}
-
-	if err := mgr.Pause(req.ID); err != nil {
-		return nil, rpckit.ErrWorkspaceNotFound
-	}
-
-	return &WorkspacePauseResult{Paused: true}, nil
-}
-
-func HandleWorkspaceResume(ctx context.Context, req WorkspaceResumeParams, mgr *workspacemgr.Manager, factory *runtime.Factory) (*WorkspaceResumeResult, *rpckit.RPCError) {
-	_ = ctx
-	ws, ok := mgr.Get(req.ID)
-	if !ok {
-		return nil, rpckit.ErrWorkspaceNotFound
-	}
-
-	if factory != nil {
-		if rpcErr := ensureLocalRuntimeWorkspace(ctx, ws, factory, mgr, ""); rpcErr != nil {
-			return nil, rpcErr
-		}
-
-		driver, err := factory.SelectDriver([]string{ws.Backend}, nil)
-		if err != nil {
-			return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
-		}
-		if err := driver.Resume(context.Background(), ws.ID); err != nil {
-			return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("runtime resume failed: %v", err)}
-		}
-	}
-
-	if err := mgr.Resume(req.ID); err != nil {
-		return nil, rpckit.ErrWorkspaceNotFound
-	}
-
-	return &WorkspaceResumeResult{Resumed: true}, nil
 }
 
 func HandleWorkspaceFork(ctx context.Context, req WorkspaceForkParams, mgr *workspacemgr.Manager, factory *runtime.Factory) (*WorkspaceForkResult, *rpckit.RPCError) {
@@ -359,6 +321,52 @@ func ensureLocalRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace
 			return nil
 		}
 		return &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("runtime create failed: %v", err)}
+	}
+
+	return nil
+}
+
+func suspendRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace, factory *runtime.Factory, mgr *workspacemgr.Manager) *rpckit.RPCError {
+	if rpcErr := ensureLocalRuntimeWorkspace(ctx, ws, factory, mgr, ""); rpcErr != nil {
+		return rpcErr
+	}
+
+	driver, err := factory.SelectDriver([]string{ws.Backend}, nil)
+	if err != nil {
+		return &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
+	}
+
+	if err := driver.Pause(ctx, ws.ID); err != nil {
+		if errors.Is(err, runtime.ErrOperationNotSupported) {
+			if stopErr := driver.Stop(ctx, ws.ID); stopErr != nil {
+				return &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("runtime stop fallback failed: %v", stopErr)}
+			}
+			return nil
+		}
+		return &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("runtime pause failed: %v", err)}
+	}
+
+	return nil
+}
+
+func resumeRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace, factory *runtime.Factory, mgr *workspacemgr.Manager) *rpckit.RPCError {
+	if rpcErr := ensureLocalRuntimeWorkspace(ctx, ws, factory, mgr, ""); rpcErr != nil {
+		return rpcErr
+	}
+
+	driver, err := factory.SelectDriver([]string{ws.Backend}, nil)
+	if err != nil {
+		return &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
+	}
+
+	if err := driver.Resume(ctx, ws.ID); err != nil {
+		if errors.Is(err, runtime.ErrOperationNotSupported) {
+			if startErr := driver.Start(ctx, ws.ID); startErr != nil {
+				return &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("runtime start fallback failed: %v", startErr)}
+			}
+			return nil
+		}
+		return &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("runtime resume failed: %v", err)}
 	}
 
 	return nil

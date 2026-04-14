@@ -43,6 +43,29 @@ func TestNewServer_FallsBackToInMemorySpotlightManagerOnRepositoryInitError(t *t
 	}
 }
 
+func TestResolveWorkspacePrefersLocalWorktreePath(t *testing.T) {
+	srv, err := NewServer(0, t.TempDir(), "secret-token")
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	ws := createWorkspaceForPTYTest(t, srv.workspaceMgr, "firecracker")
+	localWorktree := t.TempDir()
+	if err := srv.workspaceMgr.SetLocalWorktree(ws.ID, localWorktree, ""); err != nil {
+		t.Fatalf("set local worktree: %v", err)
+	}
+
+	resolved := srv.resolveWorkspaceTyped(struct {
+		WorkspaceID string `json:"workspaceId"`
+	}{
+		WorkspaceID: ws.ID,
+	})
+
+	if got := resolved.Path(); got != localWorktree {
+		t.Fatalf("expected resolveWorkspace to prefer local worktree path %q, got %q", localWorktree, got)
+	}
+}
+
 type serverTestDriver struct {
 	backend string
 }
@@ -58,6 +81,12 @@ func (d *serverTestDriver) Fork(ctx context.Context, workspaceID, childWorkspace
 	return nil
 }
 func (d *serverTestDriver) Destroy(ctx context.Context, workspaceID string) error { return nil }
+func (d *serverTestDriver) GuestWorkdir(workspaceID string) string {
+	if d.backend == "seatbelt" {
+		return "/nexus/ws/" + workspaceID
+	}
+	return "/workspace"
+}
 
 type serverTestConnectorDriver struct {
 	serverTestDriver
@@ -114,6 +143,13 @@ func (d *serverTestConnectorDriver) AgentConn(ctx context.Context, workspaceID s
 						}
 					}
 					d.mu.Unlock()
+					if data, ok := req["data"].(string); ok && strings.Contains(data, "__NEXUS_TMUX_OK__") {
+						_ = enc.Encode(map[string]any{
+							"id":   sessionID,
+							"type": "chunk",
+							"data": "__NEXUS_TMUX_OK__\n",
+						})
+					}
 				}
 				if typ == "shell.resize" {
 					d.mu.Lock()
@@ -350,18 +386,22 @@ func testPTYOpenUsesRemoteConnectorForBackend(t *testing.T, backend string) {
 	if openCommand != "bash" {
 		t.Fatalf("expected remote shell command bash, got %q", openCommand)
 	}
-	if openWorkdir != "/workspace" {
-		t.Fatalf("expected remote shell workdir /workspace, got %q", openWorkdir)
+	wantWorkdir := "/workspace"
+	if backend == "seatbelt" {
+		wantWorkdir = "/nexus/ws/" + ws.ID
+	}
+	if openWorkdir != wantWorkdir {
+		t.Fatalf("expected remote shell workdir %s, got %q", wantWorkdir, openWorkdir)
 	}
 
 	writeParams, _ := json.Marshal(map[string]any{"sessionId": open.SessionID, "data": "echo ok\n"})
-	if _, rpcErr := pty.HandleWrite(writeParams, conn); rpcErr != nil {
+	if _, rpcErr := pty.HandleWrite(srv.ptyDeps(), writeParams, conn); rpcErr != nil {
 		t.Fatalf("pty.write rpc error: %+v", rpcErr)
 	}
 
 	if backend == "firecracker" {
 		resizeParams, _ := json.Marshal(map[string]any{"sessionId": open.SessionID, "cols": 100, "rows": 30})
-		if _, rpcErr := pty.HandleResize(resizeParams, conn); rpcErr != nil {
+		if _, rpcErr := pty.HandleResize(srv.ptyDeps(), resizeParams, conn); rpcErr != nil {
 			t.Fatalf("pty.resize rpc error: %+v", rpcErr)
 		}
 	}
@@ -383,7 +423,7 @@ func testPTYOpenUsesRemoteConnectorForBackend(t *testing.T, backend string) {
 	}
 
 	closeParams, _ := json.Marshal(map[string]any{"sessionId": open.SessionID})
-	closeResult, rpcErr := pty.HandleClose(closeParams, conn)
+	closeResult, rpcErr := pty.HandleClose(srv.ptyDeps(), closeParams, conn)
 	if rpcErr != nil {
 		t.Fatalf("pty.close rpc error: %+v", rpcErr)
 	}
@@ -391,12 +431,194 @@ func testPTYOpenUsesRemoteConnectorForBackend(t *testing.T, backend string) {
 		t.Fatalf("expected close result {closed:true}, got %#v", closeResult)
 	}
 
-	closeResult, rpcErr = pty.HandleClose(closeParams, conn)
+	closeResult, rpcErr = pty.HandleClose(srv.ptyDeps(), closeParams, conn)
 	if rpcErr != nil {
 		t.Fatalf("pty.close idempotent rpc error: %+v", rpcErr)
 	}
 	if closeResultMap, ok := closeResult.(map[string]bool); !ok || !closeResultMap["closed"] {
 		t.Fatalf("expected idempotent close result {closed:true}, got %#v", closeResult)
+	}
+}
+
+func TestPTYAttachAllowsReattachAfterConnectionDetach(t *testing.T) {
+	srv, err := NewServer(0, t.TempDir(), "secret-token")
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+
+	driver := &serverTestConnectorDriver{
+		serverTestDriver: serverTestDriver{backend: "firecracker"},
+		writeSignal:      make(chan struct{}, 1),
+		resizeSignal:     make(chan struct{}, 1),
+	}
+	factory := runtime.NewFactory(
+		[]runtime.Capability{{Name: "runtime.firecracker", Available: true}},
+		map[string]runtime.Driver{"firecracker": driver},
+	)
+	srv.SetRuntimeFactory(factory)
+
+	ws := createWorkspaceForPTYTest(t, srv.workspaceMgr, "firecracker")
+	if err := srv.workspaceMgr.Start(ws.ID); err != nil {
+		t.Fatalf("start workspace: %v", err)
+	}
+
+	conn1 := &Connection{send: make(chan []byte, 16), clientID: "test-1", pty: map[string]*pty.Session{}}
+	openPayload, _ := json.Marshal(map[string]any{
+		"workspaceId": ws.ID,
+		"cols":        80,
+		"rows":        24,
+	})
+	openResult, rpcErr := pty.HandleOpen(srv.ptyDeps(), conn1, openPayload, srv.ws)
+	if rpcErr != nil {
+		t.Fatalf("pty.open rpc error: %+v", rpcErr)
+	}
+	open := openResult.(*pty.OpenResult)
+
+	conn2 := &Connection{send: make(chan []byte, 16), clientID: "test-2", pty: map[string]*pty.Session{}}
+	attachPayload, _ := json.Marshal(map[string]any{"sessionId": open.SessionID})
+	attachResult, rpcErr := pty.HandleAttach(srv.ptyDeps(), attachPayload, conn2)
+	if rpcErr != nil {
+		t.Fatalf("pty.attach rpc error: %+v", rpcErr)
+	}
+	if result, ok := attachResult.(*pty.AttachResult); !ok || !result.Attached {
+		t.Fatalf("expected attached=true, got %#v", attachResult)
+	}
+
+	// Simulate connection 1 disconnect without killing PTY.
+	srv.ptyRegistry.UnsubscribeConn(conn1)
+	conn1.DetachAllPTY()
+
+	writePayload, _ := json.Marshal(map[string]any{"sessionId": open.SessionID, "data": "echo reattach\n"})
+	if _, rpcErr := pty.HandleWrite(srv.ptyDeps(), writePayload, conn2); rpcErr != nil {
+		t.Fatalf("pty.write via reattached connection failed: %+v", rpcErr)
+	}
+
+	select {
+	case <-driver.writeSignal:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected write to reach remote shell after reattach")
+	}
+
+	closePayload, _ := json.Marshal(map[string]any{"sessionId": open.SessionID})
+	if _, rpcErr := pty.HandleClose(srv.ptyDeps(), closePayload, conn2); rpcErr != nil {
+		t.Fatalf("pty.close via reattached connection failed: %+v", rpcErr)
+	}
+}
+
+func TestPTYListRecoversTmuxSessionAfterDaemonRestart(t *testing.T) {
+	workspaceDir := t.TempDir()
+
+	srv1, err := NewServer(0, workspaceDir, "secret-token")
+	if err != nil {
+		t.Fatalf("new server(1): %v", err)
+	}
+	driver1 := &serverTestConnectorDriver{
+		serverTestDriver: serverTestDriver{backend: "firecracker"},
+		writeSignal:      make(chan struct{}, 2),
+		resizeSignal:     make(chan struct{}, 1),
+	}
+	srv1.SetRuntimeFactory(runtime.NewFactory(
+		[]runtime.Capability{{Name: "runtime.firecracker", Available: true}},
+		map[string]runtime.Driver{"firecracker": driver1},
+	))
+
+	ws := createWorkspaceForPTYTest(t, srv1.workspaceMgr, "firecracker")
+	if err := srv1.workspaceMgr.Start(ws.ID); err != nil {
+		t.Fatalf("start workspace: %v", err)
+	}
+	conn1 := &Connection{send: make(chan []byte, 16), clientID: "test-1", pty: map[string]*pty.Session{}}
+	openPayload, _ := json.Marshal(map[string]any{
+		"workspaceId": ws.ID,
+		"cols":        80,
+		"rows":        24,
+		"useTmux":     true,
+	})
+	openResult, rpcErr := pty.HandleOpen(srv1.ptyDeps(), conn1, openPayload, srv1.ws)
+	if rpcErr != nil {
+		t.Fatalf("pty.open rpc error: %+v", rpcErr)
+	}
+	open := openResult.(*pty.OpenResult)
+	if open.SessionID == "" {
+		t.Fatal("expected session id")
+	}
+
+	srv2, err := NewServer(0, workspaceDir, "secret-token")
+	if err != nil {
+		t.Fatalf("new server(2): %v", err)
+	}
+	driver2 := &serverTestConnectorDriver{
+		serverTestDriver: serverTestDriver{backend: "firecracker"},
+		writeSignal:      make(chan struct{}, 2),
+		resizeSignal:     make(chan struct{}, 1),
+	}
+	srv2.SetRuntimeFactory(runtime.NewFactory(
+		[]runtime.Capability{{Name: "runtime.firecracker", Available: true}},
+		map[string]runtime.Driver{"firecracker": driver2},
+	))
+
+	listPayload, _ := json.Marshal(map[string]any{"workspaceId": ws.ID})
+	listResult, rpcErr := pty.HandleList(srv2.ptyDeps(), listPayload)
+	if rpcErr != nil {
+		t.Fatalf("pty.list rpc error: %+v", rpcErr)
+	}
+	list := listResult.(*pty.ListResult)
+	if len(list.Sessions) != 1 {
+		t.Fatalf("expected recovered session list length=1, got %d", len(list.Sessions))
+	}
+	if list.Sessions[0].ID != open.SessionID {
+		t.Fatalf("expected recovered session id %s, got %s", open.SessionID, list.Sessions[0].ID)
+	}
+	if !list.Sessions[0].IsTmux {
+		t.Fatal("expected recovered session to be tmux-backed")
+	}
+
+	conn2 := &Connection{send: make(chan []byte, 16), clientID: "test-2", pty: map[string]*pty.Session{}}
+	attachPayload, _ := json.Marshal(map[string]any{"sessionId": open.SessionID})
+	attachResult, rpcErr := pty.HandleAttach(srv2.ptyDeps(), attachPayload, conn2)
+	if rpcErr != nil {
+		t.Fatalf("pty.attach rpc error: %+v", rpcErr)
+	}
+	if result, ok := attachResult.(*pty.AttachResult); !ok || !result.Attached {
+		t.Fatalf("expected attached=true, got %#v", attachResult)
+	}
+
+	writePayload, _ := json.Marshal(map[string]any{"sessionId": open.SessionID, "data": "echo recovered\n"})
+	if _, rpcErr := pty.HandleWrite(srv2.ptyDeps(), writePayload, conn2); rpcErr != nil {
+		t.Fatalf("pty.write via recovered session failed: %+v", rpcErr)
+	}
+	select {
+	case <-driver2.writeSignal:
+	case <-time.After(2 * time.Second):
+		t.Fatal("expected write to reach recovered remote shell")
+	}
+}
+
+func TestPrunePersistedPTYSessionsRemovesMissingWorkspaceEntries(t *testing.T) {
+	srv, err := NewServer(0, t.TempDir(), "secret-token")
+	if err != nil {
+		t.Fatalf("new server: %v", err)
+	}
+	if err := srv.ptyStore.Upsert(pty.SessionInfo{
+		ID:          "pty-stale",
+		WorkspaceID: "ws-missing",
+		Name:        "stale",
+		WorkDir:     "/workspace",
+		IsTmux:      true,
+		TmuxSession: "nexus_ws_missing_pty_stale",
+	}); err != nil {
+		t.Fatalf("seed pty store: %v", err)
+	}
+
+	removed := srv.PrunePersistedPTYSessions(context.Background())
+	if removed != 1 {
+		t.Fatalf("expected removed=1, got %d", removed)
+	}
+	entries, err := srv.ptyStore.List()
+	if err != nil {
+		t.Fatalf("list pty store: %v", err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("expected empty persisted pty store, got %d entries", len(entries))
 	}
 }
 
@@ -516,7 +738,7 @@ func TestPTYOpenAllowsStartedWorkspace(t *testing.T) {
 
 	open := result.(*pty.OpenResult)
 	closeParams, _ := json.Marshal(map[string]any{"sessionId": open.SessionID})
-	if _, rpcErr := pty.HandleClose(closeParams, conn); rpcErr != nil {
+	if _, rpcErr := pty.HandleClose(srv.ptyDeps(), closeParams, conn); rpcErr != nil {
 		t.Fatalf("pty.close rpc error: %+v", rpcErr)
 	}
 }
@@ -697,10 +919,7 @@ func TestServer_ShutdownDoesNotWriteSpotlightJSON(t *testing.T) {
 	}
 
 	forwards := resumed.spotlightMgr.List("ws-1")
-	if len(forwards) != 1 {
-		t.Fatalf("expected sqlite-backed spotlight persistence with 1 forward, got %d", len(forwards))
-	}
-	if forwards[0].LocalPort != 18000 {
-		t.Fatalf("expected persisted local port 18000, got %d", forwards[0].LocalPort)
+	if len(forwards) != 0 {
+		t.Fatalf("expected no active tunnels persisted across restart, got %d", len(forwards))
 	}
 }
