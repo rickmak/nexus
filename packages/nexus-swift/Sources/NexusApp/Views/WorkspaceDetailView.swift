@@ -29,7 +29,6 @@ struct WorkspaceDetailView: View {
                 StatusPill(status: workspace.status)
                 Divider().frame(height: 14).opacity(0.35)
                 WorkspaceActionMenu(workspace: workspace)
-                ToolbarBtn(icon: "ellipsis") {}
                 Divider().frame(height: 14).opacity(0.35)
                 ToolbarBtn(
                     icon: "sidebar.trailing",
@@ -118,6 +117,15 @@ private struct SessionInfoStrip: View {
     @EnvironmentObject var appState: AppState
     @State private var resolvedPath: String = ""
 
+    /// Live directory reported by the shell (OSC 7) takes precedence over the
+    /// static path fetched from the daemon info.
+    private var displayPath: String {
+        if let live = appState.terminalDirectory, !live.isEmpty {
+            return live.replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~")
+        }
+        return resolvedPath
+    }
+
     var body: some View {
         HStack(spacing: 20) {
             HStack(spacing: 4) {
@@ -129,14 +137,14 @@ private struct SessionInfoStrip: View {
                     .foregroundColor(Theme.labelSecondary)
             }
 
-            // Resolved workspace path from workspace.info
-            if !resolvedPath.isEmpty {
+            // Resolved workspace path — live shell directory takes precedence
+            if !displayPath.isEmpty {
                 Divider().frame(height: 12).opacity(0.5)
                 HStack(spacing: 4) {
                     Image(systemName: "folder")
                         .font(.system(size: 10))
                         .foregroundColor(Theme.labelTertiary)
-                    Text(resolvedPath)
+                    Text(displayPath)
                         .font(.system(size: 11, design: .monospaced))
                         .foregroundColor(Theme.labelSecondary)
                         .lineLimit(1)

@@ -24,6 +24,12 @@ struct TerminalView: View {
                     onError: { err in ptyError = err },
                     onPTYActive: { appState.ptyState = .active },
                     onPTYError: { appState.ptyState = .error },
+                    onTitleChange: { [weak appState] title in
+                        appState?.terminalTitle = title.isEmpty ? nil : title
+                    },
+                    onDirectoryChange: { [weak appState] dir in
+                        appState?.terminalDirectory = dir
+                    },
                     onNSViewCreated: { [weak appState] view in
                         appState?.refocusTerminalAction = { [weak view] in
                             view?.window?.makeFirstResponder(view)
@@ -62,7 +68,11 @@ struct TerminalView: View {
                     .accessibilityLabel(err)
                 }
             }
-            .onChange(of: workspace.id) { _ in ptyError = nil }
+            .onChange(of: workspace.id) { _ in
+                    ptyError = nil
+                    appState.terminalTitle = nil
+                    appState.terminalDirectory = nil
+                }
         } else {
             TerminalPlaceholder(workspace: workspace)
                 .onAppear { appState.ptyState = .idle }
@@ -91,13 +101,16 @@ struct DaemonPTYTerminalView: NSViewRepresentable {
     let onError: (String) -> Void
     let onPTYActive: () -> Void
     let onPTYError: () -> Void
+    let onTitleChange: (String) -> Void
+    let onDirectoryChange: (String?) -> Void
     // Passes the NSView reference back to TerminalView so AppState can store it for refocus
     let onNSViewCreated: (NSView) -> Void
 
     func makeCoordinator() -> Coordinator {
         Coordinator(client: client, workspaceId: workspaceId,
                     onError: onError, onPTYActive: onPTYActive,
-                    onPTYError: onPTYError, onNSViewCreated: onNSViewCreated)
+                    onPTYError: onPTYError, onTitleChange: onTitleChange,
+                    onDirectoryChange: onDirectoryChange, onNSViewCreated: onNSViewCreated)
     }
 
     func makeNSView(context: Context) -> AutoFocusTerminalView {
@@ -138,6 +151,8 @@ struct DaemonPTYTerminalView: NSViewRepresentable {
         let onError: (String) -> Void
         let onPTYActive: () -> Void
         let onPTYError: () -> Void
+        let onTitleChange: (String) -> Void
+        let onDirectoryChange: (String?) -> Void
         let onNSViewCreated: (NSView) -> Void
         weak var termView: AutoFocusTerminalView?
         private var sessionId: String?
@@ -147,12 +162,16 @@ struct DaemonPTYTerminalView: NSViewRepresentable {
              onError: @escaping (String) -> Void,
              onPTYActive: @escaping () -> Void,
              onPTYError: @escaping () -> Void,
+             onTitleChange: @escaping (String) -> Void,
+             onDirectoryChange: @escaping (String?) -> Void,
              onNSViewCreated: @escaping (NSView) -> Void) {
             self.client = client
             self.workspaceId = workspaceId
             self.onError = onError
             self.onPTYActive = onPTYActive
             self.onPTYError = onPTYError
+            self.onTitleChange = onTitleChange
+            self.onDirectoryChange = onDirectoryChange
             self.onNSViewCreated = onNSViewCreated
         }
 
@@ -231,8 +250,12 @@ struct DaemonPTYTerminalView: NSViewRepresentable {
             }
         }
 
-        func setTerminalTitle(source: SwiftTerm.TerminalView, title: String) {}
-        func hostCurrentDirectoryUpdate(source: SwiftTerm.TerminalView, directory: String?) {}
+        func setTerminalTitle(source: SwiftTerm.TerminalView, title: String) {
+            DispatchQueue.main.async { [weak self] in self?.onTitleChange(title) }
+        }
+        func hostCurrentDirectoryUpdate(source: SwiftTerm.TerminalView, directory: String?) {
+            DispatchQueue.main.async { [weak self] in self?.onDirectoryChange(directory) }
+        }
         func bell(source: SwiftTerm.TerminalView) { NSSound.beep() }
         func scrolled(source: SwiftTerm.TerminalView, position: Double) {}
         func clipboardCopy(source: SwiftTerm.TerminalView, content: Data) {
