@@ -11,3 +11,7 @@ images:
 mounts:
   - location: "~"
     writable: false
+  - location: "~/.nexus"
+    writable: true
+  - location: "~/magic"
+    writable: true

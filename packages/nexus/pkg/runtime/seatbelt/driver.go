@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"log"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +37,7 @@ type Driver struct {
 	instanceEnv        string
 	bootstrapGuard     *shared.BootstrapOnceGuard
 	bootstrapInstance  func(ctx context.Context, instance, configBundle string) error
+	applyConfigBundle  func(ctx context.Context, instance, configBundle string) error
 	prepareWorkspaceFS func(ctx context.Context, instance, targetPath, localPath string) error
 }
 
@@ -53,6 +54,7 @@ func NewDriver() *Driver {
 		instanceEnv:        strings.TrimSpace(os.Getenv("NEXUS_RUNTIME_SEATBELT_INSTANCE")),
 		bootstrapGuard:     shared.NewBootstrapOnceGuard(),
 		bootstrapInstance:  bootstrapSeatbeltTooling,
+		applyConfigBundle:  applySeatbeltConfigBundle,
 		prepareWorkspaceFS: prepareWorkspacePath,
 	}
 }
@@ -89,11 +91,19 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 	d.workspaces[req.WorkspaceID] = &workspaceState{projectRoot: req.ProjectRoot, state: "created", instance: instance}
 	d.mu.Unlock()
 
-	if err := d.ensureInstanceBootstrapped(ctx, instance, req.ConfigBundle); err != nil {
+	if err := d.ensureInstanceBootstrapped(ctx, instance, ""); err != nil {
 		d.mu.Lock()
 		delete(d.workspaces, req.WorkspaceID)
 		d.mu.Unlock()
 		return err
+	}
+	if d.applyConfigBundle != nil {
+		if err := d.applyConfigBundle(ctx, instance, req.ConfigBundle); err != nil {
+			d.mu.Lock()
+			delete(d.workspaces, req.WorkspaceID)
+			d.mu.Unlock()
+			return err
+		}
 	}
 
 	if d.prepareWorkspaceFS != nil {
@@ -262,10 +272,14 @@ func (d *Driver) serveShellProtocol(ctx context.Context, workspaceID string, con
 				} else {
 					localPath = d.workspaceProjectRoot(workspaceID)
 				}
-				workdir = "/workspace"
+				workdir = perWsPath
 			}
 
 			instance := d.workspaceInstance(workspaceID)
+			if err := d.ensureInstanceBootstrapped(ctx, instance, ""); err != nil {
+				_ = writeJSON(map[string]any{"id": id, "type": "result", "exit_code": 1, "stderr": err.Error()})
+				continue
+			}
 			cmd, ptmx, err := d.spawnShell(ctx, instance, workdir, localPath, shell)
 			if err != nil {
 				_ = writeJSON(map[string]any{"id": id, "type": "result", "exit_code": 1, "stderr": err.Error()})
@@ -350,8 +364,8 @@ func (d *Driver) serveShellProtocol(ctx context.Context, workspaceID string, con
 		case "ports.scan":
 			ports := d.scanPorts(ctx, workspaceID)
 			_ = writeJSON(map[string]any{
-				"id":   id,
-				"type": "ports.result",
+				"id":    id,
+				"type":  "ports.result",
 				"ports": ports,
 			})
 
@@ -406,12 +420,12 @@ func startLimaShell(ctx context.Context, instanceName, workdir, localPath, shell
 }
 
 func guestWorkdirForID(workspaceID string) string {
-	return "/nexus/ws/" + workspaceID
+	_ = workspaceID
+	return "/workspace"
 }
 
 func (d *Driver) GuestWorkdir(workspaceID string) string {
-	_ = workspaceID
-	return "/workspace"
+	return guestWorkdirForID(workspaceID)
 }
 
 func prepareWorkspacePath(ctx context.Context, instance, targetPath, localPath string) error {
@@ -425,13 +439,10 @@ func prepareWorkspacePath(ctx context.Context, instance, targetPath, localPath s
 		return fmt.Errorf("target path is required")
 	}
 
-	// Use lazy unmount (-l / MNT_DETACH) so that a previous shell session
-	// whose bash still has /workspace as its CWD (making it "busy") does not
-	// block the new bind mount.  -l detaches the mount from the VFS tree
-	// immediately; old processes keep their open file descriptors, but the
-	// directory entry is free for the new mount.
+	// Use lazy unmount (-l / MNT_DETACH) so a previous shell still holding cwd
+	// in the old tree doesn't block rebinding the stable mount path.
 	script := fmt.Sprintf(
-		"set -e; MNTPT=%s; if mountpoint -q \"$MNTPT\" 2>/dev/null; then sudo umount -l \"$MNTPT\"; fi; sudo mkdir -p \"$MNTPT\"; sudo mount --bind %s \"$MNTPT\"",
+		"set -e; MNTPT=%s; SRC=%s; if mountpoint -q \"$MNTPT\" 2>/dev/null; then sudo umount -l \"$MNTPT\"; fi; sudo mkdir -p \"$MNTPT\"; sudo mount --bind \"$SRC\" \"$MNTPT\"",
 		shared.ShellQuote(targetPath),
 		shared.ShellQuote(localPath),
 	)
@@ -509,7 +520,9 @@ func buildSeatbeltBootstrapScript(configBundle string) string {
 
 	parts = append(parts,
 		"unset DOCKER_HOST DOCKER_CONTEXT",
-		"if ! (command -v docker >/dev/null 2>&1 && (docker info >/dev/null 2>&1 || sudo -n docker info >/dev/null 2>&1) && (docker compose version >/dev/null 2>&1 || docker-compose version >/dev/null 2>&1) && command -v make >/dev/null 2>&1); then sudo -n apt-get update; sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose-v2 make curl ca-certificates gnupg nodejs npm || sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose make curl ca-certificates gnupg nodejs npm; sudo -n systemctl enable docker >/dev/null 2>&1 || true; sudo -n systemctl start docker >/dev/null 2>&1 || sudo -n service docker start >/dev/null 2>&1 || true; sudo -n usermod -aG docker $USER >/dev/null 2>&1 || true; fi",
+		"if ! (command -v docker >/dev/null 2>&1 && (docker info >/dev/null 2>&1 || sudo -n docker info >/dev/null 2>&1) && (docker compose version >/dev/null 2>&1 || docker-compose version >/dev/null 2>&1) && command -v make >/dev/null 2>&1); then sudo -n apt-get update; sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose-v2 make curl ca-certificates gnupg nodejs npm || sudo -n DEBIAN_FRONTEND=noninteractive apt-get install -y docker.io docker-compose make curl ca-certificates gnupg nodejs npm; sudo -n systemctl enable docker >/dev/null 2>&1 || true; sudo -n systemctl start docker >/dev/null 2>&1 || sudo -n service docker start >/dev/null 2>&1 || true; fi",
+		"sudo -n groupadd -f docker >/dev/null 2>&1 || true",
+		"sudo -n usermod -aG docker $USER >/dev/null 2>&1 || true",
 		"(docker info >/dev/null 2>&1 || sudo -n docker info >/dev/null 2>&1)",
 		"(docker compose version >/dev/null 2>&1 || docker-compose version >/dev/null 2>&1)",
 		"command -v make >/dev/null 2>&1",
@@ -550,6 +563,47 @@ func buildCredentialSymlinkCleanup() string {
 		checks = append(checks, `if [ -L "$HOME/`+file+`" ]; then rm -f "$HOME/`+file+`"; fi`)
 	}
 	return strings.Join(checks, "; ")
+}
+
+func applySeatbeltConfigBundle(ctx context.Context, instance, configBundle string) error {
+	configBundle = strings.TrimSpace(configBundle)
+	if configBundle == "" {
+		return nil
+	}
+	instance = strings.TrimSpace(instance)
+	if instance == "" {
+		instance = "nexus"
+	}
+	candidates := shared.InstanceCandidates(instance, seatbeltLimaInstanceBase)
+	if discovered, err := listLimaInstancesFn(ctx); err == nil && len(discovered) > 0 {
+		candidates = shared.ApplyLimaDiscovery(candidates, discovered, true)
+	}
+
+	script := strings.Join([]string{
+		"set -e",
+		buildCredentialSymlinkCleanup(),
+		"cat >/tmp/nexus-auth.tar.gz.b64",
+		"(cat /tmp/nexus-auth.tar.gz.b64 | base64 -d 2>/dev/null || cat /tmp/nexus-auth.tar.gz.b64 | base64 -D 2>/dev/null) >/tmp/nexus-auth.tar.gz",
+		"tar -xzf /tmp/nexus-auth.tar.gz -C \"$HOME\"",
+		"rm -f /tmp/nexus-auth.tar.gz.b64 /tmp/nexus-auth.tar.gz >/dev/null 2>&1 || true",
+	}, "; ")
+
+	var lastErr error
+	for _, candidate := range candidates {
+		if err := ensureLimaInstanceRunningFn(ctx, candidate); err != nil {
+			lastErr = err
+			continue
+		}
+		out, err := shared.DirectSSHScriptWithInput(ctx, candidate, script, configBundle)
+		if err == nil {
+			return nil
+		}
+		lastErr = fmt.Errorf("apply config bundle in %s failed: %s", candidate, strings.TrimSpace(string(out)))
+	}
+	if lastErr != nil {
+		return lastErr
+	}
+	return fmt.Errorf("apply config bundle failed: no lima instance candidates")
 }
 
 func (d *Driver) instanceNameForOptions(opts map[string]string) string {

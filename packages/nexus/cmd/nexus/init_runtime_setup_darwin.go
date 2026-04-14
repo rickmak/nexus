@@ -66,7 +66,7 @@ func runInitRuntimeBootstrapDarwin(projectRoot, runtimeName string) error {
 	pf := darwinInitPreflightRunner(projectRoot)
 	if pf.Status == nexusruntime.PreflightUnsupportedNested {
 		_ = writeNexusInitEnv(projectRoot, map[string]string{
-			"NEXUS_RUNTIME_BACKEND": "seatbelt",
+			"NEXUS_RUNTIME_BACKEND": "firecracker",
 		})
 		return nil
 	}

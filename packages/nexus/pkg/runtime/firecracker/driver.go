@@ -39,7 +39,6 @@ type Driver struct {
 	mu           sync.RWMutex
 }
 
-
 func (d *Driver) AgentConn(ctx context.Context, workspaceID string) (net.Conn, error) {
 	if d.manager == nil {
 		return nil, errors.New("manager is required for firecracker driver")
@@ -84,6 +83,11 @@ func NewDriver(runner CommandRunner, opts ...Option) *Driver {
 
 func (d *Driver) Backend() string {
 	return "firecracker"
+}
+
+func (d *Driver) GuestWorkdir(workspaceID string) string {
+	_ = workspaceID
+	return "/workspace"
 }
 
 func (d *Driver) workspaceDir(workspaceID string) string {
@@ -211,23 +215,41 @@ func (d *Driver) Stop(ctx context.Context, workspaceID string) error {
 }
 
 func (d *Driver) Restore(ctx context.Context, workspaceID string) error {
-	// Native firecracker doesn't support restore in this cutover
-	return errors.New("restore not supported in native firecracker driver")
+	return d.Resume(ctx, workspaceID)
 }
 
 func (d *Driver) Pause(ctx context.Context, workspaceID string) error {
-	// Native firecracker doesn't support pause in this cutover
-	return errors.New("pause not supported in native firecracker driver")
+	return d.Stop(ctx, workspaceID)
 }
 
 func (d *Driver) Resume(ctx context.Context, workspaceID string) error {
-	// Native firecracker doesn't support resume in this cutover
-	return errors.New("resume not supported in native firecracker driver")
+	if d.manager == nil {
+		return errors.New("manager is required for firecracker driver")
+	}
+
+	d.mu.RLock()
+	projectRoot := strings.TrimSpace(d.projectRoots[workspaceID])
+	d.mu.RUnlock()
+	if projectRoot == "" {
+		return fmt.Errorf("workspace %s has no recorded project root", workspaceID)
+	}
+
+	err := d.Create(ctx, runtime.CreateRequest{
+		WorkspaceID: workspaceID,
+		ProjectRoot: projectRoot,
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "already exists") {
+			return nil
+		}
+		return err
+	}
+	return nil
 }
 
 func (d *Driver) Fork(ctx context.Context, workspaceID, childWorkspaceID string) error {
 	// Native firecracker doesn't support fork in this cutover
-	return errors.New("fork not supported in native firecracker driver")
+	return fmt.Errorf("%w: fork", runtime.ErrOperationNotSupported)
 }
 
 func (d *Driver) Destroy(ctx context.Context, workspaceID string) error {

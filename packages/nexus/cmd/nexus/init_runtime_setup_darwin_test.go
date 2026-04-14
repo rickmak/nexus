@@ -241,7 +241,7 @@ func TestDarwinBootstrapUsesSeatbeltWhenNestedVirtUnsupported(t *testing.T) {
 	}
 
 	if err := runInitRuntimeBootstrapDarwin(projectRoot, "firecracker"); err != nil {
-		t.Fatalf("expected nil when nested virt unsupported (seatbelt path), got: %v", err)
+		t.Fatalf("expected nil when nested virt unsupported (firecracker alias path), got: %v", err)
 	}
 	if limaStartCalled {
 		t.Fatal("did not expect limactl start when nested virt unsupported")
@@ -251,8 +251,8 @@ func TestDarwinBootstrapUsesSeatbeltWhenNestedVirtUnsupported(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read nexus-init-env: %v", err)
 	}
-	if !strings.Contains(string(data), "NEXUS_RUNTIME_BACKEND=seatbelt") {
-		t.Fatalf("expected seatbelt backend hint, got: %q", string(data))
+	if !strings.Contains(string(data), "NEXUS_RUNTIME_BACKEND=firecracker") {
+		t.Fatalf("expected firecracker backend hint, got: %q", string(data))
 	}
 }
 

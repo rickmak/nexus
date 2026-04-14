@@ -6,6 +6,7 @@ import (
 )
 
 var ErrWorkspaceMountFailed = errors.New("workspace mount not available")
+var ErrOperationNotSupported = errors.New("runtime operation not supported")
 
 type Driver interface {
 	Backend() string
@@ -17,6 +18,10 @@ type Driver interface {
 	Resume(ctx context.Context, workspaceID string) error
 	Fork(ctx context.Context, workspaceID, childWorkspaceID string) error
 	Destroy(ctx context.Context, workspaceID string) error
+}
+
+type GuestWorkdirProvider interface {
+	GuestWorkdir(workspaceID string) string
 }
 
 type CreateRequest struct {

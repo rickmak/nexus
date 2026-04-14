@@ -79,6 +79,35 @@ func TestCreateRunsBootstrapAndMount(t *testing.T) {
 	}
 }
 
+func TestCreateAppliesConfigBundleViaApplyHook(t *testing.T) {
+	d := NewDriver()
+	oldLookPath := seatbeltLookPath
+	t.Cleanup(func() { seatbeltLookPath = oldLookPath })
+	seatbeltLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
+
+	d.bootstrapInstance = func(ctx context.Context, instance, configBundle string) error { return nil }
+	d.prepareWorkspaceFS = func(ctx context.Context, instance, targetPath, localPath string) error { return nil }
+
+	applied := false
+	d.applyConfigBundle = func(ctx context.Context, instance, configBundle string) error {
+		applied = strings.TrimSpace(configBundle) != ""
+		return nil
+	}
+
+	err := d.Create(context.Background(), runtime.CreateRequest{
+		WorkspaceID:   "ws-cfg",
+		WorkspaceName: "cfg",
+		ProjectRoot:   t.TempDir(),
+		ConfigBundle:  "QUJD",
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !applied {
+		t.Fatal("expected applyConfigBundle to be called with non-empty bundle")
+	}
+}
+
 func TestCreateFallsBackToDefaultInstanceWhenSeatbeltMountPrepareFails(t *testing.T) {
 	d := NewDriver()
 	oldLookPath := seatbeltLookPath
@@ -205,11 +234,17 @@ func TestBuildSeatbeltBootstrapScriptNoBundleWhenEmpty(t *testing.T) {
 func TestShellOpenDefaultsToWorkspaceMountPath(t *testing.T) {
 	d := NewDriver()
 	root := t.TempDir()
-	if err := d.Create(context.Background(), runtime.CreateRequest{WorkspaceID: "ws-open", WorkspaceName: "alpha", ProjectRoot: root}); err != nil {
-		// bypass external dependencies for this protocol-focused test
-		d.mu.Lock()
-		d.workspaces["ws-open"] = &workspaceState{projectRoot: root, state: "created", instance: "nexus-seatbelt"}
-		d.mu.Unlock()
+	d.mu.Lock()
+	d.workspaces["ws-open"] = &workspaceState{projectRoot: root, state: "created", instance: "nexus-seatbelt"}
+	d.mu.Unlock()
+
+	bootstrapCalls := 0
+	d.bootstrapInstance = func(ctx context.Context, instance, configBundle string) error {
+		bootstrapCalls++
+		if instance != "nexus-seatbelt" {
+			t.Fatalf("expected bootstrap instance nexus-seatbelt, got %q", instance)
+		}
+		return nil
 	}
 
 	called := make(chan struct{}, 1)
@@ -251,6 +286,9 @@ func TestShellOpenDefaultsToWorkspaceMountPath(t *testing.T) {
 	}
 	if gotLocalPath != root {
 		t.Fatalf("expected localPath %q, got %q", root, gotLocalPath)
+	}
+	if bootstrapCalls != 1 {
+		t.Fatalf("expected bootstrap to run once during shell open, got %d", bootstrapCalls)
 	}
 
 	_ = enc.Encode(map[string]any{"id": "2", "type": "shell.close"})
@@ -302,7 +340,7 @@ func TestStartLimaShellSkipsUnavailableCandidatesWhenPreparingWorkspaceMount(t *
 	}
 }
 
-func TestEnsureLimaInstanceRunningCreatesMissingInstance(t *testing.T) {
+func TestEnsureLimaInstanceRunningReturnsErrorForMissingInstance(t *testing.T) {
 	origOutput := limactlOutputFn
 	origCombined := limactlCombinedOutputFn
 	defer func() {
@@ -310,7 +348,6 @@ func TestEnsureLimaInstanceRunningCreatesMissingInstance(t *testing.T) {
 		limactlCombinedOutputFn = origCombined
 	}()
 
-	calledStart := false
 	limactlOutputFn = func(_ context.Context, args ...string) ([]byte, error) {
 		if len(args) == 3 && args[0] == "list" && args[1] == "--json" && args[2] == "nexus-seatbelt" {
 			return []byte("[]"), nil
@@ -318,19 +355,15 @@ func TestEnsureLimaInstanceRunningCreatesMissingInstance(t *testing.T) {
 		return nil, errors.New("unexpected limactl output args")
 	}
 	limactlCombinedOutputFn = func(_ context.Context, args ...string) ([]byte, error) {
-		if len(args) == 5 && args[0] == "start" && args[1] == "--yes" && args[2] == "--name" && args[3] == "nexus-seatbelt" && args[4] == "template:default" {
-			calledStart = true
-			return []byte(""), nil
-		}
 		return nil, errors.New("unexpected limactl start args")
 	}
 
 	err := ensureLimaInstanceRunning(context.Background(), "nexus-seatbelt")
-	if err != nil {
-		t.Fatalf("ensureLimaInstanceRunning: %v", err)
+	if err == nil {
+		t.Fatal("expected ensureLimaInstanceRunning to fail for missing instance")
 	}
-	if !calledStart {
-		t.Fatal("expected limactl start --name nexus-seatbelt to be called")
+	if !strings.Contains(err.Error(), "lima instance nexus-seatbelt is missing") {
+		t.Fatalf("expected missing instance error, got: %v", err)
 	}
 }
 
