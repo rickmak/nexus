@@ -158,17 +158,37 @@ tasks:
       # Kill existing daemon (SIGTERM first, then SIGKILL if port still held)
       - pkill -f nexus-daemon 2>/dev/null || true
       - |
-        for i in $(seq 1 8); do
-          if ! lsof -i :63987 -sTCP:LISTEN >/dev/null 2>&1; then break; fi
-          if [ "$i" = "4" ]; then pkill -9 -f nexus-daemon 2>/dev/null || true; fi
-          sleep 0.5
+        for port in 63987 63997; do
+          for i in $(seq 1 8); do
+            if ! lsof -i :$port -sTCP:LISTEN >/dev/null 2>&1; then break; fi
+            if [ "$i" = "4" ]; then pkill -9 -f nexus-daemon 2>/dev/null || true; fi
+            sleep 0.5
+          done
         done
-      - ./nexus-daemon &
       - |
-        echo -n "Waiting for daemon..."
+        RUN_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nexus/run"
+        mkdir -p "$RUN_DIR"
+        rm -f "$RUN_DIR"/daemon.pid "$RUN_DIR"/daemon-*.pid
+        : > "$RUN_DIR/daemon.log"
+      - |
+        PORT="${NEXUS_DAEMON_PORT:-63987}"
+        TOKEN="${NEXUS_DAEMON_TOKEN:-}"
+        RUN_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/nexus/run"
+        LOG_PATH="$RUN_DIR/daemon.log"
+        if [ -z "$TOKEN" ]; then
+          TOKEN="$(security find-generic-password -s "${NEXUS_DAEMON_TOKEN_KEYCHAIN_SERVICE:-nexus-daemon-token}" -w 2>/dev/null || true)"
+        fi
+        if [ -n "$TOKEN" ]; then
+          ./nexus-daemon --port "$PORT" --token "$TOKEN" >> "$LOG_PATH" 2>&1 &
+        else
+          ./nexus-daemon --port "$PORT" >> "$LOG_PATH" 2>&1 &
+        fi
+      - |
+        PORT="${NEXUS_DAEMON_PORT:-63987}"
+        echo -n "Waiting for daemon on :$PORT..."
         for i in $(seq 1 30); do
-          if curl -sf http://localhost:63987/healthz >/dev/null 2>&1; then
-            echo " ready on :63987"
+          if curl -sf "http://localhost:$PORT/healthz" >/dev/null 2>&1; then
+            echo " ready on :$PORT"
             exit 0
           fi
           sleep 0.5
@@ -182,6 +202,48 @@ tasks:
     desc: Tail the running daemon log
     cmds:
       - tail -f ~/.config/nexus/run/daemon.log
+
+  app:logs:
+    desc: Stream NexusApp + daemon logs from unified logger
+    cmds:
+      - log stream --style compact --predicate 'process == "NexusApp" OR process == "nexus-daemon"'
+
+  app:diag:
+    desc: Quick connectivity diagnostics for Nexus app + daemon
+    cmds:
+      - |
+        set -e
+        echo "== daemon health =="
+        for port in 63987 63997; do
+          code="$(curl -s -o /dev/null -w "%{http_code}" "http://localhost:${port}/healthz" || true)"
+          echo "port ${port}: HTTP ${code:-000}"
+        done
+        echo ""
+        echo "== listening sockets =="
+        lsof -nP -iTCP -sTCP:LISTEN | rg 'nexus-daemon|63987|63997' || true
+        echo ""
+        echo "== recent daemon log =="
+        LOG_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/nexus/run/daemon.log"
+        if [ ! -f "$LOG_PATH" ]; then
+          echo "(daemon log missing)"
+        else
+          awk -v max=40 '
+            { buf[NR % max] = $0 }
+            END {
+              start = (NR > max) ? (NR - max + 1) : 1
+              for (i = start; i <= NR; i++) {
+                printf "%d:%s\n", i, buf[i % max]
+              }
+            }
+          ' "$LOG_PATH"
+        fi
+        echo ""
+        echo "== token checks =="
+        if security find-generic-password -s "${NEXUS_DAEMON_TOKEN_KEYCHAIN_SERVICE:-nexus-daemon-token}" -w >/dev/null 2>&1; then
+          echo "keychain token (${NEXUS_DAEMON_TOKEN_KEYCHAIN_SERVICE:-nexus-daemon-token}): present"
+        else
+          echo "keychain token (${NEXUS_DAEMON_TOKEN_KEYCHAIN_SERVICE:-nexus-daemon-token}): missing"
+        fi
 
   # ── swift / xcode ─────────────────────────────────────────────────────────
 
