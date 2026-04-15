@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -1852,9 +1851,6 @@ func TestHandleWorkspaceCreate_UnsupportedNestedVirtSelectsPlatformBackend(t *te
 		t.Fatalf("unexpected rpc error: %+v", rpcErr)
 	}
 	expectedBackend := "seatbelt"
-	if goruntime.GOOS == "darwin" {
-		expectedBackend = "firecracker"
-	}
 	if result.Workspace.Backend != expectedBackend {
 		t.Fatalf("expected %s backend, got %q", expectedBackend, result.Workspace.Backend)
 	}
@@ -1918,9 +1914,6 @@ func TestHandleWorkspaceCreate_UsesInternalPreflightOverrideWhenEnabled(t *testi
 		t.Fatalf("unexpected rpc error: %+v", rpcErr)
 	}
 	expectedBackend := "seatbelt"
-	if goruntime.GOOS == "darwin" {
-		expectedBackend = "firecracker"
-	}
 	if result.Workspace.Backend != expectedBackend {
 		t.Fatalf("expected %s backend from override, got %q", expectedBackend, result.Workspace.Backend)
 	}
@@ -1947,6 +1940,22 @@ func TestHandleWorkspaceCreate_IgnoresInternalPreflightOverrideWhenDisabled(t *t
 	}
 	if result.Workspace.Backend != "firecracker" {
 		t.Fatalf("expected firecracker backend when override disabled, got %q", result.Workspace.Backend)
+	}
+}
+
+func TestRuntimeLabelForWorkspace_Smoke(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".nexus"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	cfg := `{"version":1,"isolation":{"level":"process","vm":{"mode":"dedicated"}},"internalFeatures":{"processSandbox":true}}`
+	if err := os.WriteFile(filepath.Join(repo, ".nexus", "workspace.json"), []byte(cfg), 0o644); err != nil {
+		t.Fatalf("write workspace.json: %v", err)
+	}
+	ws := &workspacemgr.Workspace{Repo: repo, Backend: "process"}
+	got := runtimeLabelForWorkspace(ws)
+	if !strings.Contains(got, "backend=process") || !strings.Contains(got, "isolation=process") || !strings.Contains(got, "processSandbox=relaxed") {
+		t.Fatalf("unexpected runtime label: %q", got)
 	}
 }
 

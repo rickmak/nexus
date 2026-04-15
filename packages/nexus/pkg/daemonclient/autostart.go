@@ -65,7 +65,7 @@ func PreferredPort() int {
 }
 
 // ProcessWorktreeRoot returns the repository root when .nexus/workspace.json
-// enables process isolation for host-backed dogfooding.
+// configures process isolation.
 func ProcessWorktreeRoot(startPath string) (string, bool) {
 	startPath = strings.TrimSpace(startPath)
 	if startPath == "" {
@@ -80,7 +80,7 @@ func ProcessWorktreeRoot(startPath string) (string, bool) {
 		cfgPath := filepath.Join(current, ".nexus", "workspace.json")
 		if st, err := os.Stat(cfgPath); err == nil && !st.IsDir() {
 			cfg, _, loadErr := config.LoadWorkspaceConfig(current)
-			if loadErr == nil && processSandboxEnabled(cfg) {
+			if loadErr == nil && processIsolationEnabled(cfg) {
 				return canonicalPath(current), true
 			}
 		}
@@ -93,8 +93,8 @@ func ProcessWorktreeRoot(startPath string) (string, bool) {
 	return "", false
 }
 
-func processSandboxEnabled(cfg config.WorkspaceConfig) bool {
-	return cfg.Isolation.Level == "process" && cfg.InternalFeatures.ProcessSandbox
+func processIsolationEnabled(cfg config.WorkspaceConfig) bool {
+	return cfg.Isolation.Level == "process"
 }
 
 // SelectPortForWorktreeRoot chooses a daemon port for the given worktree root.

@@ -58,7 +58,7 @@ func processSandboxEnabledForRepo(repo string) bool {
 	if err != nil {
 		return false
 	}
-	if cfg.Isolation.Level == "process" && cfg.InternalFeatures.ProcessSandbox {
+	if cfg.Isolation.Level == "process" {
 		return true
 	}
 	return false

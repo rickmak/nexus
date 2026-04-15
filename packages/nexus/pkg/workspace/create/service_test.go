@@ -57,3 +57,32 @@ func TestPrepareCreate_UsesProcessBackendWhenWorkspaceConfigEnablesProcessIsolat
 		t.Fatalf("expected process backend, got %q", prepared.Backend)
 	}
 }
+
+func TestPrepareCreate_UsesProcessBackendWhenProcessIsolationIsStrict(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".nexus"), 0o755); err != nil {
+		t.Fatalf("mkdir .nexus: %v", err)
+	}
+	if err := os.WriteFile(
+		filepath.Join(repo, ".nexus", "workspace.json"),
+		[]byte(`{"version":1,"isolation":{"level":"process"},"internalFeatures":{"processSandbox":false}}`),
+		0o644,
+	); err != nil {
+		t.Fatalf("write workspace.json: %v", err)
+	}
+
+	factory := runtime.NewFactory(nil, map[string]runtime.Driver{
+		"process": &stubDriver{backend: "process"},
+	})
+	spec := workspacemgr.CreateSpec{
+		Repo:          repo,
+		WorkspaceName: "nexus",
+	}
+	prepared, rpcErr, _ := PrepareCreate(context.Background(), spec, factory)
+	if rpcErr != nil {
+		t.Fatalf("unexpected rpc error: %v", rpcErr)
+	}
+	if prepared.Backend != "process" {
+		t.Fatalf("expected process backend, got %q", prepared.Backend)
+	}
+}

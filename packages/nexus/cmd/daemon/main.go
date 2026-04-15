@@ -22,7 +22,7 @@ import (
 	"github.com/inizio/nexus/packages/nexus/pkg/daemonclient"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/firecracker"
-	"github.com/inizio/nexus/packages/nexus/pkg/runtime/limafirecracker"
+	"github.com/inizio/nexus/packages/nexus/pkg/runtime/lima"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/process"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/seatbelt"
 	"github.com/inizio/nexus/packages/nexus/pkg/server"
@@ -137,12 +137,11 @@ func runServer(port int, workspaceDir string, token string) error {
 	seatbeltDriver := seatbelt.NewDriver()
 	firecrackerAvailable := probeFirecrackerTooling(exec.LookPath)
 	seatbeltAvailable := firecrackerProbeGOOS == "darwin"
-
 	firecrackerRuntimeDriver := runtime.Driver(firecrackerDriver)
 	if firecrackerProbeGOOS == "darwin" {
-		// On macOS, the firecracker backend alias is implemented through the
-		// Lima-based runtime driver.
-		firecrackerRuntimeDriver = limafirecracker.NewDriver(seatbeltDriver)
+		// On macOS, firecracker backend is hosted through Lima and can switch
+		// pooled/dedicated instances via driver options.
+		firecrackerRuntimeDriver = lima.NewDriver(seatbeltDriver)
 	}
 
 	_, codexErr := exec.LookPath("codex")

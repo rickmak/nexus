@@ -1,6 +1,9 @@
 package runtime
 
-import "testing"
+import (
+	"fmt"
+	"testing"
+)
 
 func TestClassifyFirecrackerPreflight_Statuses(t *testing.T) {
 	t.Run("pass", func(t *testing.T) {
@@ -105,3 +108,51 @@ func TestRunFirecrackerPreflight_OverrideDisabledByOptions(t *testing.T) {
 		t.Fatalf("expected no override marker when disabled, got %q", res.Override)
 	}
 }
+
+func TestDarwinLimaRequiresPoolMode(t *testing.T) {
+	oldGOOS := preflightGOOS
+	oldOut := preflightCommandOutput
+	defer func() {
+		preflightGOOS = oldGOOS
+		preflightCommandOutput = oldOut
+	}()
+
+	t.Run("false on linux", func(t *testing.T) {
+		preflightGOOS = "linux"
+		if DarwinLimaRequiresPoolMode() {
+			t.Fatal("expected false when not darwin")
+		}
+	})
+
+	t.Run("false when hv supported", func(t *testing.T) {
+		preflightGOOS = "darwin"
+		preflightCommandOutput = func(string, ...string) (string, error) {
+			return "1", nil
+		}
+		if DarwinLimaRequiresPoolMode() {
+			t.Fatal("expected false when kern.hv_support is 1")
+		}
+	})
+
+	t.Run("true when hv unsupported", func(t *testing.T) {
+		preflightGOOS = "darwin"
+		preflightCommandOutput = func(string, ...string) (string, error) {
+			return "0", nil
+		}
+		if !DarwinLimaRequiresPoolMode() {
+			t.Fatal("expected true when kern.hv_support is not 1")
+		}
+	})
+
+	t.Run("true when sysctl fails", func(t *testing.T) {
+		preflightGOOS = "darwin"
+		preflightCommandOutput = func(string, ...string) (string, error) {
+			return "", errDarwinTestSysctl
+		}
+		if !DarwinLimaRequiresPoolMode() {
+			t.Fatal("expected true when nested virt cannot be determined")
+		}
+	})
+}
+
+var errDarwinTestSysctl = fmt.Errorf("sysctl failed")

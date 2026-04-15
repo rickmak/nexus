@@ -1,4 +1,4 @@
-package limafirecracker
+package lima
 
 import (
 	"context"
@@ -51,7 +51,7 @@ func TestDriver_Backend(t *testing.T) {
 	}
 }
 
-func TestDriver_CreateInjectsLimaInstance(t *testing.T) {
+func TestDriver_CreateUsesPoolModeByDefault(t *testing.T) {
 	inner := &stubDriver{}
 	d := NewDriver(inner)
 
@@ -59,12 +59,31 @@ func TestDriver_CreateInjectsLimaInstance(t *testing.T) {
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "alpha",
 		ProjectRoot:   "/tmp/repo",
+		Options:       map[string]string{"vm.mode": "pool"},
 	}
 	if err := d.Create(context.Background(), req); err != nil {
 		t.Fatalf("unexpected create error: %v", err)
 	}
 	if got := inner.lastReq.Options["lima.instance"]; got != defaultLimaInstance {
 		t.Fatalf("expected lima.instance %q, got %q", defaultLimaInstance, got)
+	}
+}
+
+func TestDriver_CreateUsesDedicatedInstanceWhenRequested(t *testing.T) {
+	inner := &stubDriver{}
+	d := NewDriver(inner)
+
+	req := runtime.CreateRequest{
+		WorkspaceID:   "ws-prod_42",
+		WorkspaceName: "alpha",
+		ProjectRoot:   "/tmp/repo",
+		Options:       map[string]string{"vm.mode": "dedicated"},
+	}
+	if err := d.Create(context.Background(), req); err != nil {
+		t.Fatalf("unexpected create error: %v", err)
+	}
+	if got := inner.lastReq.Options["lima.instance"]; got != "nexus-ws-prod-42" {
+		t.Fatalf("expected dedicated lima.instance %q, got %q", "nexus-ws-prod-42", got)
 	}
 }
 

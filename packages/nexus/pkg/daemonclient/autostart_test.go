@@ -167,14 +167,14 @@ func TestShouldRestartRunningDaemonWhenStartTimeUnknown(t *testing.T) {
 	}
 }
 
-func TestProcessWorktreeRoot_DetectsEnabledProcessSandboxRepo(t *testing.T) {
+func TestProcessWorktreeRoot_DetectsProcessIsolationRepo(t *testing.T) {
 	repo := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(repo, ".nexus"), 0o755); err != nil {
 		t.Fatalf("mkdir .nexus: %v", err)
 	}
 	if err := os.WriteFile(
 		filepath.Join(repo, ".nexus", "workspace.json"),
-		[]byte(`{"version":1,"isolation":{"level":"process"},"internalFeatures":{"processSandbox":true}}`),
+		[]byte(`{"version":1,"isolation":{"level":"process"},"internalFeatures":{"processSandbox":false}}`),
 		0o644,
 	); err != nil {
 		t.Fatalf("write workspace config: %v", err)
@@ -185,7 +185,7 @@ func TestProcessWorktreeRoot_DetectsEnabledProcessSandboxRepo(t *testing.T) {
 	}
 	gotRoot, ok := ProcessWorktreeRoot(nested)
 	if !ok {
-		t.Fatalf("expected process-sandbox worktree root detection")
+		t.Fatalf("expected process-isolation worktree root detection")
 	}
 	if gotRoot != canonicalPath(repo) {
 		t.Fatalf("expected root %q, got %q", canonicalPath(repo), gotRoot)

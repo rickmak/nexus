@@ -126,7 +126,7 @@ func checkDarwinNestedVirt() PreflightCheck {
 		}
 	}
 
-	if strings.TrimSpace(out) == "1" {
+	if darwinNestedVirtOKFromOutput(out) {
 		return PreflightCheck{Name: "nested_virt", OK: true}
 	}
 
@@ -136,6 +136,28 @@ func checkDarwinNestedVirt() PreflightCheck {
 		Message:     "Hypervisor.framework unavailable (nested virtualization unsupported)",
 		Remediation: "run on a bare-metal macOS host with virtualization enabled",
 	}
+}
+
+func darwinNestedVirtOKFromOutput(out string) bool {
+	return strings.TrimSpace(out) == "1"
+}
+
+func darwinNestedVirtOK() bool {
+	out, err := preflightCommandOutput("sysctl", "-n", "kern.hv_support")
+	if err != nil {
+		return false
+	}
+	return darwinNestedVirtOKFromOutput(out)
+}
+
+// DarwinLimaRequiresPoolMode reports whether the Lima-backed firecracker stack must use the
+// shared pool instance: macOS hosts where nested virtualization (kern.hv_support) is off.
+// In that configuration only the pooled Lima VM is valid; isolation.vm.mode dedicated is ignored.
+func DarwinLimaRequiresPoolMode() bool {
+	if preflightGOOS != "darwin" {
+		return false
+	}
+	return !darwinNestedVirtOK()
 }
 
 func checkLinuxKVM() PreflightCheck {

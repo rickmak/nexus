@@ -44,6 +44,10 @@ type Workspace struct {
 	LineageRootID     string         `json:"lineageRootId,omitempty"`
 	DerivedFromRef    string         `json:"derivedFromRef,omitempty"`
 	Backend           string         `json:"backend,omitempty"`
+	// RuntimeLabel is a short summary of backend, isolation level, and effective
+	// vm/process mode for clients and logs. It is derived from repo workspace.json
+	// and not persisted in node storage.
+	RuntimeLabel string `json:"runtimeLabel,omitempty"`
 	// LineageSnapshotID is the preferred runtime snapshot identifier for
 	// creating descendants of this workspace.
 	LineageSnapshotID string            `json:"lineageSnapshotId,omitempty"`

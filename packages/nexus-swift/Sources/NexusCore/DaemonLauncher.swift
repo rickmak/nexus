@@ -446,7 +446,7 @@ public struct DaemonLauncher {
         while true {
             let workspacePath = dir.appendingPathComponent(".nexus/workspace.json").path
             if fm.fileExists(atPath: workspacePath),
-               workspaceConfigEnablesProcessSandbox(atPath: workspacePath) {
+               workspaceConfigEnablesProcessIsolation(atPath: workspacePath) {
                 return dir.path
             }
             let parent = dir.deletingLastPathComponent()
@@ -456,23 +456,18 @@ public struct DaemonLauncher {
         return nil
     }
 
-    private static func workspaceConfigEnablesProcessSandbox(atPath path: String) -> Bool {
+    private static func workspaceConfigEnablesProcessIsolation(atPath path: String) -> Bool {
         struct WorkspaceConfig: Decodable {
             struct Isolation: Decodable {
                 let level: String?
             }
-            struct InternalFeatures: Decodable {
-                let processSandbox: Bool?
-            }
             let isolation: Isolation?
-            let internalFeatures: InternalFeatures?
         }
         guard let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
               let cfg = try? JSONDecoder().decode(WorkspaceConfig.self, from: data) else {
             return false
         }
         return cfg.isolation?.level == "process"
-            && cfg.internalFeatures?.processSandbox == true
     }
 
     private static func preferredProcessPort(_ canonicalRoot: String) -> Int {
