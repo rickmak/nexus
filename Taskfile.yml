@@ -5,14 +5,14 @@ version: '3'
 # Usage:  task <target>
 #
 # Quick start:
-#   task app:open      – stage Resources (fallback tools + locally built daemon), xcodebuild, open app
+#   task app:open      – embed local daemon, (optional) download tools, xcodebuild, open app
 #   task dev           – restart standalone nexus-daemon (CLI), then app:open
 #   task test:terminal – run terminal XCUITests (daemon must be running)
 #   task test          – run all XCUITests
 #
-# Embedded daemon: always from `swift:bundle-daemon` (this repo’s Go build). Release
-# binaries from bundle-tools go only under Resources/tools/; they must not overwrite
-# Resources/nexus-daemon.
+# Embedded daemon: always from `swift:bundle-daemon` (this repo’s Go build).
+# Release downloads (`swift:bundle-tools`) run only when NEXUS_BUNDLE_TOOLS=1 so local
+# iteration does not hit GitHub on every build. Tools fall back to PATH at runtime.
 # ---------------------------------------------------------------------------
 
 vars:
@@ -154,9 +154,16 @@ tasks:
         echo "Bundled fallback tools ready in packages/nexus-swift/Resources/tools/"
 
   swift:prepare-resources:
-    desc: Download fallback tools, then embed the locally built daemon (sequential; avoids release overwrite)
+    desc: Embed locally built daemon; download Resources/tools only when NEXUS_BUNDLE_TOOLS=1
     cmds:
-      - task: swift:bundle-tools
+      - |
+        set -euo pipefail
+        if [ "${NEXUS_BUNDLE_TOOLS:-}" = "1" ]; then
+          task swift:bundle-tools
+        else
+          echo "Skipping swift:bundle-tools (set NEXUS_BUNDLE_TOOLS=1 to download lima/mutagen release fallbacks)"
+          mkdir -p packages/nexus-swift/Resources/tools
+        fi
       - task: swift:bundle-daemon
 
   app:codesign:

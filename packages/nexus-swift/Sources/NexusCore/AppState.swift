@@ -145,10 +145,16 @@ public final class AppState: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(4))
                 guard !Task.isCancelled, let self else { break }
-                if self.connectionState != .starting,
-                   case .outdated = self.daemonStatus {} else {
-                    await self.load()
+                // Never poll `load()` during initial handshake — it stacks concurrent RPCs,
+                // duplicates WebSocket work, and grows memory while the UI stays on "Starting…".
+                if self.connectionState == .starting || self.connectionState == .connecting {
+                    continue
                 }
+                // Avoid hammering JSON-RPC when the daemon is too old (handled by restart/upgrade flows).
+                if case .outdated = self.daemonStatus {
+                    continue
+                }
+                await self.load()
             }
         }
     }

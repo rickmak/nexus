@@ -15,6 +15,13 @@ import Foundation
 public final class WebSocketDaemonClient: DaemonClient, @unchecked Sendable {
 
     private let daemonURL: URL
+    /// Single session for all WebSocket connections — `URLSession()` per `connect()` leaked memory when
+    /// refresh/load stacked during handshake (see AppState refresh loop).
+    private let webSocketSession: URLSession = {
+        let cfg = URLSessionConfiguration.default
+        cfg.timeoutIntervalForRequest = 90
+        return URLSession(configuration: cfg)
+    }()
     private var task: URLSessionWebSocketTask?
     private var pending: [String: CheckedContinuation<Any, Error>] = [:]
     private var requestCounter = 0
@@ -157,8 +164,7 @@ public final class WebSocketDaemonClient: DaemonClient, @unchecked Sendable {
         if !token.isEmpty {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
-        let session = URLSession(configuration: .default)
-        task = session.webSocketTask(with: request)
+        task = webSocketSession.webSocketTask(with: request)
         task?.resume()
         receiveLoop()
     }
