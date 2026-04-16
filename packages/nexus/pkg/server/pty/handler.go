@@ -17,7 +17,7 @@ import (
 	"github.com/inizio/nexus/packages/nexus/pkg/authrelay"
 	rpckit "github.com/inizio/nexus/packages/nexus/pkg/rpcerrors"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
-	runtimeprocess "github.com/inizio/nexus/packages/nexus/pkg/runtime/process"
+	runtimeprocess "github.com/inizio/nexus/packages/nexus/pkg/runtime/sandbox"
 	"github.com/inizio/nexus/packages/nexus/pkg/safeenv"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspace"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspacemgr"

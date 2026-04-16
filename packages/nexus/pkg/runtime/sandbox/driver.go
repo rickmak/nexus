@@ -1,4 +1,4 @@
-package process
+package sandbox
 
 import (
 	"context"
@@ -15,9 +15,9 @@ type Driver struct {
 }
 
 type workspaceState struct {
-	id        string
-	projectID string
-	state     string
+	id          string
+	projectRoot string
+	state       string
 }
 
 var _ runtime.Driver = (*Driver)(nil)
@@ -41,9 +41,9 @@ func (d *Driver) Create(_ context.Context, req runtime.CreateRequest) error {
 	}
 
 	d.workspaces[req.WorkspaceID] = &workspaceState{
-		id:        req.WorkspaceID,
-		projectID: req.ProjectRoot,
-		state:     "created",
+		id:          req.WorkspaceID,
+		projectRoot: req.ProjectRoot,
+		state:       "created",
 	}
 	return nil
 }
@@ -101,20 +101,29 @@ func (d *Driver) Resume(_ context.Context, workspaceID string) error {
 
 func (d *Driver) Fork(_ context.Context, workspaceID, childWorkspaceID string) error {
 	d.mu.Lock()
-	defer d.mu.Unlock()
-
 	parent, exists := d.workspaces[workspaceID]
 	if !exists {
+		d.mu.Unlock()
 		return fmt.Errorf("parent workspace %s not found", workspaceID)
 	}
 	if _, exists := d.workspaces[childWorkspaceID]; exists {
+		d.mu.Unlock()
 		return fmt.Errorf("child workspace %s already exists", childWorkspaceID)
 	}
+	parentRoot := parent.projectRoot
+	d.mu.Unlock()
 
+	childRoot := parentRoot + "-fork-" + childWorkspaceID
+	if err := ForkWorktree(parentRoot, childRoot); err != nil {
+		return fmt.Errorf("fork workspace %s -> %s: %w", workspaceID, childWorkspaceID, err)
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
 	d.workspaces[childWorkspaceID] = &workspaceState{
-		id:        childWorkspaceID,
-		projectID: parent.projectID,
-		state:     "created",
+		id:          childWorkspaceID,
+		projectRoot: childRoot,
+		state:       "created",
 	}
 	return nil
 }

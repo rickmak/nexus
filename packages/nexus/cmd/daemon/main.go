@@ -23,7 +23,7 @@ import (
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/firecracker"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/lima"
-	"github.com/inizio/nexus/packages/nexus/pkg/runtime/process"
+	"github.com/inizio/nexus/packages/nexus/pkg/runtime/sandbox"
 	"github.com/inizio/nexus/packages/nexus/pkg/server"
 	"github.com/inizio/nexus/packages/nexus/pkg/spotlight"
 )
@@ -160,7 +160,7 @@ func runServer(port int, workspaceDir string, token string) error {
 
 	drivers := map[string]runtime.Driver{
 		"firecracker": firecrackerRuntimeDriver,
-		"process":     process.NewDriver(),
+		"process":     sandbox.NewDriver(),
 	}
 
 	factory := runtime.NewFactory(capabilities, drivers)
