@@ -166,6 +166,27 @@ func (m *Manager) Spawn(ctx context.Context, spec SpawnSpec) (*Instance, error) 
 		return nil, fmt.Errorf("workspace already exists: %s", spec.WorkspaceID)
 	}
 
+	// Snapshot restore path (experiment-gated)
+	if os.Getenv("NEXUS_FIRECRACKER_SNAPSHOT") == "1" {
+		snap, err := m.ensureBaseSnapshot(ctx, m.config.KernelPath, m.config.RootFSPath)
+		if err != nil {
+			return nil, fmt.Errorf("ensure base snapshot: %w", err)
+		}
+		if _, statErr := os.Stat(snap.vmstatePath); statErr == nil {
+			m.mu.Unlock()
+			inst, restoreErr := m.restoreFromSnapshot(ctx, spec, snap)
+			m.mu.Lock()
+			if restoreErr == nil {
+				return inst, nil
+			}
+			log.Printf("[firecracker] snapshot restore failed, falling back to cold boot: %v", restoreErr)
+			key := snapshotCacheKey(m.config.KernelPath, m.config.RootFSPath)
+			m.snapshotMu.Lock()
+			delete(m.snapshotCache, key)
+			m.snapshotMu.Unlock()
+		}
+	}
+
 	workDir := filepath.Join(m.config.WorkDirRoot, spec.WorkspaceID)
 
 	var projectSizeBytes int64
@@ -344,6 +365,25 @@ func (m *Manager) Spawn(ctx context.Context, spec SpawnSpec) (*Instance, error) 
 		teardownTAP(tap, subnetCIDR)
 		m.cleanup(workDir, cmd.Process)
 		return nil, fmt.Errorf("failed to start instance: %w", err)
+	}
+
+	// After successful cold boot, create base snapshot if experiment gate is active
+	if os.Getenv("NEXUS_FIRECRACKER_SNAPSHOT") == "1" {
+		snap, _ := m.ensureBaseSnapshot(ctx, m.config.KernelPath, m.config.RootFSPath)
+		if snap != nil {
+			if _, statErr := os.Stat(snap.vmstatePath); os.IsNotExist(statErr) {
+				if pauseErr := client.PauseVM(ctx); pauseErr == nil {
+					if snapErr := client.CreateSnapshot(ctx, snap.vmstatePath, snap.memFilePath); snapErr != nil {
+						log.Printf("[firecracker] WARNING: failed to create base snapshot: %v", snapErr)
+					}
+					if resumeErr := client.ResumeVM(ctx); resumeErr != nil {
+						log.Printf("[firecracker] WARNING: failed to resume after snapshot: %v", resumeErr)
+					}
+				} else {
+					log.Printf("[firecracker] WARNING: failed to pause for base snapshot: %v", pauseErr)
+				}
+			}
+		}
 	}
 
 	inst := &Instance{
