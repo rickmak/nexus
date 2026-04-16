@@ -11,7 +11,7 @@ type stubDriver struct {
 	lastReq runtime.CreateRequest
 }
 
-func (d *stubDriver) Backend() string { return "firecracker" }
+func (d *stubDriver) Backend() string { return "lima" }
 func (d *stubDriver) Create(_ context.Context, req runtime.CreateRequest) error {
 	d.lastReq = req
 	return nil
@@ -46,8 +46,15 @@ func (d *checkpointStubDriver) CheckpointFork(_ context.Context, workspaceID, ch
 
 func TestDriver_Backend(t *testing.T) {
 	d := NewDriver(&stubDriver{})
-	if got := d.Backend(); got != "firecracker" {
-		t.Fatalf("expected firecracker backend, got %q", got)
+	if got := d.Backend(); got != "lima" {
+		t.Fatalf("expected lima backend, got %q", got)
+	}
+}
+
+func TestLimaDriverBackendName(t *testing.T) {
+	d := &Driver{}
+	if got := d.Backend(); got != "lima" {
+		t.Fatalf("expected backend 'lima', got %q", got)
 	}
 }
 

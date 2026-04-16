@@ -75,9 +75,8 @@ func NewGuestDriver() *GuestDriver {
 	}
 }
 
-// Backend reports firecracker semantics: this driver implements the Lima-backed guest
-// runtime and is only registered as the inner implementation of the firecracker backend.
-func (d *GuestDriver) Backend() string { return "firecracker" }
+// Backend reports lima as the backend name for this driver.
+func (d *GuestDriver) Backend() string { return "lima" }
 
 func (d *GuestDriver) Create(ctx context.Context, req runtime.CreateRequest) error {
 	if strings.TrimSpace(req.WorkspaceID) == "" {

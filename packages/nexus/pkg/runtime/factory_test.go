@@ -31,21 +31,21 @@ func TestSelectDriverLinuxDoesNotFallbackToProcessWhenFirecrackerUnavailable(t *
 	}
 }
 
-func TestSelectDriverDarwinPrefersFirecrackerWhenPreflightPasses(t *testing.T) {
+func TestSelectDriverDarwinPrefersLimaWhenPreflightPasses(t *testing.T) {
 	f := NewFactory([]Capability{
 		{Name: "runtime.darwin", Available: true},
-		{Name: "runtime.firecracker", Available: true},
+		{Name: "runtime.lima", Available: true},
 		{Name: "runtime.process", Available: true},
 	}, map[string]Driver{
-		"firecracker": &stubDriver{backend: "firecracker"},
-		"process":     &stubDriver{backend: "process"},
+		"lima":    &stubDriver{backend: "lima"},
+		"process": &stubDriver{backend: "process"},
 	})
 
 	d, err := f.SelectDriver([]string{"darwin"}, nil)
 	if err != nil {
 		t.Fatalf("select darwin driver: %v", err)
 	}
-	if d.Backend() != "firecracker" {
-		t.Fatalf("expected firecracker backend, got %q", d.Backend())
+	if d.Backend() != "lima" {
+		t.Fatalf("expected lima backend, got %q", d.Backend())
 	}
 }

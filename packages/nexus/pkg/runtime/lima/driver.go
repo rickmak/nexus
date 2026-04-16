@@ -34,7 +34,7 @@ func NewDriverWithCheckpoint(inner runtime.Driver, checkpoint runtime.ForkSnapsh
 	return &Driver{inner: inner, checkpointDelegate: checkpoint}
 }
 
-func (d *Driver) Backend() string { return "firecracker" }
+func (d *Driver) Backend() string { return "lima" }
 
 func (d *Driver) GuestWorkdir(workspaceID string) string {
 	if d.inner == nil {

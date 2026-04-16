@@ -161,7 +161,7 @@ func HandleWorkspaceCreateWithProjects(ctx context.Context, req WorkspaceCreateP
 		return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("workspace create failed: %v", err)}
 	}
 	usedCheckpointSnapshot := false
-	if !req.Fresh && strings.TrimSpace(sourceHint.SourceWorkspaceID) != "" && strings.EqualFold(strings.TrimSpace(ws.Backend), "firecracker") {
+	if !req.Fresh && strings.TrimSpace(sourceHint.SourceWorkspaceID) != "" && isVMIsolationBackend(ws.Backend) {
 		snapshotID, usedCheckpoint, snapshotErr := checkpointLatestFirecrackerSnapshotForCreate(ctx, mgr, factory, sourceHint.SourceWorkspaceID, ws.ID)
 		if snapshotErr != nil {
 			_ = mgr.Remove(ws.ID)
@@ -268,10 +268,17 @@ func shouldCopyDirtyStateForCreate(ws *workspacemgr.Workspace, usedCheckpointSna
 	if ws == nil {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(ws.Backend), "firecracker") {
+	if isVMIsolationBackend(ws.Backend) {
 		return !usedCheckpointSnapshot
 	}
 	return true
+}
+
+// isVMIsolationBackend returns true if the backend name represents a VM isolation backend
+// ("lima" on macOS, "firecracker" on Linux).
+func isVMIsolationBackend(backend string) bool {
+	b := strings.ToLower(strings.TrimSpace(backend))
+	return b == "firecracker" || b == "lima"
 }
 
 func resolveCreateSpec(req WorkspaceCreateParams, projMgr *projectmgr.Manager) (workspacemgr.CreateSpec, error) {
@@ -966,13 +973,13 @@ func checkpointLatestFirecrackerSnapshotForCreate(ctx context.Context, mgr *work
 		return "", false, fmt.Errorf(rpcErr.Message)
 	}
 
-	driver, err := selectDriverForWorkspaceBackend(factory, "firecracker")
+	driver, err := selectDriverForWorkspaceBackend(factory, sourceWS.Backend)
 	if err != nil {
 		return "", false, err
 	}
 	snapshotter, ok := driver.(runtime.ForkSnapshotter)
 	if !ok {
-		// Some environments (e.g. macOS shim backends) expose firecracker semantics
+		// Some environments (e.g. macOS shim backends) expose VM isolation semantics
 		// without native checkpoint support; caller should fall back to worktree sync.
 		return "", false, nil
 	}
@@ -1002,7 +1009,7 @@ func ensureLocalRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace
 	options := map[string]string{
 		"host_cli_sync": "true",
 	}
-	if strings.EqualFold(strings.TrimSpace(ws.Backend), "firecracker") {
+	if isVMIsolationBackend(ws.Backend) {
 		options["vm.mode"] = vmModeForRepo(strings.TrimSpace(ws.Repo))
 	}
 	if strings.TrimSpace(ws.LineageSnapshotID) != "" {
@@ -1124,8 +1131,13 @@ func preferredLineageSnapshotForCreate(mgr *workspacemgr.Manager, target *worksp
 		if strings.TrimSpace(candidate.RepoID) != targetRepoID {
 			continue
 		}
-		if strings.TrimSpace(candidate.Backend) != targetBackend {
-			continue
+		candidateBackend := strings.TrimSpace(candidate.Backend)
+		if candidateBackend != targetBackend {
+			// Allow cross-backend lineage snapshots between VM isolation backends
+			// (e.g. "firecracker" snapshots are compatible with "lima" workspaces).
+			if !(isVMIsolationBackend(candidateBackend) && isVMIsolationBackend(targetBackend)) {
+				continue
+			}
 		}
 		if strings.TrimSpace(candidate.LineageSnapshotID) == "" {
 			continue
