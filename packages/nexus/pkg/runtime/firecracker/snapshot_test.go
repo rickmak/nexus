@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestProbeReflink_DetectsFilesystem(t *testing.T) {
@@ -218,5 +219,76 @@ func TestEnsureBaseSnapshot_CachesOnFirstCall(t *testing.T) {
 	// No API calls should have been made
 	if len(mock.putCalls) > 0 {
 		t.Fatalf("expected no API calls for cached snapshot, got %v", mock.putCalls)
+	}
+}
+
+func TestRestoreFromSnapshot_CopiesAndLaunchesVM(t *testing.T) {
+	nc := installTestNetworkRunner(t)
+	installWorkspaceImageBuilder(t)
+	cfg := testManagerConfig(t)
+	mgr := newManager(cfg)
+	mgr.reflinkAvailable = false
+
+	// Create fake snapshot files
+	snapDir := filepath.Join(cfg.WorkDirRoot, ".snapshots", "base-testkey")
+	if err := os.MkdirAll(snapDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	vmSnap := filepath.Join(snapDir, "vm.snap")
+	memFile := filepath.Join(snapDir, "mem.file")
+	rootfsOverlay := filepath.Join(snapDir, "rootfs.ext4")
+	if err := os.WriteFile(vmSnap, []byte("vmstate"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(memFile, []byte("memory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rootfsOverlay, []byte("rootfs"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Use cfg.RootFSPath as rootfs source
+	snap := &baseSnapshot{
+		vmstatePath: vmSnap,
+		memFilePath: memFile,
+		kernelPath:  cfg.KernelPath,
+		rootfsPath:  cfg.RootFSPath,
+	}
+
+	mock := &mockAPIClient{}
+	mgr.apiClientFactory = func(sockPath string) apiClientInterface {
+		return mock
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	spec := SpawnSpec{
+		WorkspaceID: "ws-restored",
+		ProjectRoot: t.TempDir(),
+		MemoryMiB:   512,
+		VCPUs:       1,
+	}
+
+	inst, err := mgr.restoreFromSnapshot(ctx, spec, snap)
+	if err != nil {
+		t.Fatalf("restoreFromSnapshot failed: %v", err)
+	}
+	if inst == nil {
+		t.Fatal("expected non-nil instance")
+	}
+	if inst.WorkspaceID != "ws-restored" {
+		t.Fatalf("expected workspace ID ws-restored, got %q", inst.WorkspaceID)
+	}
+	if inst.Process == nil {
+		t.Fatal("expected process to be set")
+	}
+	if len(nc.calls) == 0 {
+		t.Fatal("expected network setup calls")
+	}
+
+	// cleanup
+	if inst.Process != nil {
+		inst.Process.Kill()
+		inst.Process.Wait()
 	}
 }

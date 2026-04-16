@@ -4,11 +4,13 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 )
 
@@ -142,4 +144,168 @@ func (m *Manager) CheckpointForkSnapshot(ctx context.Context, workspaceID, child
 
 	snapshotID := forkDirName
 	return snapshotID, nil
+}
+
+// restoreFromSnapshot spawns a new Firecracker VM by restoring from a previously
+// created base snapshot. The restored VM uses CoW copies of the snapshot's memory
+// and rootfs files, plus a freshly built workspace image.
+//
+// This method takes m.mu.Lock() internally. Callers holding m.mu must release it
+// before calling this method, then re-acquire after.
+func (m *Manager) restoreFromSnapshot(ctx context.Context, spec SpawnSpec, snap *baseSnapshot) (*Instance, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if _, exists := m.instances[spec.WorkspaceID]; exists {
+		return nil, fmt.Errorf("workspace already exists: %s", spec.WorkspaceID)
+	}
+
+	workDir := filepath.Join(m.config.WorkDirRoot, spec.WorkspaceID)
+
+	size, sizeErr := directorySizeBytes(spec.ProjectRoot)
+	if sizeErr != nil {
+		return nil, fmt.Errorf("compute project size: %w", sizeErr)
+	}
+	const miB = int64(1024 * 1024)
+	neededBytes := workspaceImageSizeBytes(size) + 512*miB
+	if err := checkDiskSpace(m.config.WorkDirRoot, neededBytes); err != nil {
+		return nil, fmt.Errorf("insufficient disk space for workspace: %w", err)
+	}
+
+	if err := os.MkdirAll(workDir, 0o755); err != nil {
+		return nil, fmt.Errorf("failed to create workdir: %w", err)
+	}
+
+	apiSocket := filepath.Join(workDir, "firecracker.sock")
+	vsockPath := filepath.Join(workDir, "vsock.sock")
+	serialLog := filepath.Join(workDir, "firecracker.log")
+	workspaceImagePath := filepath.Join(workDir, "workspace.ext4")
+
+	cid := m.nextCID
+	m.nextCID++
+
+	tap := tapNameForWorkspace(spec.WorkspaceID)
+	mac := guestMAC(cid)
+	hostIP := bridgeGatewayIP
+	subnetCIDR := guestSubnetCIDR
+
+	if err := setupTAP(tap, hostIP, subnetCIDR); err != nil {
+		os.RemoveAll(workDir)
+		return nil, fmt.Errorf("failed to setup tap %s: %w", tap, err)
+	}
+
+	memOverlay := filepath.Join(workDir, "mem.file")
+	if err := m.cowCopy(snap.memFilePath, memOverlay); err != nil {
+		teardownTAP(tap, subnetCIDR)
+		os.RemoveAll(workDir)
+		return nil, fmt.Errorf("cowCopy memory snapshot: %w", err)
+	}
+
+	rootfsOverlay := filepath.Join(workDir, "rootfs.ext4")
+	if err := m.cowCopy(snap.rootfsPath, rootfsOverlay); err != nil {
+		teardownTAP(tap, subnetCIDR)
+		os.RemoveAll(workDir)
+		return nil, fmt.Errorf("cowCopy rootfs: %w", err)
+	}
+
+	if err := workspaceImageBuilderFunc(spec.ProjectRoot, workspaceImagePath); err != nil {
+		teardownTAP(tap, subnetCIDR)
+		os.RemoveAll(workDir)
+		return nil, fmt.Errorf("failed to build workspace image: %w", err)
+	}
+
+	restoreCfg := map[string]any{
+		"load_snapshot": map[string]any{
+			"snapshot_path": snap.vmstatePath,
+			"mem_file_path": memOverlay,
+		},
+		"machine-config": map[string]any{
+			"vcpu_count":   spec.VCPUs,
+			"mem_size_mib": spec.MemoryMiB,
+		},
+		"drives": []map[string]any{
+			{
+				"drive_id":       "rootfs",
+				"path_on_host":   rootfsOverlay,
+				"is_root_device": true,
+				"is_read_only":   false,
+			},
+			{
+				"drive_id":       "workspace",
+				"path_on_host":   workspaceImagePath,
+				"is_root_device": false,
+				"is_read_only":   false,
+			},
+		},
+		"network-interfaces": []map[string]any{
+			{
+				"iface_id":      "eth0",
+				"host_dev_name": tap,
+				"guest_mac":     mac,
+			},
+		},
+		"vsock": map[string]any{
+			"vsock_id":  "agent",
+			"guest_cid": cid,
+			"uds_path":  vsockPath,
+		},
+	}
+
+	cfgBytes, err := json.Marshal(restoreCfg)
+	if err != nil {
+		teardownTAP(tap, subnetCIDR)
+		os.RemoveAll(workDir)
+		return nil, fmt.Errorf("marshal restore config: %w", err)
+	}
+	cfgPath := filepath.Join(workDir, "restore-config.json")
+	if err := os.WriteFile(cfgPath, cfgBytes, 0o600); err != nil {
+		teardownTAP(tap, subnetCIDR)
+		os.RemoveAll(workDir)
+		return nil, fmt.Errorf("write restore config: %w", err)
+	}
+
+	cmd := exec.Command(
+		m.config.FirecrackerBin,
+		"--api-sock", apiSocket,
+		"--id", spec.WorkspaceID,
+		"--config-file", cfgPath,
+	)
+	cmd.Dir = workDir
+	logFile, err := os.OpenFile(serialLog, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		teardownTAP(tap, subnetCIDR)
+		os.RemoveAll(workDir)
+		return nil, fmt.Errorf("failed to create firecracker log file: %w", err)
+	}
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
+
+	if err := cmd.Start(); err != nil {
+		_ = logFile.Close()
+		teardownTAP(tap, subnetCIDR)
+		os.RemoveAll(workDir)
+		return nil, fmt.Errorf("failed to start firecracker (restore): %w", err)
+	}
+	_ = logFile.Close()
+
+	pidPath := filepath.Join(workDir, "firecracker.pid")
+	_ = os.WriteFile(pidPath, []byte(strconv.Itoa(cmd.Process.Pid)), 0o600)
+
+	inst := &Instance{
+		WorkspaceID:    spec.WorkspaceID,
+		WorkDir:        workDir,
+		WorkspaceImage: workspaceImagePath,
+		APISocket:      apiSocket,
+		VSockPath:      vsockPath,
+		SerialLog:      serialLog,
+		CID:            cid,
+		Process:        cmd.Process,
+		TAPName:        tap,
+		GuestIP:        "",
+		HostIP:         hostIP,
+	}
+
+	m.instances[spec.WorkspaceID] = inst
+	log.Printf("[firecracker] restored workspace %s from snapshot", spec.WorkspaceID)
+	return inst, nil
 }
