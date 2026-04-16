@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"testing"
 
@@ -446,7 +447,7 @@ func TestHandleWorkspaceCreateWithProjects_CopiesDirtyStateFromSourceWorkspace(t
 		Ref:           "main",
 		WorkspaceName: "base",
 		AgentProfile:  "default",
-		Backend:       "seatbelt",
+		Backend:       "firecracker",
 	})
 	if err != nil {
 		t.Fatalf("create source ws: %v", err)
@@ -1836,11 +1837,11 @@ func TestHandleWorkspaceCreate_UnsupportedNestedVirtSelectsPlatformBackend(t *te
 
 	factory := runtime.NewFactory(
 		[]runtime.Capability{
-			{Name: "runtime.seatbelt", Available: true},
+			{Name: "runtime.process", Available: true},
 			{Name: "runtime.firecracker", Available: true},
 		},
 		map[string]runtime.Driver{
-			"seatbelt":    &mockDriver{backend: "seatbelt"},
+			"process":     &mockDriver{backend: "process"},
 			"firecracker": &mockDriver{backend: "firecracker"},
 		},
 	)
@@ -1850,7 +1851,10 @@ func TestHandleWorkspaceCreate_UnsupportedNestedVirtSelectsPlatformBackend(t *te
 	if rpcErr != nil {
 		t.Fatalf("unexpected rpc error: %+v", rpcErr)
 	}
-	expectedBackend := "seatbelt"
+	expectedBackend := "process"
+	if goruntime.GOOS == "darwin" {
+		expectedBackend = "firecracker"
+	}
 	if result.Workspace.Backend != expectedBackend {
 		t.Fatalf("expected %s backend, got %q", expectedBackend, result.Workspace.Backend)
 	}
@@ -1899,11 +1903,11 @@ func TestHandleWorkspaceCreate_UsesInternalPreflightOverrideWhenEnabled(t *testi
 
 	factory := runtime.NewFactory(
 		[]runtime.Capability{
-			{Name: "runtime.seatbelt", Available: true},
+			{Name: "runtime.process", Available: true},
 			{Name: "runtime.firecracker", Available: true},
 		},
 		map[string]runtime.Driver{
-			"seatbelt":    &mockDriver{backend: "seatbelt"},
+			"process":     &mockDriver{backend: "process"},
 			"firecracker": &mockDriver{backend: "firecracker"},
 		},
 	)
@@ -1913,7 +1917,10 @@ func TestHandleWorkspaceCreate_UsesInternalPreflightOverrideWhenEnabled(t *testi
 	if rpcErr != nil {
 		t.Fatalf("unexpected rpc error: %+v", rpcErr)
 	}
-	expectedBackend := "seatbelt"
+	expectedBackend := "process"
+	if goruntime.GOOS == "darwin" {
+		expectedBackend = "firecracker"
+	}
 	if result.Workspace.Backend != expectedBackend {
 		t.Fatalf("expected %s backend from override, got %q", expectedBackend, result.Workspace.Backend)
 	}

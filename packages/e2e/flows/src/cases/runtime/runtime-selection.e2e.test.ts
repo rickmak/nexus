@@ -52,7 +52,7 @@ describe('runtime selection e2e', () => {
     }
   });
 
-  (process.platform === 'darwin' ? it : it.skip)('unsupported_nested_virt -> seatbelt', async () => {
+  (process.platform === 'darwin' ? it : it.skip)('unsupported_nested_virt -> firecracker', async () => {
     const fixture = await createGitFixture('runtime-selection-nested');
     const session = await withTimeout(startSession({
       forceManaged: true,
@@ -67,7 +67,7 @@ describe('runtime selection e2e', () => {
     let ws: WorkspaceHandle | null = null;
     try {
       const { capabilities: caps } = await session.client.request<NodeInfo>('node.info', {});
-      if (!assertCapabilityOrSkip(caps, 'runtime.seatbelt', 'runtime.seatbelt capability unavailable on this host')) {
+      if (!assertCapabilityOrSkip(caps, 'runtime.firecracker', 'runtime.firecracker capability unavailable on this host')) {
         return;
       }
 
@@ -78,7 +78,7 @@ describe('runtime selection e2e', () => {
           agentProfile: 'default',
         }), 'workspace.create(unsupported_nested_virt)');
       } catch (error) {
-        if (onWorkspaceCreateRuntimeError(error, 'seatbelt runtime path unavailable in this environment')) {
+        if (onWorkspaceCreateRuntimeError(error, 'firecracker runtime path unavailable in this environment')) {
           return;
         }
         throw error;
@@ -86,7 +86,7 @@ describe('runtime selection e2e', () => {
 
       const rows = await session.client.workspaces.list();
       const created = rows.find((row) => row.id === ws?.id);
-      expect(created?.backend).toBe('seatbelt');
+      expect(created?.backend).toBe('firecracker');
     } finally {
       if (ws) {
         await session.client.workspaces.remove(ws.id);

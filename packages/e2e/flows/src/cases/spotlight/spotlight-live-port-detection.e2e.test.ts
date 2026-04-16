@@ -73,7 +73,7 @@ describe('spotlight live port detection e2e', () => {
       const { capabilities: caps } = await session.client.request<NodeInfo>('node.info', {});
       
       const hasTunnel = caps.some(c => c.name === 'spotlight.tunnel' && c.available);
-      const hasSeatbelt = caps.some(c => c.name === 'runtime.seatbelt' && c.available);
+      const hasFirecrackerRuntime = caps.some(c => c.name === 'runtime.firecracker' && c.available);
       
       if (!hasTunnel) {
         skipTest('spotlight.tunnel capability unavailable on this daemon');
@@ -101,12 +101,12 @@ describe('spotlight live port detection e2e', () => {
       expect(list.forwards).toBeDefined();
       expect(Array.isArray(list.forwards)).toBe(true);
       
-      if (!hasSeatbelt && e2eStrictRuntime()) {
-        throw new Error('E2E strict: runtime.seatbelt capability required for live port detection');
+      if (!hasFirecrackerRuntime && e2eStrictRuntime()) {
+        throw new Error('E2E strict: runtime.firecracker capability required for live port detection');
       }
       
-      if (!hasSeatbelt) {
-        skipTest('runtime.seatbelt unavailable - live port detection disabled');
+      if (!hasFirecrackerRuntime) {
+        skipTest('runtime.firecracker unavailable - live port detection disabled');
       }
     } finally {
       if (workspaceId !== '') {

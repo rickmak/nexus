@@ -78,9 +78,7 @@ func (f *Factory) expandRuntimeRequirement(raw string) []string {
 	case "linux":
 		return []string{"firecracker"}
 	case "darwin":
-		return []string{"firecracker", "seatbelt"}
-	case "seatbelt":
-		return []string{"seatbelt"}
+		return []string{"firecracker", "process"}
 	case "process":
 		return []string{"process"}
 	case "firecracker":

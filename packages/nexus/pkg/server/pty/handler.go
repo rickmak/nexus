@@ -262,7 +262,7 @@ func HandleOpen(deps *Deps, conn Conn, params json.RawMessage, ws *workspace.Wor
 	}
 
 	log.Printf("[pty.open] workspace=%s name=%s backend=%s localWorktree=%s root=%s", wsRecord.ID, wsRecord.WorkspaceName, wsRecord.Backend, wsRecord.LocalWorktreePath, wsRecord.RootPath)
-	if wsRecord.Backend == "firecracker" || wsRecord.Backend == "seatbelt" {
+	if wsRecord.Backend == "firecracker" {
 		return handleFirecrackerPTYOpen(deps, conn, p, wsRecord, relayEnv)
 	}
 
@@ -347,7 +347,7 @@ func handleFirecrackerPTYOpen(deps *Deps, conn Conn, p OpenParams, wsRecord *wor
 	if backend == "" {
 		backend = "firecracker"
 	}
-	if requestedBackend == "firecracker" || requestedBackend == "seatbelt" {
+	if requestedBackend == "firecracker" {
 		if driverAny, ok := deps.RuntimeFactory.DriverForBackend(requestedBackend); ok {
 			reported := strings.TrimSpace(driverAny.Backend())
 			log.Printf("[pty.open] %s driver type=%T reported-backend=%q", requestedBackend, driverAny, reported)

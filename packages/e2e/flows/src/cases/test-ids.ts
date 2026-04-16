@@ -1,6 +1,6 @@
 export const runtimeSelectionCaseIds = [
   'runtime-selection/pass-firecracker',
-  'runtime-selection/unsupported-nested-virt-seatbelt',
+  'runtime-selection/unsupported-nested-virt-firecracker',
   'runtime-selection/hard-fail-create-fails',
   'runtime-selection/installable-missing-setup-fails',
 ] as const;

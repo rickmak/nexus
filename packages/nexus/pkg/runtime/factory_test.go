@@ -17,13 +17,13 @@ func (d *stubDriver) Resume(_ context.Context, _ string) error        { return n
 func (d *stubDriver) Fork(_ context.Context, _, _ string) error       { return nil }
 func (d *stubDriver) Destroy(_ context.Context, _ string) error       { return nil }
 
-func TestSelectDriverLinuxDoesNotFallbackToSeatbelt(t *testing.T) {
+func TestSelectDriverLinuxDoesNotFallbackToProcessWhenFirecrackerUnavailable(t *testing.T) {
 	f := NewFactory([]Capability{
 		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: false},
-		{Name: "runtime.seatbelt", Available: true},
+		{Name: "runtime.process", Available: true},
 	}, map[string]Driver{
-		"seatbelt": &stubDriver{backend: "seatbelt"},
+		"process": &stubDriver{backend: "process"},
 	})
 
 	if _, err := f.SelectDriver([]string{"linux"}, nil); err == nil {
@@ -35,10 +35,10 @@ func TestSelectDriverDarwinPrefersFirecrackerWhenPreflightPasses(t *testing.T) {
 	f := NewFactory([]Capability{
 		{Name: "runtime.darwin", Available: true},
 		{Name: "runtime.firecracker", Available: true},
-		{Name: "runtime.seatbelt", Available: true},
+		{Name: "runtime.process", Available: true},
 	}, map[string]Driver{
 		"firecracker": &stubDriver{backend: "firecracker"},
-		"seatbelt":    &stubDriver{backend: "seatbelt"},
+		"process":     &stubDriver{backend: "process"},
 	})
 
 	d, err := f.SelectDriver([]string{"darwin"}, nil)

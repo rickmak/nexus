@@ -11,7 +11,7 @@ type stubDriver struct {
 	lastReq runtime.CreateRequest
 }
 
-func (d *stubDriver) Backend() string { return "seatbelt" }
+func (d *stubDriver) Backend() string { return "firecracker" }
 func (d *stubDriver) Create(_ context.Context, req runtime.CreateRequest) error {
 	d.lastReq = req
 	return nil

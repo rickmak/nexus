@@ -66,7 +66,9 @@ func NewDriver() *Driver {
 	}
 }
 
-func (d *Driver) Backend() string { return "seatbelt" }
+// Backend reports firecracker semantics: this driver implements the Lima-backed guest
+// runtime and is only registered as the inner implementation of the firecracker backend.
+func (d *Driver) Backend() string { return "firecracker" }
 
 func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 	if strings.TrimSpace(req.WorkspaceID) == "" {
@@ -79,7 +81,7 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 		return fmt.Errorf("project root not accessible: %w", err)
 	}
 	if _, err := seatbeltLookPath("limactl"); err != nil {
-		return fmt.Errorf("seatbelt runtime requires limactl for isolated guest")
+		return fmt.Errorf("lima guest runtime requires limactl for isolated guest")
 	}
 	if snapshotID := strings.TrimSpace(req.Options["lineage_snapshot_id"]); snapshotID != "" {
 		if err := d.restoreLineageSnapshot(snapshotID, req.ProjectRoot); err != nil {

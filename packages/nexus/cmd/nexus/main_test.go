@@ -1883,7 +1883,7 @@ func TestSelectRuntimeBackendLinuxRequirementPrefersFirecrackerOnDarwin(t *testi
 	t.Cleanup(func() { firecrackerHostGOOS = originalGOOS })
 	firecrackerHostGOOS = "darwin"
 
-	want := "seatbelt"
+	want := "process"
 	if _, err := exec.LookPath("limactl"); err == nil {
 		want = "firecracker"
 	}
@@ -2135,8 +2135,8 @@ func TestSelectRuntimeBackend(t *testing.T) {
 	if got := selectRuntimeBackend([]string{"firecracker"}); got != "firecracker" {
 		t.Fatalf("expected firecracker->firecracker, got %q", got)
 	}
-	if got := selectRuntimeBackend([]string{"seatbelt"}); got != "seatbelt" {
-		t.Fatalf("expected seatbelt->seatbelt, got %q", got)
+	if got := selectRuntimeBackend([]string{"process"}); got != "process" {
+		t.Fatalf("expected process->process, got %q", got)
 	}
 }
 

@@ -28,6 +28,6 @@ After a git worktree is created for implementation, immediately urge creation of
 bash skills/nexus/handoff/scripts/create_workspace_handoff.sh \
   --path "<optional: local-repo-path, default .>" \
   --objective "<implementation-objective>" \
-  --backend "<optional: firecracker|seatbelt>"
+  --backend "<optional: firecracker|process>"
 ```
 

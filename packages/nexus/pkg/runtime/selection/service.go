@@ -206,10 +206,10 @@ func SelectBackend(ctx context.Context, repo string, requiredBackends []string, 
 		selectedBackend = "firecracker"
 	case runtime.PreflightUnsupportedNested:
 		if runtimeSetupGOOS == "darwin" {
-			// On macOS without nested virtualization support, fall back to seatbelt.
-			selectedBackend = "seatbelt"
+			// Host nested virt is unavailable, but Lima-backed firecracker (pool) still applies.
+			selectedBackend = "firecracker"
 		} else {
-			selectedBackend = "seatbelt"
+			selectedBackend = "process"
 		}
 	default:
 		return "", runtimePreflightFailure(preflight, nil)

@@ -134,14 +134,13 @@ func runServer(port int, workspaceDir string, token string) error {
 
 	// Create runtime drivers.
 	firecrackerDriver := firecracker.NewDriver(runner, firecracker.WithManager(fcManager))
-	seatbeltDriver := seatbelt.NewDriver()
+	limaGuestDriver := seatbelt.NewDriver()
 	firecrackerAvailable := probeFirecrackerTooling(exec.LookPath)
-	seatbeltAvailable := firecrackerProbeGOOS == "darwin"
 	firecrackerRuntimeDriver := runtime.Driver(firecrackerDriver)
 	if firecrackerProbeGOOS == "darwin" {
 		// On macOS, firecracker backend is hosted through Lima and can switch
 		// pooled/dedicated instances via driver options.
-		firecrackerRuntimeDriver = lima.NewDriver(seatbeltDriver)
+		firecrackerRuntimeDriver = lima.NewDriver(limaGuestDriver)
 	}
 
 	_, codexErr := exec.LookPath("codex")
@@ -152,7 +151,6 @@ func runServer(port int, workspaceDir string, token string) error {
 
 	capabilities := []runtime.Capability{
 		{Name: "runtime.firecracker", Available: firecrackerAvailable},
-		{Name: "runtime.seatbelt", Available: seatbeltAvailable},
 		{Name: "runtime.process", Available: true},
 		{Name: "runtime.linux", Available: firecrackerAvailable},
 		{Name: "spotlight.tunnel", Available: true},
@@ -163,7 +161,6 @@ func runServer(port int, workspaceDir string, token string) error {
 
 	drivers := map[string]runtime.Driver{
 		"firecracker": firecrackerRuntimeDriver,
-		"seatbelt":    seatbeltDriver,
 		"process":     process.NewDriver(),
 	}
 
@@ -171,7 +168,7 @@ func runServer(port int, workspaceDir string, token string) error {
 	srv.SetRuntimeFactory(factory)
 
 	// Initialize live port monitoring
-	agentConnFn := seatbeltDriver.AgentConn
+	agentConnFn := limaGuestDriver.AgentConn
 	if connector, ok := firecrackerRuntimeDriver.(interface {
 		AgentConn(context.Context, string) (net.Conn, error)
 	}); ok {
