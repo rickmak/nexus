@@ -1,8 +1,5 @@
 export const runtimeSelectionCaseIds = [
-  'runtime-selection/pass-firecracker',
-  'runtime-selection/unsupported-nested-virt-firecracker',
-  'runtime-selection/hard-fail-create-fails',
-  'runtime-selection/installable-missing-setup-fails',
+  'runtime-selection/firecracker-workspace-created',
 ] as const;
 
 export const ptyPersistenceCaseIds = [

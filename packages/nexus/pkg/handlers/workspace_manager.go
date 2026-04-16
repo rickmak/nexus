@@ -1258,9 +1258,6 @@ func runtimeLabelForWorkspace(ws *workspacemgr.Workspace) string {
 }
 
 func vmModeForRepo(repo string) string {
-	if !selection.DarwinHasNestedVirt() {
-		return "pool"
-	}
 	repo = strings.TrimSpace(repo)
 	if repo == "" {
 		return "pool"
