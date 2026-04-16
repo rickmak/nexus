@@ -60,6 +60,11 @@ vendor/
 # Agent/superpowers artifacts (never commit)
 docs/superpowers/
 .agents/
+.agent-git-backup.sh
+skills/
+
+# Task runner checksums (build artifacts)
+.task/
 
 # Nexus collection data (may contain credentials)
 .nexus/collection/data/
