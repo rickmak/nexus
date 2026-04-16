@@ -44,8 +44,7 @@ Process sandbox. No VM. Runs directly on the host.
 
 - macOS: `sandbox-exec` (seatbelt). The workspace `ProjectRoot` is accessed at its host path; `sandbox-exec` restricts syscalls but does not remap paths. The process sees `/workspace` via a symlink or profile-level path binding (not bwrap).
 - Linux: `bwrap` (bubblewrap), `--bind <ProjectRoot> /workspace`. The process sees `/workspace` as the canonical path.
-- Fork on macOS: `clonefile()` via `copyfile(3)` with `COPYFILE_CLONE` — instant CoW on APFS. Falls back to hardlink tree if not on an APFS volume.
-- Fork on Linux: hardlink tree (`cp -al`) — O(file count), no data copied. Files diverge on write via create+rename (standard tool pattern). Not safe for in-place binary mutators; acceptable for dev tooling workloads.
+- Fork: creates a new git worktree (`git worktree add`) from the parent workspace's repository. No filesystem-level clone. The child worktree starts at the same commit as the parent's current HEAD and diverges via normal git operations. This is intentional — the sandbox driver does not provide filesystem-level isolation for fork, only source-tree isolation via git.
 
 ---
 
@@ -139,8 +138,7 @@ Fork creates an independent child workspace whose state starts identical to the 
 | `firecracker/pool` | btrfs subvolume snapshot (within shared VM) | O(1), CoW | btrfs guest data volume |
 | `lima/dedicated` | btrfs subvolume snapshot | O(1), CoW | btrfs guest data volume |
 | `lima/pool` | btrfs subvolume snapshot (within shared VM) | O(1), CoW | btrfs guest data volume |
-| `sandbox` (macOS) | `clonefile()` via `copyfile(3) COPYFILE_CLONE` | O(1), CoW | APFS host volume (falls back to hardlink tree on non-APFS) |
-| `sandbox` (Linux) | hardlink tree (`cp -al`) | O(file count) | Any POSIX FS |
+| `sandbox` | `git worktree add` | Fast (git metadata only) | git repository |
 
 ### btrfs fork operation
 
@@ -181,7 +179,7 @@ Every driver × every user action has a test. Tests assert behavioral contracts.
 | Fork — child starts at parent state | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Fork — parent diverges independently | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Fork — child diverges independently | ✓ | ✓ | ✓ | ✓ | ✓ |
-| Fork — completes in < 2s | ✓ | ✓ | ✓ | ✓ | macOS only |
+| Fork — completes in < 2s | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Two workspaces coexist (pool: same VM) | — | ✓ | — | ✓ | ✓ |
 | Destroy — mounts cleaned up | ✓ | ✓ | ✓ | ✓ | ✓ |
 | Destroy — sibling workspace unaffected | — | ✓ | — | ✓ | ✓ |
@@ -201,10 +199,10 @@ Every driver × every user action has a test. Tests assert behavioral contracts.
 - File written in one shell session is readable in a subsequent session in the same workspace
 
 **Fork**
-- File written to parent before fork is visible in child immediately after fork
-- File written to parent after fork is NOT visible in child
-- File written to child after fork is NOT visible in parent
-- Wall clock time from fork call to fork completion < 2s regardless of workspace directory size (asserted for all VM-backed drivers and macOS sandbox; explicitly skipped for Linux sandbox hardlink fallback)
+- File written to parent before fork is visible in child immediately after fork (VM drivers: filesystem CoW; sandbox: shared git history at fork commit)
+- File written to parent after fork is NOT visible in child (VM drivers: CoW divergence; sandbox: worktrees are independent working trees)
+- File written to child after fork is NOT visible in parent (same)
+- Wall clock time from fork call to fork completion < 2s regardless of workspace directory size (all drivers)
 
 **Coexistence (pool modes)**
 - Two workspaces in pool mode both report `/workspace` as cwd
