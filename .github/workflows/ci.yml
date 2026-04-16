@@ -185,6 +185,7 @@ jobs:
       image: golang:1.24
       options: >-
         --cap-add SYS_ADMIN
+        --cap-add NET_ADMIN
         --security-opt seccomp=unconfined
         --security-opt apparmor:unconfined
 
