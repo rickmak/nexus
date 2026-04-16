@@ -98,6 +98,7 @@ type Manager struct {
 	mu               sync.RWMutex
 	nextCID          uint32
 	apiClientFactory APIClientFactory
+	reflinkAvailable bool
 }
 
 // NewManager creates a new Firecracker manager with the given configuration.
