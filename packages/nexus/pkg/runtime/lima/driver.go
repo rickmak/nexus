@@ -1,15 +1,21 @@
-package limafirecracker
+package lima
 
 import (
 	"context"
 	"fmt"
 	"net"
+	"regexp"
 	"strings"
 
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
 )
 
-const defaultLimaInstance = "nexus"
+const (
+	defaultLimaInstance = "nexus"
+	maxLimaInstanceLen  = 63
+)
+
+var nonInstanceChars = regexp.MustCompile(`[^a-z0-9-]+`)
 
 type Driver struct {
 	inner              runtime.Driver
@@ -28,7 +34,7 @@ func NewDriverWithCheckpoint(inner runtime.Driver, checkpoint runtime.ForkSnapsh
 	return &Driver{inner: inner, checkpointDelegate: checkpoint}
 }
 
-func (d *Driver) Backend() string { return "firecracker" }
+func (d *Driver) Backend() string { return "lima" }
 
 func (d *Driver) GuestWorkdir(workspaceID string) string {
 	if d.inner == nil {
@@ -50,9 +56,32 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 		req.Options = map[string]string{}
 	}
 	if strings.TrimSpace(req.Options["lima.instance"]) == "" {
-		req.Options["lima.instance"] = defaultLimaInstance
+		mode := strings.ToLower(strings.TrimSpace(req.Options["vm.mode"]))
+		if mode == "dedicated" {
+			req.Options["lima.instance"] = dedicatedLimaInstance(req.WorkspaceID)
+		} else {
+			req.Options["lima.instance"] = defaultLimaInstance
+		}
 	}
 	return d.inner.Create(ctx, req)
+}
+
+func dedicatedLimaInstance(workspaceID string) string {
+	base := strings.ToLower(strings.TrimSpace(workspaceID))
+	base = nonInstanceChars.ReplaceAllString(base, "-")
+	base = strings.Trim(base, "-")
+	if base == "" {
+		base = "workspace"
+	}
+	instance := "nexus-" + base
+	if len(instance) > maxLimaInstanceLen {
+		instance = instance[:maxLimaInstanceLen]
+		instance = strings.Trim(instance, "-")
+	}
+	if instance == "" {
+		return defaultLimaInstance
+	}
+	return instance
 }
 
 func (d *Driver) Start(ctx context.Context, workspaceID string) error {
@@ -106,7 +135,7 @@ func (d *Driver) Destroy(ctx context.Context, workspaceID string) error {
 
 func (d *Driver) CheckpointFork(ctx context.Context, workspaceID, childWorkspaceID string) (string, error) {
 	if d.checkpointDelegate == nil {
-		return "", fmt.Errorf("firecracker wrapper has no checkpoint delegate")
+		return "", fmt.Errorf("lima wrapper has no checkpoint delegate")
 	}
 	snapshotID, err := d.checkpointDelegate.CheckpointFork(ctx, workspaceID, childWorkspaceID)
 	if err != nil {
@@ -124,5 +153,5 @@ func (d *Driver) AgentConn(ctx context.Context, workspaceID string) (net.Conn, e
 	}); ok {
 		return connector.AgentConn(ctx, workspaceID)
 	}
-	return nil, fmt.Errorf("firecracker runtime does not support agent connection")
+	return nil, fmt.Errorf("lima runtime does not support agent connection")
 }

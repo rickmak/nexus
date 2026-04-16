@@ -7,7 +7,7 @@ import { startSession, type DaemonSession } from '../../harness/session';
 import { onDaemonStartError, onWorkspaceCreateRuntimeError } from '../../harness/assertions';
 import type { WorkspaceHandle } from '@nexus/sdk';
 
-const RUNTIME = process.env.NEXUS_E2E_RUNTIME ?? 'seatbelt';
+const RUNTIME = process.env.NEXUS_E2E_RUNTIME ?? 'firecracker';
 
 describe(`config bundle e2e (${RUNTIME})`, () => {
   it('extracts bundle credential files into workspace $HOME', async () => {

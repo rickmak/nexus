@@ -22,8 +22,8 @@ import (
 	"github.com/inizio/nexus/packages/nexus/pkg/daemonclient"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/firecracker"
-	"github.com/inizio/nexus/packages/nexus/pkg/runtime/limafirecracker"
-	"github.com/inizio/nexus/packages/nexus/pkg/runtime/seatbelt"
+	"github.com/inizio/nexus/packages/nexus/pkg/runtime/lima"
+	"github.com/inizio/nexus/packages/nexus/pkg/runtime/sandbox"
 	"github.com/inizio/nexus/packages/nexus/pkg/server"
 	"github.com/inizio/nexus/packages/nexus/pkg/spotlight"
 )
@@ -112,8 +112,12 @@ func resolveDefaultWorkspaceDir() string {
 }
 
 func runServer(port int, workspaceDir string, token string) error {
-	_ = runtime.MaybeAutoinstallPreflightHostTools()
+	// preflight auto-install removed: host tool setup is now explicit during nexus init
 	applyDaemonFirecrackerAssetDefaults()
+
+	if err := maybeInstallFirecracker(); err != nil {
+		return fmt.Errorf("firecracker install: %w", err)
+	}
 
 	srv, err := server.NewServer(port, workspaceDir, token)
 	if err != nil {
@@ -133,15 +137,13 @@ func runServer(port int, workspaceDir string, token string) error {
 
 	// Create runtime drivers.
 	firecrackerDriver := firecracker.NewDriver(runner, firecracker.WithManager(fcManager))
-	seatbeltDriver := seatbelt.NewDriver()
+	guest := lima.NewGuestDriver()
 	firecrackerAvailable := probeFirecrackerTooling(exec.LookPath)
-	seatbeltAvailable := firecrackerProbeGOOS == "darwin"
-
 	firecrackerRuntimeDriver := runtime.Driver(firecrackerDriver)
 	if firecrackerProbeGOOS == "darwin" {
-		// On macOS, the firecracker backend alias is implemented through the
-		// Lima-based runtime driver.
-		firecrackerRuntimeDriver = limafirecracker.NewDriver(seatbeltDriver)
+		// On macOS, firecracker backend is hosted through Lima and can switch
+		// pooled/dedicated instances via driver options.
+		firecrackerRuntimeDriver = lima.NewDriver(guest)
 	}
 
 	_, codexErr := exec.LookPath("codex")
@@ -152,7 +154,7 @@ func runServer(port int, workspaceDir string, token string) error {
 
 	capabilities := []runtime.Capability{
 		{Name: "runtime.firecracker", Available: firecrackerAvailable},
-		{Name: "runtime.seatbelt", Available: seatbeltAvailable},
+		{Name: "runtime.process", Available: true},
 		{Name: "runtime.linux", Available: firecrackerAvailable},
 		{Name: "spotlight.tunnel", Available: true},
 		{Name: "auth.profile.git", Available: true},
@@ -162,14 +164,14 @@ func runServer(port int, workspaceDir string, token string) error {
 
 	drivers := map[string]runtime.Driver{
 		"firecracker": firecrackerRuntimeDriver,
-		"seatbelt":    seatbeltDriver,
+		"process":     sandbox.NewDriver(),
 	}
 
 	factory := runtime.NewFactory(capabilities, drivers)
 	srv.SetRuntimeFactory(factory)
 
 	// Initialize live port monitoring
-	agentConnFn := seatbeltDriver.AgentConn
+	agentConnFn := guest.AgentConn
 	if connector, ok := firecrackerRuntimeDriver.(interface {
 		AgentConn(context.Context, string) (net.Conn, error)
 	}); ok {

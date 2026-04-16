@@ -12,7 +12,7 @@ import (
 	goruntime "runtime"
 	"strings"
 
-	nexusruntime "github.com/inizio/nexus/packages/nexus/pkg/runtime"
+	lima "github.com/inizio/nexus/packages/nexus/pkg/runtime/lima"
 )
 
 //go:embed templates/lima/firecracker-arm64.yaml
@@ -22,10 +22,6 @@ var embeddedLimaTemplateArm64 string
 var embeddedLimaTemplateX8664 string
 
 var initRuntimeBootstrapRunner func(projectRoot, runtimeName string) error = runInitRuntimeBootstrapDarwin
-
-var darwinInitPreflightRunner = func(projectRoot string) nexusruntime.FirecrackerPreflightResult {
-	return nexusruntime.RunFirecrackerPreflight(projectRoot, nexusruntime.PreflightOptions{})
-}
 
 var (
 	initRuntimeBootstrapIsRootFn                   = func() bool { return os.Geteuid() == 0 }
@@ -55,37 +51,29 @@ func runInitRuntimeBootstrapDarwin(projectRoot, runtimeName string) error {
 		return nil
 	}
 
-	_ = nexusruntime.MaybeAutoinstallPreflightHostTools()
-
 	if _, err := limactlLookPathFn("limactl"); err != nil {
 		if _, brewErr := limactlLookPathFn("brew"); brewErr == nil {
 			_ = limactlRunFn("brew", "install", "lima")
 		}
 	}
 
-	pf := darwinInitPreflightRunner(projectRoot)
-	if pf.Status == nexusruntime.PreflightUnsupportedNested {
-		_ = writeNexusInitEnv(projectRoot, map[string]string{
-			"NEXUS_RUNTIME_BACKEND": "firecracker",
-		})
-		return nil
-	}
-
 	if _, err := limactlLookPathFn("limactl"); err != nil {
 		return initRuntimeBootstrapDarwinWrapError(projectRoot, fmt.Errorf("limactl not found; run: brew install lima"))
 	}
 
-	// Try Firecracker template (with nestedVirtualization) first
 	templatePath, cleanupTemplate, err := writeEmbeddedLimaTemplate()
 	if err != nil {
 		return initRuntimeBootstrapDarwinWrapError(projectRoot, err)
 	}
 	defer cleanupTemplate()
 
+	if err := patchLimaTemplateUID(templatePath, lima.HostUID()); err != nil {
+		return initRuntimeBootstrapDarwinWrapError(projectRoot, err)
+	}
+
 	if err := ensurePersistentLimaInstance("nexus", templatePath); err == nil {
-		// Firecracker Lima started successfully - write firecracker env
 		_ = writeNexusInitEnv(projectRoot, map[string]string{
-			"NEXUS_RUNTIME_BACKEND": "firecracker",
+			"NEXUS_RUNTIME_BACKEND": "lima",
 		})
 		return nil
 	} else {
@@ -152,6 +140,18 @@ func writeEmbeddedLimaTemplate() (string, func(), error) {
 	default:
 		return "", func() {}, fmt.Errorf("unsupported darwin arch for lima template: %s", goruntime.GOARCH)
 	}
+}
+
+// patchLimaTemplateUID appends a user.uid section to the Lima YAML template
+// so the guest user's UID matches the macOS host user's UID.
+func patchLimaTemplateUID(templatePath string, uid int) error {
+	content, err := os.ReadFile(templatePath)
+	if err != nil {
+		return fmt.Errorf("read lima template: %w", err)
+	}
+	patch := fmt.Sprintf("\nuser:\n  uid: %d\n", uid)
+	content = append(content, []byte(patch)...)
+	return os.WriteFile(templatePath, content, 0644)
 }
 
 func writeNexusInitEnv(projectRoot string, kvPairs map[string]string) error {

@@ -115,9 +115,6 @@ func (d *serverTestDriver) Fork(ctx context.Context, workspaceID, childWorkspace
 }
 func (d *serverTestDriver) Destroy(ctx context.Context, workspaceID string) error { return nil }
 func (d *serverTestDriver) GuestWorkdir(workspaceID string) string {
-	if d.backend == "seatbelt" {
-		return "/nexus/ws/" + workspaceID
-	}
 	return "/workspace"
 }
 
@@ -274,60 +271,6 @@ func TestPTYOpenFirecrackerAliasFallsBackToDriverReportedBackend(t *testing.T) {
 	}
 }
 
-func TestPTYOpenSeatbeltUsesSeatbeltDriver(t *testing.T) {
-	srv, err := NewServer(0, t.TempDir(), "secret-token")
-	if err != nil {
-		t.Fatalf("new server: %v", err)
-	}
-
-	firecrackerDriver := &serverTestConnectorDriver{
-		serverTestDriver: serverTestDriver{backend: "firecracker"},
-		writeSignal:      make(chan struct{}, 1),
-		resizeSignal:     make(chan struct{}, 1),
-	}
-	seatbeltDriver := &serverTestConnectorDriver{
-		serverTestDriver: serverTestDriver{backend: "seatbelt"},
-		writeSignal:      make(chan struct{}, 1),
-		resizeSignal:     make(chan struct{}, 1),
-	}
-
-	factory := runtime.NewFactory(
-		[]runtime.Capability{
-			{Name: "runtime.firecracker", Available: true},
-			{Name: "runtime.seatbelt", Available: true},
-		},
-		map[string]runtime.Driver{
-			"firecracker": firecrackerDriver,
-			"seatbelt":    seatbeltDriver,
-		},
-	)
-	srv.SetRuntimeFactory(factory)
-
-	ws := createWorkspaceForPTYTest(t, srv.workspaceMgr, "seatbelt")
-	if err := srv.workspaceMgr.Start(ws.ID); err != nil {
-		t.Fatalf("start workspace: %v", err)
-	}
-
-	conn := &Connection{send: make(chan []byte, 16), clientID: "test", pty: map[string]*pty.Session{}}
-	payload, _ := json.Marshal(map[string]any{
-		"workspaceId": ws.ID,
-		"cols":        80,
-		"rows":        24,
-	})
-
-	_, rpcErr := pty.HandleOpen(srv.ptyDeps(), conn, payload, srv.ws)
-	if rpcErr != nil {
-		t.Fatalf("pty.open rpc error: %+v", rpcErr)
-	}
-
-	if called, _, _ := firecrackerDriver.openDetails(ws.ID); called {
-		t.Fatalf("expected firecracker connector not to be used for seatbelt workspace %s", ws.ID)
-	}
-	if called, _, _ := seatbeltDriver.openDetails(ws.ID); !called {
-		t.Fatalf("expected seatbelt connector to be used for workspace %s", ws.ID)
-	}
-}
-
 func (d *serverTestConnectorDriver) openDetails(workspaceID string) (bool, string, string) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -360,10 +303,6 @@ func TestPTYOpenUsesRemoteConnectorForFirecracker(t *testing.T) {
 	testPTYOpenUsesRemoteConnectorForBackend(t, "firecracker")
 }
 
-func TestPTYOpenUsesRemoteConnectorForSeatbelt(t *testing.T) {
-	testPTYOpenUsesRemoteConnectorForBackend(t, "seatbelt")
-}
-
 func testPTYOpenUsesRemoteConnectorForBackend(t *testing.T, backend string) {
 	srv, err := NewServer(0, t.TempDir(), "secret-token")
 	if err != nil {
@@ -377,10 +316,6 @@ func testPTYOpenUsesRemoteConnectorForBackend(t *testing.T, backend string) {
 	}
 	capabilities := []runtime.Capability{{Name: "runtime.firecracker", Available: true}}
 	drivers := map[string]runtime.Driver{"firecracker": driver}
-	if backend == "seatbelt" {
-		capabilities = append(capabilities, runtime.Capability{Name: "runtime.seatbelt", Available: true})
-		drivers["seatbelt"] = driver
-	}
 	factory := runtime.NewFactory(
 		capabilities,
 		drivers,
@@ -420,9 +355,6 @@ func testPTYOpenUsesRemoteConnectorForBackend(t *testing.T, backend string) {
 		t.Fatalf("expected remote shell command bash, got %q", openCommand)
 	}
 	wantWorkdir := "/workspace"
-	if backend == "seatbelt" {
-		wantWorkdir = "/nexus/ws/" + ws.ID
-	}
 	if openWorkdir != wantWorkdir {
 		t.Fatalf("expected remote shell workdir %s, got %q", wantWorkdir, openWorkdir)
 	}

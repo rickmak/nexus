@@ -69,6 +69,7 @@ jobs:
     name: Core CI (linux)
     runs-on: ubuntu-latest
 
+
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -162,6 +163,7 @@ jobs:
         run: |
           set -euo pipefail
           limactl delete -f nexus-firecracker || true
+          limactl delete -f nexus-ci-alt || true
           limactl delete -f nexus-seatbelt || true
 
       - name: Run runtime backend selection E2E (strict)
@@ -172,7 +174,52 @@ jobs:
           source "${GITHUB_WORKSPACE}/.nexus-e2e-env.sh"
           set +a
           if [[ "${RUNNER_OS}" == "macOS" ]]; then
-            export NEXUS_RUNTIME_SEATBELT_INSTANCE=nexus-seatbelt
+            export NEXUS_RUNTIME_LIMAGUEST_INSTANCE=nexus-ci-alt
           fi
                 pnpm --filter @nexus/e2e-flows run pretest:ci
                 pnpm --filter @nexus/e2e-flows exec jest --runInBand --ci --forceExit -- src/cases/runtime/runtime-selection.e2e.test.ts
+
+  integration-sandbox:
+    name: Integration Tests (process/sandbox)
+    runs-on: ubuntu-latest
+    container:
+      image: golang:1.24
+      options: >-
+        --cap-add SYS_ADMIN
+        --cap-add NET_ADMIN
+        --security-opt seccomp=unconfined
+        --security-opt apparmor:unconfined
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build nexus CLI and daemon
+        run: |
+          git config --global --add safe.directory "$(pwd)"
+          cd packages/nexus
+          go build -o /usr/local/bin/nexus ./cmd/nexus
+          go build -o /usr/local/bin/nexus-daemon ./cmd/daemon
+
+      - name: Install bubblewrap (process sandbox dependency)
+        run: apt-get update -q && apt-get install -y bubblewrap
+
+      - name: Run sandbox integration tests
+        run: |
+          cd packages/nexus
+          go test -tags integration -v -timeout 10m -run TestAllDrivers/process ./test/integration/...
+
+  # Lima/macOS integration tests require macOS runners with nested virtualization.
+  # Uncomment when macos-15-intel runners are available in this org.
+  # integration-lima:
+  #   name: Integration Tests (lima/macOS)
+  #   runs-on: macos-15-intel
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-go@v5
+  #       with:
+  #         go-version-file: packages/nexus/go.mod
+  #     - name: Run lima integration tests
+  #       run: |
+  #         cd packages/nexus
+  #         go test -tags integration -v -timeout 30m -run 'TestAllDrivers/lima|TestPoolCoexistence/lima' ./test/integration/...

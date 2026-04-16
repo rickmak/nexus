@@ -1,4 +1,4 @@
-package seatbelt
+package lima
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/drivers/shared"
 )
 
-var seatbeltLookPath = exec.LookPath
+var guestLookPath = exec.LookPath
 var ensureLimaInstanceRunningFn = ensureLimaInstanceRunning
 var prepareWorkspacePathFn = prepareWorkspacePath
 var teardownWorkspacePathFn = teardownWorkspacePath
@@ -29,11 +29,20 @@ var ptyStartWithSizeFn = pty.StartWithSize
 var limactlOutputFn = shared.DefaultLimactlOutput
 var limactlCombinedOutputFn = shared.DefaultLimactlCombinedOutput
 
-var seatbeltLimaInstanceBase = []string{"nexus"}
+var limaGuestInstanceBase = []string{defaultLimaInstance}
 
 const workspaceMarkerFile = ".nexus-workspace-marker.json"
 
-type Driver struct {
+// limaGuestInstanceEnv returns NEXUS_RUNTIME_LIMAGUEST_INSTANCE, or the deprecated
+// NEXUS_RUNTIME_SEATBELT_INSTANCE when the former is unset.
+func limaGuestInstanceEnv() string {
+	if v := strings.TrimSpace(os.Getenv("NEXUS_RUNTIME_LIMAGUEST_INSTANCE")); v != "" {
+		return v
+	}
+	return strings.TrimSpace(os.Getenv("NEXUS_RUNTIME_SEATBELT_INSTANCE"))
+}
+
+type GuestDriver struct {
 	mu                 sync.RWMutex
 	workspaces         map[string]*workspaceState
 	snapshotRoot       string
@@ -43,32 +52,39 @@ type Driver struct {
 	bootstrapInstance  func(ctx context.Context, instance, configBundle string) error
 	applyConfigBundle  func(ctx context.Context, instance, configBundle string) error
 	prepareWorkspaceFS func(ctx context.Context, instance, targetPath, localPath string) error
+	// forkSSH runs a shell script on the Lima guest; defaults to shared.DirectSSHScript.
+	forkSSH func(ctx context.Context, instance, script string) ([]byte, error)
 }
 
-var _ runtime.ForkSnapshotter = (*Driver)(nil)
+var _ runtime.ForkSnapshotter = (*GuestDriver)(nil)
 
 type workspaceState struct {
 	projectRoot string
 	state       string
 	instance    string
+	mode        string // "pool" or "dedicated"
 }
 
-func NewDriver() *Driver {
-	return &Driver{
+func NewGuestDriver() *GuestDriver {
+	return &GuestDriver{
 		workspaces:         make(map[string]*workspaceState),
-		snapshotRoot:       defaultSeatbeltSnapshotRoot(),
+		snapshotRoot:       defaultLimaGuestSnapshotRoot(),
 		spawnShell:         startLimaShell,
-		instanceEnv:        strings.TrimSpace(os.Getenv("NEXUS_RUNTIME_SEATBELT_INSTANCE")),
+		instanceEnv:        limaGuestInstanceEnv(),
 		bootstrapGuard:     shared.NewBootstrapOnceGuard(),
-		bootstrapInstance:  bootstrapSeatbeltTooling,
-		applyConfigBundle:  applySeatbeltConfigBundle,
+		bootstrapInstance:  bootstrapLimaGuestTooling,
+		applyConfigBundle:  applyLimaGuestConfigBundle,
 		prepareWorkspaceFS: prepareWorkspacePath,
+		forkSSH: func(ctx context.Context, instance, script string) ([]byte, error) {
+			return shared.DirectSSHScript(ctx, instance, script)
+		},
 	}
 }
 
-func (d *Driver) Backend() string { return "seatbelt" }
+// Backend reports lima as the backend name for this driver.
+func (d *GuestDriver) Backend() string { return "lima" }
 
-func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
+func (d *GuestDriver) Create(ctx context.Context, req runtime.CreateRequest) error {
 	if strings.TrimSpace(req.WorkspaceID) == "" {
 		return fmt.Errorf("workspace id is required")
 	}
@@ -78,8 +94,8 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 	if _, err := os.Stat(req.ProjectRoot); err != nil {
 		return fmt.Errorf("project root not accessible: %w", err)
 	}
-	if _, err := seatbeltLookPath("limactl"); err != nil {
-		return fmt.Errorf("seatbelt runtime requires limactl for isolated guest")
+	if _, err := guestLookPath("limactl"); err != nil {
+		return fmt.Errorf("lima guest runtime requires limactl for isolated guest")
 	}
 	if snapshotID := strings.TrimSpace(req.Options["lineage_snapshot_id"]); snapshotID != "" {
 		if err := d.restoreLineageSnapshot(snapshotID, req.ProjectRoot); err != nil {
@@ -88,11 +104,16 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 	}
 
 	instance := d.instanceNameForOptions(req.Options)
+	wsMode := strings.ToLower(strings.TrimSpace(req.Options["vm.mode"]))
+	if wsMode == "" {
+		wsMode = "pool"
+	}
 
 	d.mu.Lock()
 	if existing, exists := d.workspaces[req.WorkspaceID]; exists {
 		existing.projectRoot = req.ProjectRoot
 		existing.instance = instance
+		existing.mode = wsMode
 		d.mu.Unlock()
 		if err := d.ensureInstanceBootstrapped(ctx, instance, ""); err != nil {
 			return err
@@ -105,7 +126,7 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 		}
 		return nil
 	}
-	d.workspaces[req.WorkspaceID] = &workspaceState{projectRoot: req.ProjectRoot, state: "created", instance: instance}
+	d.workspaces[req.WorkspaceID] = &workspaceState{projectRoot: req.ProjectRoot, state: "created", instance: instance, mode: wsMode}
 	d.mu.Unlock()
 
 	if err := d.ensureInstanceBootstrapped(ctx, instance, ""); err != nil {
@@ -136,35 +157,18 @@ func (d *Driver) Create(ctx context.Context, req runtime.CreateRequest) error {
 	return nil
 }
 
-func (d *Driver) CheckpointFork(ctx context.Context, workspaceID, childWorkspaceID string) (string, error) {
-	_ = ctx
-	sourceRoot := strings.TrimSpace(d.workspaceProjectRoot(workspaceID))
-	if sourceRoot == "" {
-		return "", fmt.Errorf("workspace %s not found", workspaceID)
+func (d *GuestDriver) CheckpointFork(ctx context.Context, workspaceID, childWorkspaceID string) (string, error) {
+	instance := d.workspaceInstance(workspaceID)
+	parentPath := guestWorkdirForID(workspaceID)
+	childPath := guestWorkdirForID(childWorkspaceID)
+	script := btrfsForkScript(parentPath, childPath)
+	if out, err := d.forkSSH(ctx, instance, script); err != nil {
+		return "", fmt.Errorf("btrfs fork %s -> %s: %s: %w", workspaceID, childWorkspaceID, strings.TrimSpace(string(out)), err)
 	}
-	if info, err := os.Stat(sourceRoot); err != nil || !info.IsDir() {
-		return "", fmt.Errorf("source workspace path unavailable: %s", sourceRoot)
-	}
-
-	snapshotID := fmt.Sprintf("lima-fc-%s-%s-%d",
-		strings.TrimSpace(workspaceID),
-		strings.TrimSpace(childWorkspaceID),
-		time.Now().UTC().UnixNano(),
-	)
-	snapshotPath := d.snapshotPath(snapshotID)
-	if err := os.RemoveAll(snapshotPath); err != nil {
-		return "", fmt.Errorf("reset snapshot path: %w", err)
-	}
-	if err := os.MkdirAll(snapshotPath, 0o755); err != nil {
-		return "", fmt.Errorf("create snapshot path: %w", err)
-	}
-	if err := copyWorkspaceTree(sourceRoot, snapshotPath); err != nil {
-		return "", fmt.Errorf("copy workspace snapshot: %w", err)
-	}
-	return snapshotID, nil
+	return childWorkspaceID, nil
 }
 
-func (d *Driver) prepareWorkspaceOnCandidates(ctx context.Context, workspaceID, instance, targetPath, localPath string) error {
+func (d *GuestDriver) prepareWorkspaceOnCandidates(ctx context.Context, workspaceID, instance, targetPath, localPath string) error {
 	if d.prepareWorkspaceFS == nil {
 		return nil
 	}
@@ -172,7 +176,7 @@ func (d *Driver) prepareWorkspaceOnCandidates(ctx context.Context, workspaceID, 
 		return nil
 	} else {
 		// Try remaining candidates in the base list (handles legacy instance names).
-		for _, fallback := range seatbeltLimaInstanceBase {
+		for _, fallback := range limaGuestInstanceBase {
 			if fallback == instance {
 				continue
 			}
@@ -190,32 +194,32 @@ func (d *Driver) prepareWorkspaceOnCandidates(ctx context.Context, workspaceID, 
 	}
 }
 
-func (d *Driver) Start(ctx context.Context, workspaceID string) error {
+func (d *GuestDriver) Start(ctx context.Context, workspaceID string) error {
 	_ = ctx
 	return d.setState(workspaceID, "running")
 }
 
-func (d *Driver) Stop(ctx context.Context, workspaceID string) error {
+func (d *GuestDriver) Stop(ctx context.Context, workspaceID string) error {
 	_ = ctx
 	return d.setState(workspaceID, "stopped")
 }
 
-func (d *Driver) Restore(ctx context.Context, workspaceID string) error {
+func (d *GuestDriver) Restore(ctx context.Context, workspaceID string) error {
 	_ = ctx
 	return d.setState(workspaceID, "running")
 }
 
-func (d *Driver) Pause(ctx context.Context, workspaceID string) error {
+func (d *GuestDriver) Pause(ctx context.Context, workspaceID string) error {
 	_ = ctx
 	return d.setState(workspaceID, "paused")
 }
 
-func (d *Driver) Resume(ctx context.Context, workspaceID string) error {
+func (d *GuestDriver) Resume(ctx context.Context, workspaceID string) error {
 	_ = ctx
 	return d.setState(workspaceID, "running")
 }
 
-func (d *Driver) Fork(ctx context.Context, workspaceID, childWorkspaceID string) error {
+func (d *GuestDriver) Fork(ctx context.Context, workspaceID, childWorkspaceID string) error {
 	_ = ctx
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -232,7 +236,7 @@ func (d *Driver) Fork(ctx context.Context, workspaceID, childWorkspaceID string)
 	return nil
 }
 
-func (d *Driver) Destroy(ctx context.Context, workspaceID string) error {
+func (d *GuestDriver) Destroy(ctx context.Context, workspaceID string) error {
 	d.mu.Lock()
 	ws, ok := d.workspaces[workspaceID]
 	if !ok {
@@ -250,7 +254,7 @@ func (d *Driver) Destroy(ctx context.Context, workspaceID string) error {
 	return nil
 }
 
-func (d *Driver) setState(workspaceID, state string) error {
+func (d *GuestDriver) setState(workspaceID, state string) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	ws, ok := d.workspaces[workspaceID]
@@ -263,14 +267,14 @@ func (d *Driver) setState(workspaceID, state string) error {
 	return nil
 }
 
-func (d *Driver) AgentConn(ctx context.Context, workspaceID string) (net.Conn, error) {
+func (d *GuestDriver) AgentConn(ctx context.Context, workspaceID string) (net.Conn, error) {
 	_ = ctx
 	left, right := net.Pipe()
 	go d.serveShellProtocol(context.Background(), workspaceID, right)
 	return left, nil
 }
 
-func (d *Driver) serveShellProtocol(ctx context.Context, workspaceID string, conn net.Conn) {
+func (d *GuestDriver) serveShellProtocol(ctx context.Context, workspaceID string, conn net.Conn) {
 	defer conn.Close()
 
 	dec := json.NewDecoder(conn)
@@ -331,6 +335,9 @@ func (d *Driver) serveShellProtocol(ctx context.Context, workspaceID string, con
 					localPath = d.workspaceProjectRoot(workspaceID)
 				}
 				workdir = perWsPath
+				// In pool mode wrap the shell so the process sees /workspace,
+				// not /workspace/<id>, via a per-process mount namespace.
+				shell = d.buildRemoteShellCmd(workspaceID)
 			}
 
 			instance := d.workspaceInstance(workspaceID)
@@ -438,7 +445,7 @@ func startLimaShell(ctx context.Context, instanceName, workdir, localPath, shell
 	workdir = strings.TrimSpace(workdir)
 	localPath = strings.TrimSpace(localPath)
 
-	candidates := shared.InstanceCandidates(instanceName, seatbeltLimaInstanceBase)
+	candidates := shared.InstanceCandidates(instanceName, limaGuestInstanceBase)
 	if discovered, err := listLimaInstancesFn(ctx); err == nil && len(discovered) > 0 {
 		candidates = shared.ApplyLimaDiscovery(candidates, discovered, true)
 	}
@@ -473,17 +480,68 @@ func startLimaShell(ctx context.Context, instanceName, workdir, localPath, shell
 		Workdir:             workdir,
 		BeforeEachCandidate: ensureLimaInstanceRunningFn,
 		PtyStart:            ptyStartWithSizeFn,
-		ErrPrefix:           "seatbelt lima shell start failed",
+		ErrPrefix:           "lima guest shell start failed",
 	})
 }
 
 func guestWorkdirForID(workspaceID string) string {
-	_ = workspaceID
-	return "/workspace"
+	id := strings.TrimSpace(workspaceID)
+	if id == "" {
+		return "/workspace/_"
+	}
+	return "/workspace/" + sanitizeGuestWorkspaceSegment(id)
 }
 
-func (d *Driver) GuestWorkdir(workspaceID string) string {
+func sanitizeGuestWorkspaceSegment(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-.")
+	if out == "" {
+		return "ws"
+	}
+	const maxSeg = 120
+	if len(out) > maxSeg {
+		out = out[:maxSeg]
+	}
+	return out
+}
+
+func (d *GuestDriver) GuestWorkdir(workspaceID string) string {
 	return guestWorkdirForID(workspaceID)
+}
+
+// workspaceBindMountScript mounts the host worktree at the guest path used for PTY shells.
+// The Lima guest user UID is provisioned to match the macOS host user UID so that
+// bind-mounted host directories are accessible without permission workarounds.
+func workspaceBindMountScript(targetPath, localPath string) string {
+	mnt := shared.ShellQuote(targetPath)
+	src := shared.ShellQuote(localPath)
+	// Avoid remount churn when the guest mount point is already bound to the same host path.
+	// Repeated lazy unmount/remount cycles can invalidate cwd for long-running
+	// tools (e.g. opencode), which then fail with "cwd was deleted".
+	return fmt.Sprintf(`set -e
+MNTPT=%s
+SRC=%s
+sudo -n mkdir -p "$MNTPT"
+CUR=$(findmnt -n -o SOURCE --target "$MNTPT" 2>/dev/null || true)
+if [ -n "$CUR" ]; then
+  CUR_CANON=$(readlink -f "$CUR" 2>/dev/null || echo "$CUR")
+  SRC_CANON=$(readlink -f "$SRC" 2>/dev/null || echo "$SRC")
+  if [ "$CUR_CANON" != "$SRC_CANON" ]; then
+    sudo -n umount -l "$MNTPT"
+    sudo -n mount --bind "$SRC" "$MNTPT"
+  fi
+else
+  sudo -n mount --bind "$SRC" "$MNTPT"
+fi
+`, mnt, src)
 }
 
 func prepareWorkspacePath(ctx context.Context, instance, targetPath, localPath string) error {
@@ -497,14 +555,7 @@ func prepareWorkspacePath(ctx context.Context, instance, targetPath, localPath s
 		return fmt.Errorf("target path is required")
 	}
 
-	// Avoid remount churn when /workspace is already bound to the same source.
-	// Repeated lazy unmount/remount cycles can invalidate cwd for long-running
-	// tools (e.g. opencode), which then fail with "cwd was deleted".
-	script := fmt.Sprintf(
-		"set -e; MNTPT=%s; SRC=%s; sudo -n mkdir -p \"$MNTPT\"; CUR=$(findmnt -n -o SOURCE --target \"$MNTPT\" 2>/dev/null || true); if [ -n \"$CUR\" ]; then CUR_CANON=$(readlink -f \"$CUR\" 2>/dev/null || echo \"$CUR\"); SRC_CANON=$(readlink -f \"$SRC\" 2>/dev/null || echo \"$SRC\"); if [ \"$CUR_CANON\" = \"$SRC_CANON\" ]; then exit 0; fi; sudo -n umount -l \"$MNTPT\"; fi; sudo -n mount --bind \"$SRC\" \"$MNTPT\"",
-		shared.ShellQuote(targetPath),
-		shared.ShellQuote(localPath),
-	)
+	script := workspaceBindMountScript(targetPath, localPath)
 	out, err := shared.DirectSSHScript(ctx, instance, script)
 	if err != nil {
 		log.Printf("[DEBUG scanPorts] Command error: %v", err)
@@ -532,26 +583,26 @@ func teardownWorkspacePath(ctx context.Context, instance, workspaceID string) er
 	return nil
 }
 
-func bootstrapSeatbeltTooling(ctx context.Context, instance, configBundle string) error {
+func bootstrapLimaGuestTooling(ctx context.Context, instance, configBundle string) error {
 	instance = strings.TrimSpace(instance)
 	if instance == "" {
 		instance = "nexus"
 	}
 
-	candidates := shared.InstanceCandidates(instance, seatbeltLimaInstanceBase)
+	candidates := shared.InstanceCandidates(instance, limaGuestInstanceBase)
 	if discovered, err := listLimaInstancesFn(ctx); err == nil && len(discovered) > 0 {
 		candidates = shared.ApplyLimaDiscovery(candidates, discovered, true)
 	}
 
-	script := buildSeatbeltBootstrapScript(configBundle)
+	script := buildLimaGuestBootstrapScript(configBundle)
 	return shared.RunLimactlBootstrapScript(ctx, candidates, script, shared.LimactlBootstrapOptions{
 		EnsureBeforeCandidate:   ensureLimaInstanceRunningFn,
 		MaxAttemptsPerCandidate: 3,
 		RetryDelay:              500 * time.Millisecond,
 		RetryIf:                 shared.IsTransientLimaShellError,
-		ErrNoCandidates:         "bootstrap seatbelt tooling failed: no lima instance candidates",
+		ErrNoCandidates:         "bootstrap lima guest tooling failed: no lima instance candidates",
 		FormatFailure: func(candidate, trimmed string) error {
-			return fmt.Errorf("bootstrap seatbelt tooling in %s failed: %s", candidate, trimmed)
+			return fmt.Errorf("bootstrap lima guest tooling in %s failed: %s", candidate, trimmed)
 		},
 	})
 }
@@ -560,7 +611,7 @@ func ensureLimaInstanceRunning(ctx context.Context, instance string) error {
 	return shared.EnsureLimaInstanceRunning(ctx, instance, limactlOutputFn, limactlCombinedOutputFn)
 }
 
-func buildSeatbeltBootstrapScript(configBundle string) string {
+func buildLimaGuestBootstrapScript(configBundle string) string {
 	parts := []string{
 		"set -e",
 		buildCredentialSymlinkCleanup(),
@@ -624,7 +675,7 @@ func buildCredentialSymlinkCleanup() string {
 	return strings.Join(checks, "; ")
 }
 
-func applySeatbeltConfigBundle(ctx context.Context, instance, configBundle string) error {
+func applyLimaGuestConfigBundle(ctx context.Context, instance, configBundle string) error {
 	configBundle = strings.TrimSpace(configBundle)
 	if configBundle == "" {
 		return nil
@@ -633,7 +684,7 @@ func applySeatbeltConfigBundle(ctx context.Context, instance, configBundle strin
 	if instance == "" {
 		instance = "nexus"
 	}
-	candidates := shared.InstanceCandidates(instance, seatbeltLimaInstanceBase)
+	candidates := shared.InstanceCandidates(instance, limaGuestInstanceBase)
 	if discovered, err := listLimaInstancesFn(ctx); err == nil && len(discovered) > 0 {
 		candidates = shared.ApplyLimaDiscovery(candidates, discovered, true)
 	}
@@ -665,7 +716,7 @@ func applySeatbeltConfigBundle(ctx context.Context, instance, configBundle strin
 	return fmt.Errorf("apply config bundle failed: no lima instance candidates")
 }
 
-func (d *Driver) instanceNameForOptions(opts map[string]string) string {
+func (d *GuestDriver) instanceNameForOptions(opts map[string]string) string {
 	if opts != nil {
 		if v := strings.TrimSpace(opts["lima.instance"]); v != "" {
 			return v
@@ -674,7 +725,7 @@ func (d *Driver) instanceNameForOptions(opts map[string]string) string {
 	return d.defaultInstanceName()
 }
 
-func (d *Driver) defaultInstanceName() string {
+func (d *GuestDriver) defaultInstanceName() string {
 	if strings.TrimSpace(d.instanceEnv) != "" {
 		return strings.TrimSpace(d.instanceEnv)
 	}
@@ -684,7 +735,7 @@ func (d *Driver) defaultInstanceName() string {
 	return "nexus"
 }
 
-func (d *Driver) ensureInstanceBootstrapped(ctx context.Context, instance, configBundle string) error {
+func (d *GuestDriver) ensureInstanceBootstrapped(ctx context.Context, instance, configBundle string) error {
 	instance = strings.TrimSpace(instance)
 	if instance == "" {
 		instance = d.defaultInstanceName()
@@ -697,7 +748,7 @@ func (d *Driver) ensureInstanceBootstrapped(ctx context.Context, instance, confi
 	})
 }
 
-func (d *Driver) workspaceProjectRoot(workspaceID string) string {
+func (d *GuestDriver) workspaceProjectRoot(workspaceID string) string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	if ws, ok := d.workspaces[workspaceID]; ok {
@@ -706,11 +757,11 @@ func (d *Driver) workspaceProjectRoot(workspaceID string) string {
 	return ""
 }
 
-func (d *Driver) snapshotPath(snapshotID string) string {
+func (d *GuestDriver) snapshotPath(snapshotID string) string {
 	return filepath.Join(d.snapshotRoot, strings.TrimSpace(snapshotID))
 }
 
-func (d *Driver) restoreLineageSnapshot(snapshotID, targetPath string) error {
+func (d *GuestDriver) restoreLineageSnapshot(snapshotID, targetPath string) error {
 	snapshotPath := d.snapshotPath(snapshotID)
 	info, err := os.Stat(snapshotPath)
 	if err != nil {
@@ -722,7 +773,7 @@ func (d *Driver) restoreLineageSnapshot(snapshotID, targetPath string) error {
 	return copyWorkspaceTree(snapshotPath, targetPath)
 }
 
-func defaultSeatbeltSnapshotRoot() string {
+func defaultLimaGuestSnapshotRoot() string {
 	if xdg := strings.TrimSpace(os.Getenv("XDG_STATE_HOME")); xdg != "" {
 		return filepath.Join(xdg, "nexus", "workspaces", "lineage-snapshots")
 	}
@@ -816,7 +867,7 @@ func copyFileWithMode(sourcePath, targetPath string, perm os.FileMode) error {
 	return targetFile.Chmod(perm)
 }
 
-func (d *Driver) workspaceInstance(workspaceID string) string {
+func (d *GuestDriver) workspaceInstance(workspaceID string) string {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 	if ws, ok := d.workspaces[workspaceID]; ok && strings.TrimSpace(ws.instance) != "" {
@@ -825,7 +876,27 @@ func (d *Driver) workspaceInstance(workspaceID string) string {
 	return d.defaultInstanceName()
 }
 
-func (d *Driver) scanPorts(ctx context.Context, workspaceID string) []map[string]any {
+func (d *GuestDriver) workspaceMode(workspaceID string) string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if ws, ok := d.workspaces[workspaceID]; ok {
+		return ws.mode
+	}
+	return "pool"
+}
+
+// buildRemoteShellCmd returns the shell command to run on the remote guest.
+// In pool mode, the command is wrapped with a per-process mount namespace so
+// the workspace process sees /workspace as its cwd, not /workspace/<id>.
+func (d *GuestDriver) buildRemoteShellCmd(workspaceID string) string {
+	cmd := "bash -i"
+	if d.workspaceMode(workspaceID) == "pool" {
+		cmd = namespaceWrapCommand(cmd, workspaceID)
+	}
+	return cmd
+}
+
+func (d *GuestDriver) scanPorts(ctx context.Context, workspaceID string) []map[string]any {
 	instance := d.workspaceInstance(workspaceID)
 	log.Printf("[DEBUG scanPorts] Using instance: %s", instance)
 	// Use ss to list listening TCP ports

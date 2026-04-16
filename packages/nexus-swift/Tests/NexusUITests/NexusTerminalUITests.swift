@@ -231,8 +231,8 @@ final class NexusTerminalUITests: XCTestCase {
         } catch {
             throw XCTSkip("Could not list workspaces via PTY RPC (auth/session mismatch).")
         }
-        guard let target = all.first(where: { $0.backend == "seatbelt" || $0.backend == "firecracker" }) else {
-            XCTFail("No seatbelt/firecracker workspace available for PTY SSH_AUTH_SOCK verification")
+        guard let target = all.first(where: { $0.backend == "firecracker" || $0.backend == "process" }) else {
+            XCTFail("No firecracker/process workspace available for PTY SSH_AUTH_SOCK verification")
             return
         }
         if target.state != "running" {

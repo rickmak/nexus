@@ -137,6 +137,21 @@ private struct SessionInfoStrip: View {
                     .foregroundColor(Theme.labelSecondary)
             }
 
+            if !workspace.detailRuntimeLine.isEmpty {
+                Divider().frame(height: 12).opacity(0.5)
+                HStack(spacing: 4) {
+                    Image(systemName: "cpu")
+                        .font(.system(size: 10))
+                        .foregroundColor(Theme.labelTertiary)
+                    Text(workspace.detailRuntimeLine)
+                        .font(.system(size: 11, design: .monospaced))
+                        .foregroundColor(Theme.labelSecondary)
+                        .lineLimit(2)
+                        .truncationMode(.middle)
+                }
+                .accessibilityLabel("Runtime \(workspace.detailRuntimeLine)")
+            }
+
             // Resolved workspace path — live shell directory takes precedence
             if !displayPath.isEmpty {
                 Divider().frame(height: 12).opacity(0.5)

@@ -17,6 +17,7 @@ import (
 	"github.com/inizio/nexus/packages/nexus/pkg/authrelay"
 	rpckit "github.com/inizio/nexus/packages/nexus/pkg/rpcerrors"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
+	runtimeprocess "github.com/inizio/nexus/packages/nexus/pkg/runtime/sandbox"
 	"github.com/inizio/nexus/packages/nexus/pkg/safeenv"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspace"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspacemgr"
@@ -186,9 +187,14 @@ func buildTmuxSessionName(workspaceID, sessionID string) string {
 	return "nexus_" + workspaceID + "_" + sessionID
 }
 
-func buildTmuxAttachCommand(tmuxSession string) string {
+func buildTmuxAttachCommand(tmuxSession, guestWorkdir string) string {
 	quoted := shellQuoteUnixExport(tmuxSession)
-	return "if tmux has-session -t " + quoted + " >/dev/null 2>&1; then CUR=$(tmux display-message -p -t " + quoted + " '#{pane_current_path}' 2>/dev/null || true); if [ -n \"$CUR\" ] && [ ! -d \"$CUR\" ]; then tmux kill-session -t " + quoted + " >/dev/null 2>&1 || true; fi; fi; TERM=xterm-256color tmux new-session -A -c /workspace -s " + quoted + " \\; set-option -t " + quoted + " status off\n"
+	cwd := strings.TrimSpace(guestWorkdir)
+	if cwd == "" {
+		cwd = "/workspace"
+	}
+	cwdQ := shellQuoteUnixExport(cwd)
+	return "if tmux has-session -t " + quoted + " >/dev/null 2>&1; then CUR=$(tmux display-message -p -t " + quoted + " '#{pane_current_path}' 2>/dev/null || true); if [ -n \"$CUR\" ] && [ ! -d \"$CUR\" ]; then tmux kill-session -t " + quoted + " >/dev/null 2>&1 || true; fi; fi; TERM=xterm-256color tmux new-session -A -c " + cwdQ + " -s " + quoted + " \\; set-option -t " + quoted + " status off\n"
 }
 
 func buildTmuxHealthCheckCommand(tmuxSession string) string {
@@ -203,6 +209,14 @@ func canonicalGuestWorkdir(driver runtime.Driver, workspaceID string) string {
 		}
 	}
 	return "/workspace"
+}
+
+func guestWorkdirForPTY(driver runtime.Driver, workspaceID, workDirHint string) string {
+	w := strings.TrimSpace(workDirHint)
+	if w == "" || w == "/workspace" {
+		return canonicalGuestWorkdir(driver, workspaceID)
+	}
+	return w
 }
 
 func HandleOpen(deps *Deps, conn Conn, params json.RawMessage, ws *workspace.Workspace) (interface{}, *rpckit.RPCError) {
@@ -248,20 +262,20 @@ func HandleOpen(deps *Deps, conn Conn, params json.RawMessage, ws *workspace.Wor
 	}
 
 	log.Printf("[pty.open] workspace=%s name=%s backend=%s localWorktree=%s root=%s", wsRecord.ID, wsRecord.WorkspaceName, wsRecord.Backend, wsRecord.LocalWorktreePath, wsRecord.RootPath)
-	if wsRecord.Backend == "firecracker" || wsRecord.Backend == "seatbelt" {
+	if wsRecord.Backend == "firecracker" {
 		return handleFirecrackerPTYOpen(deps, conn, p, wsRecord, relayEnv)
 	}
 
-	workDir := strings.TrimSpace(wsRecord.RootPath)
-	if workDir == "" && ws != nil {
-		workDir = strings.TrimSpace(ws.Path())
-	}
+	workDir := localWorkDirForOpen(wsRecord, ws)
 	if workDir == "" {
 		return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: "workspace root path unavailable"}
 	}
-	log.Printf("[pty.open] local backend: workDir=%s", workDir)
+	log.Printf("[pty.open] host backend: workDir=%s", workDir)
 
-	cmd := exec.Command(shell)
+	cmd, err := localCommandForBackend(wsRecord, shell, workDir)
+	if err != nil {
+		return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("pty command setup failed: %v", err)}
+	}
 	cmd.Dir = workDir
 	cmdEnv := append(safeenv.Base(), "TERM=xterm-256color")
 	if len(relayEnv) > 0 {
@@ -312,6 +326,17 @@ func HandleOpen(deps *Deps, conn Conn, params json.RawMessage, ws *workspace.Wor
 	return &OpenResult{SessionID: sessionID}, nil
 }
 
+func localCommandForBackend(wsRecord *workspacemgr.Workspace, shell, workDir string) (*exec.Cmd, error) {
+	if wsRecord != nil {
+		backend := strings.TrimSpace(wsRecord.Backend)
+		if strings.EqualFold(backend, "process") {
+			repoRoot := strings.TrimSpace(wsRecord.Repo)
+			return runtimeprocess.ShellCommand(shell, workDir, repoRoot)
+		}
+	}
+	return exec.Command(shell), nil
+}
+
 func handleFirecrackerPTYOpen(deps *Deps, conn Conn, p OpenParams, wsRecord *workspacemgr.Workspace, relayEnv map[string]string) (interface{}, *rpckit.RPCError) {
 	if deps.RuntimeFactory == nil {
 		return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: "runtime factory unavailable"}
@@ -322,7 +347,7 @@ func handleFirecrackerPTYOpen(deps *Deps, conn Conn, p OpenParams, wsRecord *wor
 	if backend == "" {
 		backend = "firecracker"
 	}
-	if requestedBackend == "firecracker" || requestedBackend == "seatbelt" {
+	if requestedBackend == "firecracker" {
 		if driverAny, ok := deps.RuntimeFactory.DriverForBackend(requestedBackend); ok {
 			reported := strings.TrimSpace(driverAny.Backend())
 			log.Printf("[pty.open] %s driver type=%T reported-backend=%q", requestedBackend, driverAny, reported)
@@ -425,7 +450,7 @@ func handleFirecrackerPTYOpen(deps *Deps, conn Conn, p OpenParams, wsRecord *wor
 	if useTmux {
 		session.IsTmux = true
 		session.TmuxSession = buildTmuxSessionName(wsRecord.ID, sessionID)
-		if err := sendRemoteShellWrite(enc, dec, nil, sessionID, buildTmuxAttachCommand(session.TmuxSession)); err != nil {
+		if err := sendRemoteShellWrite(enc, dec, nil, sessionID, buildTmuxAttachCommand(session.TmuxSession, workDirHint)); err != nil {
 			// Fall back to a plain shell when tmux is unavailable/misconfigured.
 			// This keeps terminal startup usable on fresh machines where tmux has
 			// not been installed yet.
@@ -463,6 +488,21 @@ func localWorkspacePathFromRecord(wsRecord *workspacemgr.Workspace) string {
 		if canonical := canonicalWorkspaceCandidate(wsRecord, candidate); canonical != "" {
 			return canonical
 		}
+	}
+	return ""
+}
+
+func localWorkDirForOpen(wsRecord *workspacemgr.Workspace, ws *workspace.Workspace) string {
+	if localPath := localWorkspacePathFromRecord(wsRecord); localPath != "" {
+		return localPath
+	}
+	if ws != nil {
+		if resolved := strings.TrimSpace(ws.Path()); resolved != "" {
+			return resolved
+		}
+	}
+	if wsRecord != nil {
+		return strings.TrimSpace(wsRecord.RootPath)
 	}
 	return ""
 }
@@ -760,20 +800,13 @@ func streamPTYOutput(conn Conn, session *Session, registry *Registry, store *Sto
 		}
 	}
 
-	if conn != nil {
-		conn.RemovePTY(session.ID)
-	}
-	if registry != nil {
-		registry.Unregister(session.ID)
-	}
-	if session.Closing.Load() {
-		_ = store.Delete(session.ID)
-	}
 	exitCode := -1
-	if session.Cmd.Process != nil {
-		_, _ = session.Cmd.Process.Wait()
+	if session.Cmd != nil && session.Cmd.Process != nil {
+		if state, waitErr := session.Cmd.Process.Wait(); waitErr == nil && state != nil {
+			exitCode = state.ExitCode()
+		}
 	}
-	if session.Cmd.ProcessState != nil {
+	if exitCode == -1 && session.Cmd != nil && session.Cmd.ProcessState != nil {
 		exitCode = session.Cmd.ProcessState.ExitCode()
 	}
 	payload := map[string]any{
@@ -787,9 +820,18 @@ func streamPTYOutput(conn Conn, session *Session, registry *Registry, store *Sto
 	if encoded, marshalErr := json.Marshal(payload); marshalErr == nil {
 		if registry != nil {
 			registry.Broadcast(session.ID, encoded)
-		} else {
+		} else if conn != nil {
 			conn.Enqueue(encoded)
 		}
+	}
+	if conn != nil {
+		conn.RemovePTY(session.ID)
+	}
+	if registry != nil {
+		registry.Unregister(session.ID)
+	}
+	if session.Closing.Load() && store != nil {
+		_ = store.Delete(session.ID)
 	}
 }
 
@@ -961,12 +1003,13 @@ func recoverPersistedTmuxSession(deps *Deps, info SessionInfo) error {
 	if tmuxSession == "" {
 		tmuxSession = buildTmuxSessionName(info.WorkspaceID, info.ID)
 	}
+	guestCWD := guestWorkdirForPTY(driverAny, info.WorkspaceID, info.WorkDir)
 	session := &Session{
 		ID:          info.ID,
 		WorkspaceID: info.WorkspaceID,
 		Name:        info.Name,
 		Shell:       "bash",
-		WorkDir:     info.WorkDir,
+		WorkDir:     guestCWD,
 		Cols:        info.Cols,
 		Rows:        info.Rows,
 		RemoteConn:  agentConn,
@@ -978,7 +1021,7 @@ func recoverPersistedTmuxSession(deps *Deps, info SessionInfo) error {
 		IsTmux:      true,
 		TmuxSession: tmuxSession,
 	}
-	if err := sendRemoteShellWrite(enc, dec, nil, info.ID, buildTmuxAttachCommand(tmuxSession)); err != nil {
+	if err := sendRemoteShellWrite(enc, dec, nil, info.ID, buildTmuxAttachCommand(tmuxSession, guestCWD)); err != nil {
 		_ = agentConn.Close()
 		return err
 	}

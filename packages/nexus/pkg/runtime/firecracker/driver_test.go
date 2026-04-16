@@ -57,7 +57,7 @@ func (f *fakeManager) GrowWorkspace(_ context.Context, _ string, _ int64) error 
 	return f.err
 }
 
-func (f *fakeManager) CheckpointForkImage(workspaceID string, childWorkspaceID string) (string, error) {
+func (f *fakeManager) CheckpointForkSnapshot(ctx context.Context, workspaceID string, childWorkspaceID string) (string, error) {
 	f.checkpointCalled = true
 	f.checkpointParent = workspaceID
 	f.checkpointChild = childWorkspaceID
@@ -346,24 +346,35 @@ func TestFirecrackerDriver_ForkCopiesParentProjectRoot(t *testing.T) {
 	}
 }
 
-func TestFirecrackerDriver_CheckpointForkUsesManagerSnapshotter(t *testing.T) {
+func TestFirecrackerDriver_CheckpointForkDelegatesToManager(t *testing.T) {
 	fakeMgr := &fakeManager{
 		checkpointID: "snap-fork-42",
 	}
 	d := NewDriver(nil, WithManager(fakeMgr))
 
-	snapshotID, err := d.CheckpointFork(context.Background(), "ws-1", "ws-2")
+	snapID, err := d.CheckpointFork(context.Background(), "ws-1", "ws-2")
 	if err != nil {
-		t.Fatalf("checkpoint fork failed: %v", err)
+		t.Fatalf("CheckpointFork failed: %v", err)
 	}
-	if snapshotID != "snap-fork-42" {
-		t.Fatalf("expected snapshot id %q, got %q", "snap-fork-42", snapshotID)
+	if snapID != "snap-fork-42" {
+		t.Fatalf("expected snapshot ID %q, got %q", "snap-fork-42", snapID)
 	}
 	if !fakeMgr.checkpointCalled {
-		t.Fatal("expected manager checkpoint to be called")
+		t.Fatal("expected manager.CheckpointForkImage to be called")
 	}
-	if fakeMgr.checkpointParent != "ws-1" || fakeMgr.checkpointChild != "ws-2" {
-		t.Fatalf("unexpected checkpoint args: parent=%q child=%q", fakeMgr.checkpointParent, fakeMgr.checkpointChild)
+	if fakeMgr.checkpointParent != "ws-1" {
+		t.Fatalf("expected parent ws-1, got %q", fakeMgr.checkpointParent)
+	}
+	if fakeMgr.checkpointChild != "ws-2" {
+		t.Fatalf("expected child ws-2, got %q", fakeMgr.checkpointChild)
+	}
+}
+
+func TestFirecrackerDriver_CheckpointForkRequiresManager(t *testing.T) {
+	d := NewDriver(nil)
+	_, err := d.CheckpointFork(context.Background(), "ws-1", "ws-2")
+	if err == nil {
+		t.Fatal("expected error when manager is nil")
 	}
 }
 

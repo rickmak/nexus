@@ -31,7 +31,8 @@ export function isRuntimeUnavailable(error: unknown): boolean {
   return (
     isLinuxTapUnsupported(error) ||
     message.includes('runtime preflight failed') ||
-    message.includes('seatbelt runtime requires limactl') ||
+    message.includes('lima guest runtime requires limactl') ||
+    message.includes('lima guest runtime requires limactl') ||
     message.includes('backend selection failed') ||
     message.includes('no required backend available') ||
     message.includes('lima start failed') ||

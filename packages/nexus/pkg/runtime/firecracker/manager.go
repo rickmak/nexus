@@ -69,6 +69,9 @@ type APIClientFactory func(sockPath string) apiClientInterface
 type apiClientInterface interface {
 	put(ctx context.Context, path string, body any) error
 	patch(ctx context.Context, path string, body any) error
+	PauseVM(ctx context.Context) error
+	ResumeVM(ctx context.Context) error
+	CreateSnapshot(ctx context.Context, vmstatePath, memFilePath string) error
 }
 
 // networkCommandRunner runs a network-related command.
@@ -95,6 +98,9 @@ type Manager struct {
 	mu               sync.RWMutex
 	nextCID          uint32
 	apiClientFactory APIClientFactory
+	snapshotCache    map[string]*baseSnapshot
+	snapshotMu       sync.RWMutex
+	reflinkAvailable bool
 }
 
 // NewManager creates a new Firecracker manager with the given configuration.
@@ -104,11 +110,19 @@ func NewManager(cfg ManagerConfig) *Manager {
 
 // newManager creates a new Firecracker manager with the given configuration.
 func newManager(cfg ManagerConfig) *Manager {
+	reflink := false
+	if strings.TrimSpace(cfg.WorkDirRoot) != "" {
+		if err := os.MkdirAll(cfg.WorkDirRoot, 0o755); err == nil {
+			reflink = probeReflink(cfg.WorkDirRoot)
+		}
+	}
 	return &Manager{
 		config:           cfg,
 		instances:        make(map[string]*Instance),
 		nextCID:          initialCID,
 		apiClientFactory: defaultAPIClientFactory,
+		snapshotCache:    make(map[string]*baseSnapshot),
+		reflinkAvailable: reflink,
 	}
 }
 
@@ -150,6 +164,27 @@ func (m *Manager) Spawn(ctx context.Context, spec SpawnSpec) (*Instance, error) 
 
 	if _, exists := m.instances[spec.WorkspaceID]; exists {
 		return nil, fmt.Errorf("workspace already exists: %s", spec.WorkspaceID)
+	}
+
+	// Snapshot restore path (experiment-gated)
+	if os.Getenv("NEXUS_FIRECRACKER_SNAPSHOT") == "1" {
+		snap, err := m.ensureBaseSnapshot(ctx, m.config.KernelPath, m.config.RootFSPath)
+		if err != nil {
+			return nil, fmt.Errorf("ensure base snapshot: %w", err)
+		}
+		if _, statErr := os.Stat(snap.vmstatePath); statErr == nil {
+			m.mu.Unlock()
+			inst, restoreErr := m.restoreFromSnapshot(ctx, spec, snap)
+			m.mu.Lock()
+			if restoreErr == nil {
+				return inst, nil
+			}
+			log.Printf("[firecracker] snapshot restore failed, falling back to cold boot: %v", restoreErr)
+			key := snapshotCacheKey(m.config.KernelPath, m.config.RootFSPath)
+			m.snapshotMu.Lock()
+			delete(m.snapshotCache, key)
+			m.snapshotMu.Unlock()
+		}
 	}
 
 	workDir := filepath.Join(m.config.WorkDirRoot, spec.WorkspaceID)
@@ -330,6 +365,25 @@ func (m *Manager) Spawn(ctx context.Context, spec SpawnSpec) (*Instance, error) 
 		teardownTAP(tap, subnetCIDR)
 		m.cleanup(workDir, cmd.Process)
 		return nil, fmt.Errorf("failed to start instance: %w", err)
+	}
+
+	// After successful cold boot, create base snapshot if experiment gate is active
+	if os.Getenv("NEXUS_FIRECRACKER_SNAPSHOT") == "1" {
+		snap, _ := m.ensureBaseSnapshot(ctx, m.config.KernelPath, m.config.RootFSPath)
+		if snap != nil {
+			if _, statErr := os.Stat(snap.vmstatePath); os.IsNotExist(statErr) {
+				if pauseErr := client.PauseVM(ctx); pauseErr == nil {
+					if snapErr := client.CreateSnapshot(ctx, snap.vmstatePath, snap.memFilePath); snapErr != nil {
+						log.Printf("[firecracker] WARNING: failed to create base snapshot: %v", snapErr)
+					}
+					if resumeErr := client.ResumeVM(ctx); resumeErr != nil {
+						log.Printf("[firecracker] WARNING: failed to resume after snapshot: %v", resumeErr)
+					}
+				} else {
+					log.Printf("[firecracker] WARNING: failed to pause for base snapshot: %v", pauseErr)
+				}
+			}
+		}
 	}
 
 	inst := &Instance{
@@ -536,42 +590,6 @@ func (m *Manager) Get(workspaceID string) (*Instance, error) {
 	}
 
 	return inst, nil
-}
-
-// CheckpointForkImage snapshots the parent workspace image and returns a
-// backend-specific snapshot identifier.
-func (m *Manager) CheckpointForkImage(workspaceID string, childWorkspaceID string) (string, error) {
-	m.mu.RLock()
-	parent, exists := m.instances[workspaceID]
-	m.mu.RUnlock()
-	if !exists {
-		return "", fmt.Errorf("workspace not found: %s", workspaceID)
-	}
-	if strings.TrimSpace(parent.WorkspaceImage) == "" {
-		return "", fmt.Errorf("workspace image missing for %s", workspaceID)
-	}
-
-	snapshotsDir := filepath.Join(m.config.WorkDirRoot, ".snapshots")
-	if err := os.MkdirAll(snapshotsDir, 0o755); err != nil {
-		return "", fmt.Errorf("create snapshots dir: %w", err)
-	}
-
-	snapshotID := fmt.Sprintf(
-		"fc-%s-%s-%d",
-		strings.TrimSpace(workspaceID),
-		strings.TrimSpace(childWorkspaceID),
-		time.Now().UTC().UnixNano(),
-	)
-	dst := filepath.Join(snapshotsDir, snapshotID+".ext4")
-	if err := copyFile(parent.WorkspaceImage, dst); err != nil {
-		return "", fmt.Errorf("checkpoint workspace image: %w", err)
-	}
-
-	return snapshotID, nil
-}
-
-func (m *Manager) snapshotImagePath(snapshotID string) string {
-	return filepath.Join(m.config.WorkDirRoot, ".snapshots", strings.TrimSpace(snapshotID)+".ext4")
 }
 
 func createWorkspaceImage(projectRoot, imagePath string) error {

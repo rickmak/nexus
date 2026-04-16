@@ -78,11 +78,13 @@ func (f *Factory) expandRuntimeRequirement(raw string) []string {
 	case "linux":
 		return []string{"firecracker"}
 	case "darwin":
-		return []string{"firecracker", "seatbelt"}
-	case "seatbelt":
-		return []string{"seatbelt"}
+		return []string{"lima", "process"}
+	case "process":
+		return []string{"process"}
+	case "lima":
+		return []string{"lima"}
 	case "firecracker":
-		return []string{strings.ToLower(strings.TrimSpace(raw))}
+		return []string{"firecracker"}
 	default:
 		return nil
 	}

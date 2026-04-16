@@ -9,16 +9,19 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	goruntime "runtime"
 	"strings"
 	"time"
 
+	"github.com/inizio/nexus/packages/nexus/pkg/config"
 	"github.com/inizio/nexus/packages/nexus/pkg/projectmgr"
 	rpckit "github.com/inizio/nexus/packages/nexus/pkg/rpcerrors"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
 	"github.com/inizio/nexus/packages/nexus/pkg/store"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspace/create"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspacemgr"
+	goruntime "runtime"
+
+	"github.com/inizio/nexus/packages/nexus/pkg/runtime/selection"
 )
 
 type WorkspaceCreateParams struct {
@@ -151,14 +154,14 @@ func HandleWorkspaceCreateWithProjects(ctx context.Context, req WorkspaceCreateP
 		return nil, prepErr
 	}
 
-	log.Printf("[workspace.create] Creating workspace for repo: %s", spec.Repo)
+	log.Printf("[workspace.create] Creating workspace for repo: %s backend=%s", spec.Repo, strings.TrimSpace(spec.Backend))
 
 	ws, err := mgr.Create(ctx, spec)
 	if err != nil {
 		return nil, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("workspace create failed: %v", err)}
 	}
 	usedCheckpointSnapshot := false
-	if !req.Fresh && strings.TrimSpace(sourceHint.SourceWorkspaceID) != "" && strings.EqualFold(strings.TrimSpace(ws.Backend), "firecracker") {
+	if !req.Fresh && strings.TrimSpace(sourceHint.SourceWorkspaceID) != "" && isVMIsolationBackend(ws.Backend) {
 		snapshotID, usedCheckpoint, snapshotErr := checkpointLatestFirecrackerSnapshotForCreate(ctx, mgr, factory, sourceHint.SourceWorkspaceID, ws.ID)
 		if snapshotErr != nil {
 			_ = mgr.Remove(ws.ID)
@@ -219,8 +222,6 @@ func HandleWorkspaceCreateWithProjects(ctx context.Context, req WorkspaceCreateP
 		return nil, rpcErr
 	}
 
-	log.Printf("[workspace.create] Runtime ready for workspace %s", ws.ID)
-
 	if !req.Fresh && strings.TrimSpace(ws.LineageSnapshotID) == "" {
 		if baselineSnapshotID, baselineErr := checkpointBaselineLineageSnapshot(ctx, ws, factory); baselineErr == nil && strings.TrimSpace(baselineSnapshotID) != "" {
 			if setErr := mgr.SetLineageSnapshot(ws.ID, baselineSnapshotID); setErr != nil {
@@ -238,6 +239,9 @@ func HandleWorkspaceCreateWithProjects(ctx context.Context, req WorkspaceCreateP
 		effectiveSourceBranch = ""
 		usedSnapshotID = ""
 	}
+
+	enrichWorkspaceRuntimeLabel(ws)
+	log.Printf("[workspace.create] Workspace %s ready runtime=%s", ws.ID, ws.RuntimeLabel)
 
 	return &WorkspaceCreateResult{
 		Workspace:             ws,
@@ -264,10 +268,17 @@ func shouldCopyDirtyStateForCreate(ws *workspacemgr.Workspace, usedCheckpointSna
 	if ws == nil {
 		return false
 	}
-	if strings.EqualFold(strings.TrimSpace(ws.Backend), "firecracker") {
+	if isVMIsolationBackend(ws.Backend) {
 		return !usedCheckpointSnapshot
 	}
 	return true
+}
+
+// isVMIsolationBackend returns true if the backend name represents a VM isolation backend
+// ("lima" on macOS, "firecracker" on Linux).
+func isVMIsolationBackend(backend string) bool {
+	b := strings.ToLower(strings.TrimSpace(backend))
+	return b == "firecracker" || b == "lima"
 }
 
 func resolveCreateSpec(req WorkspaceCreateParams, projMgr *projectmgr.Manager) (workspacemgr.CreateSpec, error) {
@@ -417,12 +428,25 @@ func HandleWorkspaceOpen(_ context.Context, req WorkspaceOpenParams, mgr *worksp
 	if !ok {
 		return nil, rpckit.ErrWorkspaceNotFound
 	}
-
+	enrichWorkspaceRuntimeLabel(ws)
 	return &WorkspaceOpenResult{Workspace: ws}, nil
 }
 
 func HandleWorkspaceList(_ context.Context, _ WorkspaceListParams, mgr *workspacemgr.Manager) (*WorkspaceListResult, *rpckit.RPCError) {
 	all := mgr.List()
+	if len(all) == 0 {
+		log.Printf("[workspace.list] count=0")
+		return &WorkspaceListResult{Workspaces: all}, nil
+	}
+	parts := make([]string, 0, len(all))
+	for _, ws := range all {
+		if ws == nil {
+			continue
+		}
+		enrichWorkspaceRuntimeLabel(ws)
+		parts = append(parts, fmt.Sprintf("%s:%q:%s", ws.ID, ws.WorkspaceName, ws.RuntimeLabel))
+	}
+	log.Printf("[workspace.list] count=%d %s", len(parts), strings.Join(parts, " | "))
 	return &WorkspaceListResult{Workspaces: all}, nil
 }
 
@@ -503,6 +527,7 @@ func HandleWorkspaceStart(ctx context.Context, req WorkspaceStartParams, mgr *wo
 	if !ok {
 		return nil, rpckit.ErrWorkspaceNotFound
 	}
+	enrichWorkspaceRuntimeLabel(ws)
 	return &WorkspaceStartResult{Workspace: ws}, nil
 }
 
@@ -516,13 +541,29 @@ func HandleWorkspaceRestore(ctx context.Context, req WorkspaceRestoreParams, mgr
 	var requiredBackends []string
 
 	if factory != nil {
-		requiredBackends, requiredCaps := create.DefaultPlatformHints()
-
-		driver, err := factory.SelectDriver(requiredBackends, requiredCaps)
-		if err != nil {
-			return &WorkspaceRestoreResult{}, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
+		explicitBackend := normalizeWorkspaceBackend(strings.TrimSpace(ws.Backend))
+		if explicitBackend != "" {
+			if driver, exists := factory.DriverForBackend(explicitBackend); exists {
+				selectedDriver = driver
+				requiredBackends = []string{explicitBackend}
+			} else {
+				return &WorkspaceRestoreResult{}, &rpckit.RPCError{
+					Code:    rpckit.ErrInternalError.Code,
+					Message: fmt.Sprintf("backend selection failed: driver not registered for workspace backend %q", explicitBackend),
+				}
+			}
+		} else {
+			backend, _, err := selection.SelectBackend(goruntime.GOOS, nil)
+			if err != nil {
+				return &WorkspaceRestoreResult{}, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: %v", err)}
+			}
+			driver, exists := factory.DriverForBackend(backend)
+			if !exists {
+				return &WorkspaceRestoreResult{}, &rpckit.RPCError{Code: rpckit.ErrInternalError.Code, Message: fmt.Sprintf("backend selection failed: driver not registered for backend %q", backend)}
+			}
+			selectedDriver = driver
+			requiredBackends = []string{backend}
 		}
-		selectedDriver = driver
 	}
 
 	ws, ok = mgr.Restore(req.ID)
@@ -565,6 +606,7 @@ func HandleWorkspaceRestore(ctx context.Context, req WorkspaceRestoreParams, mgr
 		}
 	}
 
+	enrichWorkspaceRuntimeLabel(ws)
 	return &WorkspaceRestoreResult{Restored: true, Workspace: ws}, nil
 }
 
@@ -637,6 +679,7 @@ func HandleWorkspaceFork(ctx context.Context, req WorkspaceForkParams, mgr *work
 	if !ok {
 		return nil, rpckit.ErrWorkspaceNotFound
 	}
+	enrichWorkspaceRuntimeLabel(updatedChild)
 	return &WorkspaceForkResult{Forked: true, Workspace: updatedChild}, nil
 }
 
@@ -742,6 +785,7 @@ func HandleWorkspaceCheckout(_ context.Context, req WorkspaceCheckoutParams, mgr
 			}
 		}
 	}
+	enrichWorkspaceRuntimeLabel(result.Workspace)
 	return result, nil
 }
 
@@ -929,13 +973,13 @@ func checkpointLatestFirecrackerSnapshotForCreate(ctx context.Context, mgr *work
 		return "", false, fmt.Errorf(rpcErr.Message)
 	}
 
-	driver, err := selectDriverForWorkspaceBackend(factory, "firecracker")
+	driver, err := selectDriverForWorkspaceBackend(factory, sourceWS.Backend)
 	if err != nil {
 		return "", false, err
 	}
 	snapshotter, ok := driver.(runtime.ForkSnapshotter)
 	if !ok {
-		// Some environments (e.g. macOS shim backends) expose firecracker semantics
+		// Some environments (e.g. macOS shim backends) expose VM isolation semantics
 		// without native checkpoint support; caller should fall back to worktree sync.
 		return "", false, nil
 	}
@@ -964,6 +1008,9 @@ func ensureLocalRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace
 
 	options := map[string]string{
 		"host_cli_sync": "true",
+	}
+	if isVMIsolationBackend(ws.Backend) {
+		options["vm.mode"] = vmModeForRepo(strings.TrimSpace(ws.Repo))
 	}
 	if strings.TrimSpace(ws.LineageSnapshotID) != "" {
 		options["lineage_snapshot_id"] = strings.TrimSpace(ws.LineageSnapshotID)
@@ -1084,8 +1131,13 @@ func preferredLineageSnapshotForCreate(mgr *workspacemgr.Manager, target *worksp
 		if strings.TrimSpace(candidate.RepoID) != targetRepoID {
 			continue
 		}
-		if strings.TrimSpace(candidate.Backend) != targetBackend {
-			continue
+		candidateBackend := strings.TrimSpace(candidate.Backend)
+		if candidateBackend != targetBackend {
+			// Allow cross-backend lineage snapshots between VM isolation backends
+			// (e.g. "firecracker" snapshots are compatible with "lima" workspaces).
+			if !(isVMIsolationBackend(candidateBackend) && isVMIsolationBackend(targetBackend)) {
+				continue
+			}
 		}
 		if strings.TrimSpace(candidate.LineageSnapshotID) == "" {
 			continue
@@ -1147,19 +1199,76 @@ func resumeRuntimeWorkspace(ctx context.Context, ws *workspacemgr.Workspace, fac
 }
 
 func selectDriverForWorkspaceBackend(factory *runtime.Factory, backend string) (runtime.Driver, error) {
-	trimmed := strings.TrimSpace(backend)
+	trimmed := normalizeWorkspaceBackend(strings.TrimSpace(backend))
 	if trimmed == "" {
 		return nil, fmt.Errorf("workspace backend is empty")
-	}
-	if goruntime.GOOS == "darwin" && strings.EqualFold(trimmed, "seatbelt") {
-		// Local macOS daemon uses the firecracker alias (Lima-backed) as the
-		// canonical backend. Route legacy seatbelt records through that driver.
-		if driver, ok := factory.DriverForBackend("firecracker"); ok {
-			return driver, nil
-		}
 	}
 	if driver, ok := factory.DriverForBackend(trimmed); ok {
 		return driver, nil
 	}
 	return factory.SelectDriver([]string{trimmed}, nil)
+}
+
+func normalizeWorkspaceBackend(backend string) string {
+	return strings.TrimSpace(backend)
+}
+
+func enrichWorkspaceRuntimeLabel(ws *workspacemgr.Workspace) {
+	if ws == nil {
+		return
+	}
+	ws.RuntimeLabel = runtimeLabelForWorkspace(ws)
+}
+
+func runtimeLabelForWorkspace(ws *workspacemgr.Workspace) string {
+	if ws == nil {
+		return ""
+	}
+	backend := strings.TrimSpace(ws.Backend)
+	repo := strings.TrimSpace(ws.Repo)
+	if repo == "" {
+		return fmt.Sprintf("backend=%s", backend)
+	}
+	cfg, _, err := config.LoadWorkspaceConfig(repo)
+	if err != nil {
+		return fmt.Sprintf("backend=%s", backend)
+	}
+	level := strings.TrimSpace(cfg.Isolation.Level)
+	if level == "" {
+		level = "vm"
+	}
+	var b strings.Builder
+	fmt.Fprintf(&b, "backend=%s isolation=%s", backend, level)
+	switch strings.ToLower(backend) {
+	case "firecracker":
+		wantDedicated := strings.EqualFold(strings.TrimSpace(cfg.Isolation.VM.Mode), "dedicated")
+		mode := vmModeForRepo(repo)
+		fmt.Fprintf(&b, " vm.mode=%s", mode)
+		if wantDedicated && mode == "pool" && !selection.DarwinHasNestedVirt() {
+			fmt.Fprintf(&b, " (pool: nested-virt-off)")
+		}
+	case "process":
+		if cfg.InternalFeatures.ProcessSandbox {
+			fmt.Fprintf(&b, " processSandbox=relaxed")
+		} else {
+			fmt.Fprintf(&b, " processSandbox=strict")
+		}
+	}
+	return b.String()
+}
+
+func vmModeForRepo(repo string) string {
+	repo = strings.TrimSpace(repo)
+	if repo == "" {
+		return "pool"
+	}
+	cfg, _, err := config.LoadWorkspaceConfig(repo)
+	if err != nil {
+		return "pool"
+	}
+	mode := strings.ToLower(strings.TrimSpace(cfg.Isolation.VM.Mode))
+	if mode == "dedicated" {
+		return "dedicated"
+	}
+	return "pool"
 }

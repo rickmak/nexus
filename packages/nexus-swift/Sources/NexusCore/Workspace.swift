@@ -47,6 +47,10 @@ public struct Workspace: Identifiable, Codable, Equatable, Sendable {
     public let agentProfile: String
     public var repoId: String?
     public var projectId: String?
+    /// Daemon runtime backend id, e.g. firecracker, process.
+    public let backend: String?
+    /// Human-readable summary from daemon (`runtimeLabel` JSON), e.g. backend + isolation + vm.mode.
+    public let runtimeLabel: String?
     public var ports: [ForwardedPort]
     public var hasActiveTunnels: Bool
 
@@ -60,12 +64,35 @@ public struct Workspace: Identifiable, Codable, Equatable, Sendable {
     public var status: WorkspaceStatus { state }
     public var snapshotCount: Int { 0 }
 
+    /// Short tag for lists (sidebar); full `runtimeLabel` is shown in the workspace detail strip when present.
+    public var shortRuntimeBadge: String {
+        let b = (backend ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        switch b {
+        case "firecracker": return "VM"
+        case "process": return "proc"
+        case "":
+            let label = (runtimeLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            if label.isEmpty { return "" }
+            return String(label.prefix(8))
+        default: return String(b.prefix(6))
+        }
+    }
+
+    /// Line for detail UI: prefer daemon-composed label, else backend name.
+    public var detailRuntimeLine: String {
+        let label = (runtimeLabel ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        if !label.isEmpty { return label }
+        let b = (backend ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return b
+    }
+
     enum CodingKeys: String, CodingKey {
         case id, workspaceName, repo, ref, state, rootPath, agentProfile
         case targetBranch, currentRef, currentCommit
         case parentWorkspaceId = "parentWorkspaceId"
         case repoId = "repoId"
         case projectId = "projectId"
+        case backend, runtimeLabel
     }
 
     public init(from decoder: Decoder) throws {
@@ -83,6 +110,8 @@ public struct Workspace: Identifiable, Codable, Equatable, Sendable {
         agentProfile = try c.decodeIfPresent(String.self, forKey: .agentProfile) ?? ""
         repoId       = try c.decodeIfPresent(String.self, forKey: .repoId)
         projectId    = try c.decodeIfPresent(String.self, forKey: .projectId)
+        backend      = try c.decodeIfPresent(String.self, forKey: .backend)
+        runtimeLabel = try c.decodeIfPresent(String.self, forKey: .runtimeLabel)
         ports        = []
         hasActiveTunnels = false
     }
@@ -102,13 +131,16 @@ public struct Workspace: Identifiable, Codable, Equatable, Sendable {
         try c.encode(agentProfile, forKey: .agentProfile)
         try c.encodeIfPresent(repoId, forKey: .repoId)
         try c.encodeIfPresent(projectId, forKey: .projectId)
+        try c.encodeIfPresent(backend, forKey: .backend)
+        try c.encodeIfPresent(runtimeLabel, forKey: .runtimeLabel)
     }
 
     public init(id: String, workspaceName: String, repo: String = "",
                 ref: String = "main", state: WorkspaceStatus = .stopped,
                 rootPath: String = "", agentProfile: String = "default",
                 repoId: String? = nil, projectId: String? = nil,
-                ports: [ForwardedPort] = [], hasActiveTunnels: Bool = false) {
+                ports: [ForwardedPort] = [], hasActiveTunnels: Bool = false,
+                backend: String? = nil, runtimeLabel: String? = nil) {
         self.id           = id
         self.workspaceName = workspaceName
         self.repo         = repo
@@ -122,6 +154,8 @@ public struct Workspace: Identifiable, Codable, Equatable, Sendable {
         self.agentProfile = agentProfile
         self.repoId       = repoId
         self.projectId    = projectId
+        self.backend      = backend
+        self.runtimeLabel = runtimeLabel
         self.ports        = ports
         self.hasActiveTunnels = hasActiveTunnels
     }

@@ -14,7 +14,6 @@ import (
 	rpckit "github.com/inizio/nexus/packages/nexus/pkg/rpcerrors"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/selection"
-	"github.com/inizio/nexus/packages/nexus/pkg/workspace/create"
 	"github.com/inizio/nexus/packages/nexus/pkg/workspacemgr"
 )
 
@@ -43,6 +42,24 @@ func setupRepoWithWorkspaceConfig(t *testing.T, workspaceConfig string) string {
 	}
 
 	return "./" + repo
+}
+
+// vmIsolationBackend returns the VM isolation backend name for the current platform.
+// On darwin it is "lima"; on linux it is "firecracker".
+func vmIsolationBackend() string {
+	if goruntime.GOOS == "darwin" {
+		return "lima"
+	}
+	return "firecracker"
+}
+
+// vmIsolationDrivers returns a map with mock drivers for both VM isolation backends,
+// so tests work cross-platform (darwin uses "lima", linux uses "firecracker").
+func vmIsolationDrivers(d runtime.Driver) map[string]runtime.Driver {
+	return map[string]runtime.Driver{
+		"lima":        d,
+		"firecracker": d,
+	}
 }
 
 func TestHandleWorkspaceCreate(t *testing.T) {
@@ -231,24 +248,22 @@ func TestHandleWorkspaceCreateWithProjects_UsesExplicitSourceBranchSnapshot(t *t
 	}
 
 	var gotSnapshot string
-	factory := runtime.NewFactory([]runtime.Capability{{Name: "runtime.linux", Available: true}, {Name: "runtime.firecracker", Available: true}}, map[string]runtime.Driver{
-		"firecracker": &mockDriver{
-			backend: "firecracker",
-			checkpointForkFn: func(_ context.Context, workspaceID, childWorkspaceID string) (string, error) {
-				if workspaceID != relWS.ID {
-					t.Fatalf("expected checkpoint parent %q, got %q", relWS.ID, workspaceID)
-				}
-				if strings.TrimSpace(childWorkspaceID) == "" {
-					t.Fatal("expected non-empty child workspace id for checkpoint")
-				}
-				return "snap-release-latest", nil
-			},
-			createFn: func(_ context.Context, req runtime.CreateRequest) error {
-				gotSnapshot = strings.TrimSpace(req.Options["lineage_snapshot_id"])
-				return nil
-			},
+	factory := runtime.NewFactory([]runtime.Capability{{Name: "runtime.linux", Available: true}, {Name: "runtime.firecracker", Available: true}}, vmIsolationDrivers(&mockDriver{
+		backend: vmIsolationBackend(),
+		checkpointForkFn: func(_ context.Context, workspaceID, childWorkspaceID string) (string, error) {
+			if workspaceID != relWS.ID {
+				t.Fatalf("expected checkpoint parent %q, got %q", relWS.ID, workspaceID)
+			}
+			if strings.TrimSpace(childWorkspaceID) == "" {
+				t.Fatal("expected non-empty child workspace id for checkpoint")
+			}
+			return "snap-release-latest", nil
 		},
-	})
+		createFn: func(_ context.Context, req runtime.CreateRequest) error {
+			gotSnapshot = strings.TrimSpace(req.Options["lineage_snapshot_id"])
+			return nil
+		},
+	}))
 
 	params := WorkspaceCreateParams{
 		ProjectID:     project.ID,
@@ -312,24 +327,22 @@ func TestHandleWorkspaceCreateWithProjects_FreshSkipsSourceSnapshot(t *testing.T
 	}
 
 	var gotSnapshot string
-	factory := runtime.NewFactory([]runtime.Capability{{Name: "runtime.linux", Available: true}, {Name: "runtime.firecracker", Available: true}}, map[string]runtime.Driver{
-		"firecracker": &mockDriver{
-			backend: "firecracker",
-			checkpointForkFn: func(_ context.Context, workspaceID, childWorkspaceID string) (string, error) {
-				if workspaceID != baseWS.ID {
-					t.Fatalf("expected checkpoint parent %q, got %q", baseWS.ID, workspaceID)
-				}
-				if strings.TrimSpace(childWorkspaceID) == "" {
-					t.Fatal("expected non-empty child workspace id for checkpoint")
-				}
-				return "snap-source-latest", nil
-			},
-			createFn: func(_ context.Context, req runtime.CreateRequest) error {
-				gotSnapshot = strings.TrimSpace(req.Options["lineage_snapshot_id"])
-				return nil
-			},
+	factory := runtime.NewFactory([]runtime.Capability{{Name: "runtime.linux", Available: true}, {Name: "runtime.firecracker", Available: true}}, vmIsolationDrivers(&mockDriver{
+		backend: vmIsolationBackend(),
+		checkpointForkFn: func(_ context.Context, workspaceID, childWorkspaceID string) (string, error) {
+			if workspaceID != baseWS.ID {
+				t.Fatalf("expected checkpoint parent %q, got %q", baseWS.ID, workspaceID)
+			}
+			if strings.TrimSpace(childWorkspaceID) == "" {
+				t.Fatal("expected non-empty child workspace id for checkpoint")
+			}
+			return "snap-source-latest", nil
 		},
-	})
+		createFn: func(_ context.Context, req runtime.CreateRequest) error {
+			gotSnapshot = strings.TrimSpace(req.Options["lineage_snapshot_id"])
+			return nil
+		},
+	}))
 
 	params := WorkspaceCreateParams{
 		ProjectID:     project.ID,
@@ -387,24 +400,22 @@ func TestHandleWorkspaceCreateWithProjects_UsesSourceWorkspaceID(t *testing.T) {
 	}
 
 	var gotSnapshot string
-	factory := runtime.NewFactory([]runtime.Capability{{Name: "runtime.linux", Available: true}, {Name: "runtime.firecracker", Available: true}}, map[string]runtime.Driver{
-		"firecracker": &mockDriver{
-			backend: "firecracker",
-			checkpointForkFn: func(_ context.Context, workspaceID, childWorkspaceID string) (string, error) {
-				if workspaceID != sourceWS.ID {
-					t.Fatalf("expected checkpoint parent %q, got %q", sourceWS.ID, workspaceID)
-				}
-				if strings.TrimSpace(childWorkspaceID) == "" {
-					t.Fatal("expected non-empty child workspace id for checkpoint")
-				}
-				return "snap-source-latest", nil
-			},
-			createFn: func(_ context.Context, req runtime.CreateRequest) error {
-				gotSnapshot = strings.TrimSpace(req.Options["lineage_snapshot_id"])
-				return nil
-			},
+	factory := runtime.NewFactory([]runtime.Capability{{Name: "runtime.linux", Available: true}, {Name: "runtime.firecracker", Available: true}}, vmIsolationDrivers(&mockDriver{
+		backend: vmIsolationBackend(),
+		checkpointForkFn: func(_ context.Context, workspaceID, childWorkspaceID string) (string, error) {
+			if workspaceID != sourceWS.ID {
+				t.Fatalf("expected checkpoint parent %q, got %q", sourceWS.ID, workspaceID)
+			}
+			if strings.TrimSpace(childWorkspaceID) == "" {
+				t.Fatal("expected non-empty child workspace id for checkpoint")
+			}
+			return "snap-source-latest", nil
 		},
-	})
+		createFn: func(_ context.Context, req runtime.CreateRequest) error {
+			gotSnapshot = strings.TrimSpace(req.Options["lineage_snapshot_id"])
+			return nil
+		},
+	}))
 
 	params := WorkspaceCreateParams{
 		ProjectID:         project.ID,
@@ -447,7 +458,7 @@ func TestHandleWorkspaceCreateWithProjects_CopiesDirtyStateFromSourceWorkspace(t
 		Ref:           "main",
 		WorkspaceName: "base",
 		AgentProfile:  "default",
-		Backend:       "seatbelt",
+		Backend:       "firecracker",
 	})
 	if err != nil {
 		t.Fatalf("create source ws: %v", err)
@@ -513,9 +524,7 @@ func TestHandleWorkspaceCreate_WithFactory(t *testing.T) {
 	factory := runtime.NewFactory([]runtime.Capability{
 		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: true},
-	}, map[string]runtime.Driver{
-		"firecracker": &mockDriver{backend: "firecracker"},
-	})
+	}, vmIsolationDrivers(&mockDriver{backend: vmIsolationBackend()}))
 
 	params := WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
@@ -556,9 +565,7 @@ func TestHandleWorkspaceCreate_ConfigRequiredBackendHonored(t *testing.T) {
 	factory := runtime.NewFactory([]runtime.Capability{
 		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: true},
-	}, map[string]runtime.Driver{
-		"firecracker": &mockDriver{backend: "firecracker"},
-	})
+	}, vmIsolationDrivers(&mockDriver{backend: vmIsolationBackend()}))
 
 	params := WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
@@ -576,8 +583,8 @@ func TestHandleWorkspaceCreate_ConfigRequiredBackendHonored(t *testing.T) {
 	if result == nil || result.Workspace == nil {
 		t.Fatalf("expected workspace, got %#v", result)
 	}
-	if result.Workspace.Backend != "firecracker" {
-		t.Fatalf("expected backend 'firecracker' from config required, got %q", result.Workspace.Backend)
+	if result.Workspace.Backend != vmIsolationBackend() {
+		t.Fatalf("expected backend %q from config required, got %q", vmIsolationBackend(), result.Workspace.Backend)
 	}
 }
 
@@ -588,9 +595,7 @@ func TestHandleWorkspaceCreate_FactoryWithUnavailableCapability(t *testing.T) {
 	factory := runtime.NewFactory([]runtime.Capability{
 		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: false},
-	}, map[string]runtime.Driver{
-		"firecracker": &mockDriver{backend: "firecracker"},
-	})
+	}, vmIsolationDrivers(&mockDriver{backend: vmIsolationBackend()}))
 
 	params := WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
@@ -608,8 +613,8 @@ func TestHandleWorkspaceCreate_FactoryWithUnavailableCapability(t *testing.T) {
 	if result == nil || result.Workspace == nil {
 		t.Fatalf("expected workspace create result, got %#v", result)
 	}
-	if result.Workspace.Backend != "firecracker" {
-		t.Fatalf("expected backend firecracker, got %q", result.Workspace.Backend)
+	if result.Workspace.Backend != vmIsolationBackend() {
+		t.Fatalf("expected backend %q, got %q", vmIsolationBackend(), result.Workspace.Backend)
 	}
 }
 
@@ -632,9 +637,7 @@ func TestHandleWorkspaceCreate_MissingRuntimeRequiredUsesDefaultLinux(t *testing
 	factory := runtime.NewFactory([]runtime.Capability{
 		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: true},
-	}, map[string]runtime.Driver{
-		"firecracker": &mockDriver{backend: "firecracker"},
-	})
+	}, vmIsolationDrivers(&mockDriver{backend: vmIsolationBackend()}))
 
 	params := WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
@@ -652,12 +655,12 @@ func TestHandleWorkspaceCreate_MissingRuntimeRequiredUsesDefaultLinux(t *testing
 	if result == nil || result.Workspace == nil {
 		t.Fatalf("expected workspace, got %#v", result)
 	}
-	if result.Workspace.Backend != "firecracker" {
-		t.Fatalf("expected backend firecracker from default linux requirement, got %q", result.Workspace.Backend)
+	if result.Workspace.Backend != vmIsolationBackend() {
+		t.Fatalf("expected backend %q from default linux requirement, got %q", vmIsolationBackend(), result.Workspace.Backend)
 	}
 }
 
-func TestHandleWorkspaceCreate_MissingRuntimeRequiredDoesNotUseSpecBackend(t *testing.T) {
+func TestHandleWorkspaceCreate_ExplicitSpecBackendIsHonored(t *testing.T) {
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
 	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
@@ -670,9 +673,9 @@ func TestHandleWorkspaceCreate_MissingRuntimeRequiredDoesNotUseSpecBackend(t *te
 	}
 
 	factory := runtime.NewFactory([]runtime.Capability{
-		{Name: "runtime.local", Available: true},
+		{Name: "runtime.process", Available: true},
 	}, map[string]runtime.Driver{
-		"local": &mockDriver{backend: "local"},
+		"process": &mockDriver{backend: "process"},
 	})
 
 	params := WorkspaceCreateParams{
@@ -681,13 +684,19 @@ func TestHandleWorkspaceCreate_MissingRuntimeRequiredDoesNotUseSpecBackend(t *te
 			Ref:           "main",
 			WorkspaceName: "alpha",
 			AgentProfile:  "default",
-			Backend:       "local",
+			Backend:       "process",
 		},
 	}
 
-	_, rpcErr := HandleWorkspaceCreate(context.Background(), params, mgr, factory)
-	if rpcErr == nil {
-		t.Fatal("expected rpc error when runtime.required is missing")
+	result, rpcErr := HandleWorkspaceCreate(context.Background(), params, mgr, factory)
+	if rpcErr != nil {
+		t.Fatalf("expected success when explicit backend=process is provided, got %+v", rpcErr)
+	}
+	if result == nil || result.Workspace == nil {
+		t.Fatalf("expected workspace, got %#v", result)
+	}
+	if result.Workspace.Backend != "process" {
+		t.Fatalf("expected backend %q from explicit spec, got %q", "process", result.Workspace.Backend)
 	}
 }
 
@@ -704,9 +713,9 @@ func TestHandleWorkspaceCreate_MissingRuntimeRequiredDoesNotFallbackToLocal(t *t
 	}
 
 	factory := runtime.NewFactory([]runtime.Capability{
-		{Name: "runtime.local", Available: true},
+		{Name: "runtime.process", Available: true},
 	}, map[string]runtime.Driver{
-		"local": &mockDriver{backend: "local"},
+		"process": &mockDriver{backend: "process"},
 	})
 
 	params := WorkspaceCreateParams{
@@ -951,9 +960,7 @@ func TestHandleWorkspaceRestore_WithFactory(t *testing.T) {
 	factory := runtime.NewFactory([]runtime.Capability{
 		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: true},
-	}, map[string]runtime.Driver{
-		"firecracker": &mockDriver{backend: "firecracker"},
-	})
+	}, vmIsolationDrivers(&mockDriver{backend: vmIsolationBackend()}))
 
 	createParams := WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
@@ -1000,9 +1007,7 @@ func TestHandleWorkspaceRestore_WithFactory_PersistsBackendSelection(t *testing.
 	factory := runtime.NewFactory([]runtime.Capability{
 		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: true},
-	}, map[string]runtime.Driver{
-		"firecracker": &mockDriver{backend: "firecracker"},
-	})
+	}, vmIsolationDrivers(&mockDriver{backend: vmIsolationBackend()}))
 
 	createParams := WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
@@ -1050,9 +1055,7 @@ func TestHandleWorkspaceRestore_FactoryWithUnavailableCapability(t *testing.T) {
 	factory := runtime.NewFactory([]runtime.Capability{
 		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: false},
-	}, map[string]runtime.Driver{
-		"firecracker": &mockDriver{backend: "firecracker"},
-	})
+	}, vmIsolationDrivers(&mockDriver{backend: vmIsolationBackend()}))
 
 	createParams := WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
@@ -1074,8 +1077,8 @@ func TestHandleWorkspaceRestore_FactoryWithUnavailableCapability(t *testing.T) {
 	if result == nil || result.Workspace == nil {
 		t.Fatalf("expected restore result workspace, got %#v", result)
 	}
-	if result.Workspace.Backend != "firecracker" {
-		t.Fatalf("expected restored backend firecracker, got %q", result.Workspace.Backend)
+	if result.Workspace.Backend != vmIsolationBackend() {
+		t.Fatalf("expected restored backend %q, got %q", vmIsolationBackend(), result.Workspace.Backend)
 	}
 }
 
@@ -1095,9 +1098,7 @@ func TestHandleWorkspaceRestore_ConfigRequiredBackendHonored(t *testing.T) {
 	factory := runtime.NewFactory([]runtime.Capability{
 		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: true},
-	}, map[string]runtime.Driver{
-		"firecracker": &mockDriver{backend: "firecracker"},
-	})
+	}, vmIsolationDrivers(&mockDriver{backend: vmIsolationBackend()}))
 
 	createParams := WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
@@ -1120,8 +1121,8 @@ func TestHandleWorkspaceRestore_ConfigRequiredBackendHonored(t *testing.T) {
 	if result == nil || result.Workspace == nil {
 		t.Fatalf("expected workspace, got %#v", result)
 	}
-	if result.Workspace.Backend != "firecracker" {
-		t.Fatalf("expected backend 'firecracker' from config required, got %q", result.Workspace.Backend)
+	if result.Workspace.Backend != vmIsolationBackend() {
+		t.Fatalf("expected backend %q from config required, got %q", vmIsolationBackend(), result.Workspace.Backend)
 	}
 }
 
@@ -1300,20 +1301,18 @@ func TestHandleWorkspaceFork_WithFactoryUsesRuntimeCheckpointID(t *testing.T) {
 	const checkpointID = "snap-parent-to-child-1"
 	factory := runtime.NewFactory(
 		[]runtime.Capability{{Name: "runtime.firecracker", Available: true}},
-		map[string]runtime.Driver{
-			"firecracker": &mockDriver{
-				backend: "firecracker",
-				checkpointForkFn: func(_ context.Context, workspaceID, childWorkspaceID string) (string, error) {
-					if workspaceID != parent.ID {
-						t.Fatalf("expected parent id %q, got %q", parent.ID, workspaceID)
-					}
-					if strings.TrimSpace(childWorkspaceID) == "" {
-						t.Fatal("expected non-empty child workspace id")
-					}
-					return checkpointID, nil
-				},
+		vmIsolationDrivers(&mockDriver{
+			backend: vmIsolationBackend(),
+			checkpointForkFn: func(_ context.Context, workspaceID, childWorkspaceID string) (string, error) {
+				if workspaceID != parent.ID {
+					t.Fatalf("expected parent id %q, got %q", parent.ID, workspaceID)
+				}
+				if strings.TrimSpace(childWorkspaceID) == "" {
+					t.Fatal("expected non-empty child workspace id")
+				}
+				return checkpointID, nil
 			},
-		},
+		}),
 	)
 
 	result, rpcErr := HandleWorkspaceFork(context.Background(), WorkspaceForkParams{
@@ -1362,20 +1361,18 @@ func TestHandleWorkspaceFork_UsesProjectRootSandboxAsForkSource(t *testing.T) {
 
 	factory := runtime.NewFactory(
 		[]runtime.Capability{{Name: "runtime.firecracker", Available: true}},
-		map[string]runtime.Driver{
-			"firecracker": &mockDriver{
-				backend: "firecracker",
-				checkpointForkFn: func(_ context.Context, workspaceID, childWorkspaceID string) (string, error) {
-					if workspaceID != rootWS.ID {
-						t.Fatalf("expected runtime fork source to be root workspace %q, got %q", rootWS.ID, workspaceID)
-					}
-					if strings.TrimSpace(childWorkspaceID) == "" {
-						t.Fatal("expected child workspace id")
-					}
-					return "snap-root-fork", nil
-				},
+		vmIsolationDrivers(&mockDriver{
+			backend: vmIsolationBackend(),
+			checkpointForkFn: func(_ context.Context, workspaceID, childWorkspaceID string) (string, error) {
+				if workspaceID != rootWS.ID {
+					t.Fatalf("expected runtime fork source to be root workspace %q, got %q", rootWS.ID, workspaceID)
+				}
+				if strings.TrimSpace(childWorkspaceID) == "" {
+					t.Fatal("expected child workspace id")
+				}
+				return "snap-root-fork", nil
 			},
-		},
+		}),
 	)
 
 	result, rpcErr := HandleWorkspaceFork(context.Background(), WorkspaceForkParams{
@@ -1424,20 +1421,18 @@ func TestHandleWorkspaceFork_AllowsExplicitSourceWorkspaceOverride(t *testing.T)
 
 	factory := runtime.NewFactory(
 		[]runtime.Capability{{Name: "runtime.firecracker", Available: true}},
-		map[string]runtime.Driver{
-			"firecracker": &mockDriver{
-				backend: "firecracker",
-				checkpointForkFn: func(_ context.Context, workspaceID, childWorkspaceID string) (string, error) {
-					if workspaceID != featureWS.ID {
-						t.Fatalf("expected explicit runtime fork source %q, got %q", featureWS.ID, workspaceID)
-					}
-					if strings.TrimSpace(childWorkspaceID) == "" {
-						t.Fatal("expected child workspace id")
-					}
-					return "snap-explicit-fork", nil
-				},
+		vmIsolationDrivers(&mockDriver{
+			backend: vmIsolationBackend(),
+			checkpointForkFn: func(_ context.Context, workspaceID, childWorkspaceID string) (string, error) {
+				if workspaceID != featureWS.ID {
+					t.Fatalf("expected explicit runtime fork source %q, got %q", featureWS.ID, workspaceID)
+				}
+				if strings.TrimSpace(childWorkspaceID) == "" {
+					t.Fatal("expected child workspace id")
+				}
+				return "snap-explicit-fork", nil
 			},
-		},
+		}),
 	)
 
 	result, rpcErr := HandleWorkspaceFork(context.Background(), WorkspaceForkParams{
@@ -1473,9 +1468,7 @@ func TestHandleWorkspaceFork_WithFactoryLinuxRequiresFirecracker(t *testing.T) {
 	factory := runtime.NewFactory([]runtime.Capability{
 		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: false},
-	}, map[string]runtime.Driver{
-		"firecracker": &mockDriver{backend: "firecracker"},
-	})
+	}, vmIsolationDrivers(&mockDriver{backend: vmIsolationBackend()}))
 
 	createParams := WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
@@ -1491,8 +1484,8 @@ func TestHandleWorkspaceFork_WithFactoryLinuxRequiresFirecracker(t *testing.T) {
 	if result == nil || result.Workspace == nil {
 		t.Fatalf("expected workspace create result, got %#v", result)
 	}
-	if result.Workspace.Backend != "firecracker" {
-		t.Fatalf("expected backend firecracker, got %q", result.Workspace.Backend)
+	if result.Workspace.Backend != vmIsolationBackend() {
+		t.Fatalf("expected backend %q, got %q", vmIsolationBackend(), result.Workspace.Backend)
 	}
 }
 
@@ -1508,13 +1501,11 @@ func TestHandleWorkspaceFork_WithFactoryLinuxBackendAfterRestartLikeState(t *tes
 		t.Fatalf("write config: %v", err)
 	}
 
-	lxcDriver := &mockDriver{backend: "firecracker"}
+	lxcDriver := &mockDriver{backend: vmIsolationBackend()}
 	factory := runtime.NewFactory([]runtime.Capability{
 		{Name: "runtime.linux", Available: true},
 		{Name: "runtime.firecracker", Available: true},
-	}, map[string]runtime.Driver{
-		"firecracker": lxcDriver,
-	})
+	}, vmIsolationDrivers(lxcDriver))
 
 	parent, err := mgr.Create(context.Background(), workspacemgr.CreateSpec{
 		Repo:          repo,
@@ -1536,7 +1527,7 @@ func TestHandleWorkspaceFork_WithFactoryLinuxBackendAfterRestartLikeState(t *tes
 		t.Fatalf("expected forked workspace, got %#v", result)
 	}
 	if result.Workspace.Backend != "firecracker" {
-		t.Fatalf("expected child backend 'firecracker', got %q", result.Workspace.Backend)
+		t.Fatalf("expected child backend to inherit parent's stored backend 'firecracker', got %q", result.Workspace.Backend)
 	}
 }
 
@@ -1548,18 +1539,16 @@ func TestHandleWorkspaceCreate_WithFactoryFirecrackerBootstrapsRuntime(t *testin
 	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
 	calledCreate := false
-	factory := runtime.NewFactory([]runtime.Capability{{Name: "runtime.linux", Available: true}, {Name: "runtime.firecracker", Available: true}}, map[string]runtime.Driver{
-		"firecracker": &mockDriver{
-			backend: "firecracker",
-			createFn: func(ctx context.Context, req runtime.CreateRequest) error {
-				calledCreate = true
-				if req.WorkspaceID == "" {
-					t.Fatal("expected workspace id in runtime create request")
-				}
-				return nil
-			},
+	factory := runtime.NewFactory([]runtime.Capability{{Name: "runtime.linux", Available: true}, {Name: "runtime.firecracker", Available: true}}, vmIsolationDrivers(&mockDriver{
+		backend: vmIsolationBackend(),
+		createFn: func(ctx context.Context, req runtime.CreateRequest) error {
+			calledCreate = true
+			if req.WorkspaceID == "" {
+				t.Fatal("expected workspace id in runtime create request")
+			}
+			return nil
 		},
-	})
+	}))
 
 	params := WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
@@ -1577,11 +1566,11 @@ func TestHandleWorkspaceCreate_WithFactoryFirecrackerBootstrapsRuntime(t *testin
 	if result == nil || result.Workspace == nil {
 		t.Fatalf("expected workspace, got %#v", result)
 	}
-	if result.Workspace.Backend != "firecracker" {
-		t.Fatalf("expected backend firecracker, got %q", result.Workspace.Backend)
+	if result.Workspace.Backend != vmIsolationBackend() {
+		t.Fatalf("expected backend %q, got %q", vmIsolationBackend(), result.Workspace.Backend)
 	}
 	if !calledCreate {
-		t.Fatal("expected runtime create to be called for firecracker backend")
+		t.Fatal("expected runtime create to be called for VM isolation backend")
 	}
 }
 
@@ -1593,15 +1582,13 @@ func TestHandleWorkspaceCreate_PassesHostAuthBundleToRuntime(t *testing.T) {
 	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
 
 	var gotConfigBundle string
-	factory := runtime.NewFactory([]runtime.Capability{{Name: "runtime.linux", Available: true}, {Name: "runtime.firecracker", Available: true}}, map[string]runtime.Driver{
-		"firecracker": &mockDriver{
-			backend: "firecracker",
-			createFn: func(ctx context.Context, req runtime.CreateRequest) error {
-				gotConfigBundle = req.ConfigBundle
-				return nil
-			},
+	factory := runtime.NewFactory([]runtime.Capability{{Name: "runtime.linux", Available: true}, {Name: "runtime.firecracker", Available: true}}, vmIsolationDrivers(&mockDriver{
+		backend: vmIsolationBackend(),
+		createFn: func(ctx context.Context, req runtime.CreateRequest) error {
+			gotConfigBundle = req.ConfigBundle
+			return nil
 		},
-	})
+	}))
 
 	params := WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
@@ -1647,15 +1634,13 @@ func TestHandleWorkspaceCreate_UsesPreferredLineageSnapshotForRuntimeCreate(t *t
 	}
 
 	var gotSnapshotID string
-	factory := runtime.NewFactory([]runtime.Capability{{Name: "runtime.linux", Available: true}, {Name: "runtime.firecracker", Available: true}}, map[string]runtime.Driver{
-		"firecracker": &mockDriver{
-			backend: "firecracker",
-			createFn: func(ctx context.Context, req runtime.CreateRequest) error {
-				gotSnapshotID = strings.TrimSpace(req.Options["lineage_snapshot_id"])
-				return nil
-			},
+	factory := runtime.NewFactory([]runtime.Capability{{Name: "runtime.linux", Available: true}, {Name: "runtime.firecracker", Available: true}}, vmIsolationDrivers(&mockDriver{
+		backend: vmIsolationBackend(),
+		createFn: func(ctx context.Context, req runtime.CreateRequest) error {
+			gotSnapshotID = strings.TrimSpace(req.Options["lineage_snapshot_id"])
+			return nil
 		},
-	})
+	}))
 
 	params := WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
@@ -1688,25 +1673,23 @@ func TestHandleWorkspaceCreate_AutoCapturesBaselineSnapshotForFirstSandbox(t *te
 	const baselineSnapshotID = "snap-baseline-auto-1"
 	var gotCreateSnapshotID string
 	var checkpointCalls int
-	factory := runtime.NewFactory([]runtime.Capability{{Name: "runtime.linux", Available: true}, {Name: "runtime.firecracker", Available: true}}, map[string]runtime.Driver{
-		"firecracker": &mockDriver{
-			backend: "firecracker",
-			createFn: func(ctx context.Context, req runtime.CreateRequest) error {
-				gotCreateSnapshotID = strings.TrimSpace(req.Options["lineage_snapshot_id"])
-				return nil
-			},
-			checkpointForkFn: func(ctx context.Context, workspaceID, childWorkspaceID string) (string, error) {
-				checkpointCalls++
-				if strings.TrimSpace(workspaceID) == "" {
-					t.Fatal("expected non-empty workspaceID for baseline checkpoint")
-				}
-				if workspaceID != childWorkspaceID {
-					t.Fatalf("expected baseline checkpoint to use same workspace id, got parent=%q child=%q", workspaceID, childWorkspaceID)
-				}
-				return baselineSnapshotID, nil
-			},
+	factory := runtime.NewFactory([]runtime.Capability{{Name: "runtime.linux", Available: true}, {Name: "runtime.firecracker", Available: true}}, vmIsolationDrivers(&mockDriver{
+		backend: vmIsolationBackend(),
+		createFn: func(ctx context.Context, req runtime.CreateRequest) error {
+			gotCreateSnapshotID = strings.TrimSpace(req.Options["lineage_snapshot_id"])
+			return nil
 		},
-	})
+		checkpointForkFn: func(ctx context.Context, workspaceID, childWorkspaceID string) (string, error) {
+			checkpointCalls++
+			if strings.TrimSpace(workspaceID) == "" {
+				t.Fatal("expected non-empty workspaceID for baseline checkpoint")
+			}
+			if workspaceID != childWorkspaceID {
+				t.Fatalf("expected baseline checkpoint to use same workspace id, got parent=%q child=%q", workspaceID, childWorkspaceID)
+			}
+			return baselineSnapshotID, nil
+		},
+	}))
 
 	params := WorkspaceCreateParams{
 		Spec: workspacemgr.CreateSpec{
@@ -1738,194 +1721,6 @@ func TestHandleWorkspaceCreate_AutoCapturesBaselineSnapshotForFirstSandbox(t *te
 	}
 }
 
-func TestHandleWorkspaceCreate_InstallableMissingRetriesSetupOnce(t *testing.T) {
-	mgr := workspacemgr.NewManager(t.TempDir())
-	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
-
-	selection.SetPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{
-		{Status: runtime.PreflightInstallableMissing, Checks: []runtime.PreflightCheck{{Name: "lima", OK: false, Installable: true}}},
-		{Status: runtime.PreflightPass},
-	})
-	setupCalls := 0
-	selection.SetRuntimeSetupRunnerForTest(func(_ context.Context, _ string, _ string) error {
-		setupCalls++
-		return nil
-	})
-	t.Cleanup(func() {
-		selection.ResetRuntimeSetupRunnerForTest()
-		selection.ResetPreflightRunnerForTest()
-	})
-
-	factory := runtime.NewFactory(
-		[]runtime.Capability{{Name: "runtime.firecracker", Available: true}},
-		map[string]runtime.Driver{"firecracker": &mockDriver{backend: "firecracker"}},
-	)
-
-	params := WorkspaceCreateParams{Spec: workspacemgr.CreateSpec{Repo: repo, WorkspaceName: "alpha", AgentProfile: "default"}}
-	result, rpcErr := HandleWorkspaceCreate(context.Background(), params, mgr, factory)
-	if rpcErr != nil {
-		t.Fatalf("unexpected rpc error: %+v", rpcErr)
-	}
-	if result.Workspace.Backend != "firecracker" {
-		t.Fatalf("expected firecracker backend, got %q", result.Workspace.Backend)
-	}
-	if setupCalls != 1 {
-		t.Fatalf("expected one setup attempt, got %d", setupCalls)
-	}
-}
-
-func TestHandleWorkspaceCreate_InstallableMissingSetupFailureReturnsPreflightError(t *testing.T) {
-	mgr := workspacemgr.NewManager(t.TempDir())
-	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
-
-	preflightCalls := 0
-	selection.SetFirecrackerPreflightRunnerForTest(func(_ string, _ runtime.PreflightOptions) runtime.FirecrackerPreflightResult {
-		preflightCalls++
-		return runtime.FirecrackerPreflightResult{
-			Status: runtime.PreflightInstallableMissing,
-			Checks: []runtime.PreflightCheck{{Name: "lima", OK: false, Installable: true}},
-		}
-	})
-	setupCalls := 0
-	selection.SetRuntimeSetupRunnerForTest(func(_ context.Context, _ string, _ string) error {
-		setupCalls++
-		return fmt.Errorf("bootstrap failed")
-	})
-	t.Cleanup(func() {
-		selection.ResetRuntimeSetupRunnerForTest()
-		selection.ResetPreflightRunnerForTest()
-	})
-
-	factory := runtime.NewFactory(
-		[]runtime.Capability{{Name: "runtime.firecracker", Available: true}},
-		map[string]runtime.Driver{"firecracker": &mockDriver{backend: "firecracker"}},
-	)
-
-	params := WorkspaceCreateParams{Spec: workspacemgr.CreateSpec{Repo: repo, WorkspaceName: "alpha", AgentProfile: "default"}}
-	_, rpcErr := HandleWorkspaceCreate(context.Background(), params, mgr, factory)
-	if rpcErr == nil {
-		t.Fatal("expected rpc error")
-	}
-	if setupCalls != 1 {
-		t.Fatalf("expected one setup attempt, got %d", setupCalls)
-	}
-	if preflightCalls != 1 {
-		t.Fatalf("expected exactly one preflight call, got %d", preflightCalls)
-	}
-	if !strings.Contains(rpcErr.Message, string(runtime.PreflightInstallableMissing)) {
-		t.Fatalf("expected installable_missing status, got %q", rpcErr.Message)
-	}
-	if !strings.Contains(rpcErr.Message, "bootstrap failed") {
-		t.Fatalf("expected setup failure details, got %q", rpcErr.Message)
-	}
-}
-
-func TestHandleWorkspaceCreate_UnsupportedNestedVirtSelectsPlatformBackend(t *testing.T) {
-	mgr := workspacemgr.NewManager(t.TempDir())
-	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
-
-	selection.SetPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{{Status: runtime.PreflightUnsupportedNested}})
-	setupCalls := 0
-	selection.SetRuntimeSetupRunnerForTest(func(_ context.Context, _ string, _ string) error {
-		setupCalls++
-		return nil
-	})
-	t.Cleanup(func() {
-		selection.ResetRuntimeSetupRunnerForTest()
-		selection.ResetPreflightRunnerForTest()
-	})
-
-	factory := runtime.NewFactory(
-		[]runtime.Capability{
-			{Name: "runtime.seatbelt", Available: true},
-			{Name: "runtime.firecracker", Available: true},
-		},
-		map[string]runtime.Driver{
-			"seatbelt":    &mockDriver{backend: "seatbelt"},
-			"firecracker": &mockDriver{backend: "firecracker"},
-		},
-	)
-
-	params := WorkspaceCreateParams{Spec: workspacemgr.CreateSpec{Repo: repo, WorkspaceName: "alpha", AgentProfile: "default"}}
-	result, rpcErr := HandleWorkspaceCreate(context.Background(), params, mgr, factory)
-	if rpcErr != nil {
-		t.Fatalf("unexpected rpc error: %+v", rpcErr)
-	}
-	expectedBackend := "seatbelt"
-	if goruntime.GOOS == "darwin" {
-		expectedBackend = "firecracker"
-	}
-	if result.Workspace.Backend != expectedBackend {
-		t.Fatalf("expected %s backend, got %q", expectedBackend, result.Workspace.Backend)
-	}
-	if setupCalls != 0 {
-		t.Fatalf("expected zero setup attempts, got %d", setupCalls)
-	}
-}
-
-func TestHandleWorkspaceCreate_HardFailReturnsStructuredPreflightError(t *testing.T) {
-	mgr := workspacemgr.NewManager(t.TempDir())
-	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
-
-	selection.SetPreflightSequenceForTest([]runtime.FirecrackerPreflightResult{{
-		Status: runtime.PreflightHardFail,
-		Checks: []runtime.PreflightCheck{{Name: "kvm", OK: false, Message: "kvm unavailable"}},
-	}})
-	t.Cleanup(func() {
-		selection.ResetRuntimeSetupRunnerForTest()
-		selection.ResetPreflightRunnerForTest()
-	})
-
-	factory := runtime.NewFactory(
-		[]runtime.Capability{{Name: "runtime.firecracker", Available: true}},
-		map[string]runtime.Driver{"firecracker": &mockDriver{backend: "firecracker"}},
-	)
-
-	params := WorkspaceCreateParams{Spec: workspacemgr.CreateSpec{Repo: repo, WorkspaceName: "alpha", AgentProfile: "default"}}
-	_, rpcErr := HandleWorkspaceCreate(context.Background(), params, mgr, factory)
-	if rpcErr == nil {
-		t.Fatal("expected rpc error")
-	}
-	if !strings.Contains(rpcErr.Message, "runtime preflight failed") {
-		t.Fatalf("expected preflight failure message, got %q", rpcErr.Message)
-	}
-	if !strings.Contains(rpcErr.Message, string(runtime.PreflightHardFail)) {
-		t.Fatalf("expected hard_fail status in message, got %q", rpcErr.Message)
-	}
-}
-
-func TestHandleWorkspaceCreate_UsesInternalPreflightOverrideWhenEnabled(t *testing.T) {
-	mgr := workspacemgr.NewManager(t.TempDir())
-	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
-
-	t.Setenv("NEXUS_INTERNAL_ENABLE_PREFLIGHT_OVERRIDE", "1")
-	t.Setenv("NEXUS_INTERNAL_PREFLIGHT_OVERRIDE", "unsupported_nested_virt")
-
-	factory := runtime.NewFactory(
-		[]runtime.Capability{
-			{Name: "runtime.seatbelt", Available: true},
-			{Name: "runtime.firecracker", Available: true},
-		},
-		map[string]runtime.Driver{
-			"seatbelt":    &mockDriver{backend: "seatbelt"},
-			"firecracker": &mockDriver{backend: "firecracker"},
-		},
-	)
-
-	params := WorkspaceCreateParams{Spec: workspacemgr.CreateSpec{Repo: repo, WorkspaceName: "alpha", AgentProfile: "default"}}
-	result, rpcErr := HandleWorkspaceCreate(context.Background(), params, mgr, factory)
-	if rpcErr != nil {
-		t.Fatalf("unexpected rpc error: %+v", rpcErr)
-	}
-	expectedBackend := "seatbelt"
-	if goruntime.GOOS == "darwin" {
-		expectedBackend = "firecracker"
-	}
-	if result.Workspace.Backend != expectedBackend {
-		t.Fatalf("expected %s backend from override, got %q", expectedBackend, result.Workspace.Backend)
-	}
-}
-
 func TestHandleWorkspaceCreate_IgnoresInternalPreflightOverrideWhenDisabled(t *testing.T) {
 	mgr := workspacemgr.NewManager(t.TempDir())
 	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
@@ -1937,7 +1732,7 @@ func TestHandleWorkspaceCreate_IgnoresInternalPreflightOverrideWhenDisabled(t *t
 
 	factory := runtime.NewFactory(
 		[]runtime.Capability{{Name: "runtime.firecracker", Available: true}},
-		map[string]runtime.Driver{"firecracker": &mockDriver{backend: "firecracker"}},
+		vmIsolationDrivers(&mockDriver{backend: vmIsolationBackend()}),
 	)
 
 	params := WorkspaceCreateParams{Spec: workspacemgr.CreateSpec{Repo: repo, WorkspaceName: "alpha", AgentProfile: "default"}}
@@ -1945,17 +1740,23 @@ func TestHandleWorkspaceCreate_IgnoresInternalPreflightOverrideWhenDisabled(t *t
 	if rpcErr != nil {
 		t.Fatalf("unexpected rpc error: %+v", rpcErr)
 	}
-	if result.Workspace.Backend != "firecracker" {
-		t.Fatalf("expected firecracker backend when override disabled, got %q", result.Workspace.Backend)
+	if result.Workspace.Backend != vmIsolationBackend() {
+		t.Fatalf("expected %q backend when override disabled, got %q", vmIsolationBackend(), result.Workspace.Backend)
 	}
 }
 
-func TestDefaultPlatformHints(t *testing.T) {
-	required, caps := create.DefaultPlatformHints()
-	if len(required) != 2 || required[0] != "darwin" || required[1] != "linux" {
-		t.Fatalf("expected [darwin linux], got %v", required)
+func TestRuntimeLabelForWorkspace_Smoke(t *testing.T) {
+	repo := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(repo, ".nexus"), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
 	}
-	if len(caps) != 0 {
-		t.Fatalf("expected no required capabilities, got %v", caps)
+	cfg := `{"version":1,"isolation":{"level":"process","vm":{"mode":"dedicated"}},"internalFeatures":{"processSandbox":true}}`
+	if err := os.WriteFile(filepath.Join(repo, ".nexus", "workspace.json"), []byte(cfg), 0o644); err != nil {
+		t.Fatalf("write workspace.json: %v", err)
+	}
+	ws := &workspacemgr.Workspace{Repo: repo, Backend: "process"}
+	got := runtimeLabelForWorkspace(ws)
+	if !strings.Contains(got, "backend=process") || !strings.Contains(got, "isolation=process") || !strings.Contains(got, "processSandbox=relaxed") {
+		t.Fatalf("unexpected runtime label: %q", got)
 	}
 }

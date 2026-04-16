@@ -3,8 +3,23 @@ package config
 import "fmt"
 
 type WorkspaceConfig struct {
-	Schema  string `json:"$schema,omitempty"`
-	Version int    `json:"version,omitempty"`
+	Schema           string                    `json:"$schema,omitempty"`
+	Version          int                       `json:"version,omitempty"`
+	Isolation        WorkspaceIsolation        `json:"isolation,omitempty"`
+	InternalFeatures WorkspaceInternalFeatures `json:"internalFeatures,omitempty"`
+}
+
+type WorkspaceIsolation struct {
+	Level string              `json:"level,omitempty"`
+	VM    WorkspaceVMSettings `json:"vm,omitempty"`
+}
+
+type WorkspaceVMSettings struct {
+	Mode string `json:"mode,omitempty"`
+}
+
+type WorkspaceInternalFeatures struct {
+	ProcessSandbox bool `json:"processSandbox,omitempty"`
 }
 
 type DoctorCommandCheck struct {
@@ -34,6 +49,16 @@ type DoctorCommandProbe struct {
 func (c WorkspaceConfig) ValidateBasic() error {
 	if c.Version != 0 && c.Version < 1 {
 		return fmt.Errorf("version must be >= 1")
+	}
+	switch c.Isolation.Level {
+	case "", "vm", "process":
+	default:
+		return fmt.Errorf("isolation.level must be one of vm or process")
+	}
+	switch c.Isolation.VM.Mode {
+	case "", "pool", "dedicated":
+	default:
+		return fmt.Errorf("isolation.vm.mode must be one of pool or dedicated")
 	}
 	return nil
 }

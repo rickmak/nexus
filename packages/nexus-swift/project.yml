@@ -75,7 +75,7 @@ targets:
               chmod +x "$dst"
               echo "Bundled ${label} -> ${dst}"
             else
-              echo "warning: ${label} not found at ${src}; run 'task swift:bundle-tools' to stage fallbacks"
+              echo "warning: ${label} not found at ${src}; run 'task swift:prepare-resources' to stage Resources"
             fi
           }
 
@@ -145,6 +145,9 @@ schemes:
       launchAutomaticallySubstyle: 2
     test:
       config: Debug
+      # Integration tests expect a workspace daemon on this port (see CONTRIBUTING / task daemon:restart).
+      environmentVariables:
+        NEXUS_DAEMON_PORT: "19998"
       targets:
         - name: NexusAppTests
           parallelizable: false

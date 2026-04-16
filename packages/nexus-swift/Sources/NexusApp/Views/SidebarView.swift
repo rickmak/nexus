@@ -239,6 +239,12 @@ private struct WorkspaceRow: View {
                     .font(.system(size: 10))
                     .foregroundColor(Theme.accent)
             }
+            if !workspace.shortRuntimeBadge.isEmpty {
+                Text(workspace.shortRuntimeBadge)
+                    .font(.system(size: 9, weight: .medium))
+                    .foregroundColor(Theme.labelTertiary)
+                    .lineLimit(1)
+            }
             Spacer(minLength: 0)
         }
         .padding(.leading, 22)

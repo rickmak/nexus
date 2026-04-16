@@ -5,9 +5,14 @@ version: '3'
 # Usage:  task <target>
 #
 # Quick start:
-#   task dev          – build daemon + app, restart daemon, launch app
+#   task app:open      – embed local daemon, (optional) download tools, xcodebuild, open app
+#   task dev           – restart standalone nexus-daemon (CLI), then app:open
 #   task test:terminal – run terminal XCUITests (daemon must be running)
 #   task test          – run all XCUITests
+#
+# Embedded daemon: always from `swift:bundle-daemon` (this repo’s Go build).
+# Release downloads (`swift:bundle-tools`) run only when NEXUS_BUNDLE_TOOLS=1 so local
+# iteration does not hit GitHub on every build. Tools fall back to PATH at runtime.
 # ---------------------------------------------------------------------------
 
 vars:
@@ -145,10 +150,34 @@ tasks:
 
         chmod +x "$TOOLS_DIR/nexus" "$TOOLS_DIR/nexus-daemon" "$TOOLS_DIR/mutagen" "$TOOLS_DIR/limactl"
         if [ -f "$TOOLS_DIR/tmux" ]; then chmod +x "$TOOLS_DIR/tmux"; fi
-        cp "$TOOLS_DIR/nexus-daemon" ../nexus-swift/Resources/nexus-daemon
-        chmod +x ../nexus-swift/Resources/nexus-daemon
 
         echo "Bundled fallback tools ready in packages/nexus-swift/Resources/tools/"
+
+  swift:prepare-resources:
+    desc: Embed locally built daemon; download Resources/tools only when NEXUS_BUNDLE_TOOLS=1
+    cmds:
+      - |
+        set -euo pipefail
+        if [ "${NEXUS_BUNDLE_TOOLS:-}" = "1" ]; then
+          task swift:bundle-tools
+        else
+          echo "Skipping swift:bundle-tools (set NEXUS_BUNDLE_TOOLS=1 to download lima/mutagen release fallbacks)"
+          mkdir -p packages/nexus-swift/Resources/tools
+        fi
+      - task: swift:bundle-daemon
+
+  app:codesign:
+    desc: Ad-hoc sign embedded daemon and app (after manual binary swap without xcodebuild)
+    cmds:
+      - |
+        APP="{{.APP_BUNDLE}}"
+        if [ ! -d "$APP" ]; then
+          echo "app bundle not found: $APP (run task swift:build first)" >&2
+          exit 1
+        fi
+        codesign --force --sign - "$APP/Contents/Resources/nexus-daemon"
+        codesign --force --deep --sign - "$APP"
+        echo "codesign ok → $APP"
 
   daemon:restart:
     desc: Kill any running daemon, start a fresh one, wait for /healthz
@@ -249,7 +278,7 @@ tasks:
 
   swift:build:
     desc: Build NexusApp.app via xcodebuild (Debug, macOS)
-    deps: [swift:bundle-tools]
+    deps: [swift:prepare-resources]
     generates:
       - "{{.APP_BUNDLE}}/Contents/MacOS/NexusApp"
     cmds:

@@ -153,6 +153,25 @@ final class WorkspaceModelTests: XCTestCase {
         XCTAssertNil(ws.repoId)
     }
 
+    func testDecodeRuntimeBackendAndLabel() throws {
+        let json = """
+        {
+            "id": "ws-1",
+            "workspaceName": "dev",
+            "ref": "main",
+            "state": "running",
+            "backend": "firecracker",
+            "runtimeLabel": "backend=firecracker isolation=vm vm.mode=pool"
+        }
+        """.data(using: .utf8)!
+
+        let ws = try JSONDecoder().decode(Workspace.self, from: json)
+        XCTAssertEqual(ws.backend, "firecracker")
+        XCTAssertEqual(ws.runtimeLabel, "backend=firecracker isolation=vm vm.mode=pool")
+        XCTAssertEqual(ws.shortRuntimeBadge, "VM")
+        XCTAssertEqual(ws.detailRuntimeLine, "backend=firecracker isolation=vm vm.mode=pool")
+    }
+
     func testWorkspaceStatusDisplayNames() {
         XCTAssertEqual(WorkspaceStatus.running.displayName,  "Running")
         XCTAssertEqual(WorkspaceStatus.paused.displayName,   "Paused")
@@ -403,6 +422,7 @@ final class DaemonConnectionTests: XCTestCase {
 
     override func tearDown() async throws {
         client?.disconnect()
+        client = nil
     }
 
     func testListWorkspacesReturnsArray() async throws {
@@ -449,6 +469,7 @@ final class WorkspaceLifecycleTests: XCTestCase {
             try? await client.removeWorkspace(id: id)
         }
         client?.disconnect()
+        client = nil
     }
 
     // Test create + remove using the local nexus repo (which always exists on dev machines)
@@ -512,6 +533,7 @@ final class PortDetectionTests: XCTestCase {
 
     override func tearDown() async throws {
         client?.disconnect()
+        client = nil
     }
 
     func testListPortsForNonexistentWorkspace() async throws {
@@ -548,6 +570,7 @@ final class RelationsGroupingTests: XCTestCase {
 
     override func tearDown() async throws {
         client?.disconnect()
+        client = nil
     }
 
     func testRelationsGroupsMatchWorkspaceIDs() async throws {

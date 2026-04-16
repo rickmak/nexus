@@ -1,4 +1,4 @@
-package limafirecracker
+package lima
 
 import (
 	"context"
@@ -11,7 +11,7 @@ type stubDriver struct {
 	lastReq runtime.CreateRequest
 }
 
-func (d *stubDriver) Backend() string { return "seatbelt" }
+func (d *stubDriver) Backend() string { return "lima" }
 func (d *stubDriver) Create(_ context.Context, req runtime.CreateRequest) error {
 	d.lastReq = req
 	return nil
@@ -46,12 +46,19 @@ func (d *checkpointStubDriver) CheckpointFork(_ context.Context, workspaceID, ch
 
 func TestDriver_Backend(t *testing.T) {
 	d := NewDriver(&stubDriver{})
-	if got := d.Backend(); got != "firecracker" {
-		t.Fatalf("expected firecracker backend, got %q", got)
+	if got := d.Backend(); got != "lima" {
+		t.Fatalf("expected lima backend, got %q", got)
 	}
 }
 
-func TestDriver_CreateInjectsLimaInstance(t *testing.T) {
+func TestLimaDriverBackendName(t *testing.T) {
+	d := &Driver{}
+	if got := d.Backend(); got != "lima" {
+		t.Fatalf("expected backend 'lima', got %q", got)
+	}
+}
+
+func TestDriver_CreateUsesPoolModeByDefault(t *testing.T) {
 	inner := &stubDriver{}
 	d := NewDriver(inner)
 
@@ -59,12 +66,31 @@ func TestDriver_CreateInjectsLimaInstance(t *testing.T) {
 		WorkspaceID:   "ws-1",
 		WorkspaceName: "alpha",
 		ProjectRoot:   "/tmp/repo",
+		Options:       map[string]string{"vm.mode": "pool"},
 	}
 	if err := d.Create(context.Background(), req); err != nil {
 		t.Fatalf("unexpected create error: %v", err)
 	}
 	if got := inner.lastReq.Options["lima.instance"]; got != defaultLimaInstance {
 		t.Fatalf("expected lima.instance %q, got %q", defaultLimaInstance, got)
+	}
+}
+
+func TestDriver_CreateUsesDedicatedInstanceWhenRequested(t *testing.T) {
+	inner := &stubDriver{}
+	d := NewDriver(inner)
+
+	req := runtime.CreateRequest{
+		WorkspaceID:   "ws-prod_42",
+		WorkspaceName: "alpha",
+		ProjectRoot:   "/tmp/repo",
+		Options:       map[string]string{"vm.mode": "dedicated"},
+	}
+	if err := d.Create(context.Background(), req); err != nil {
+		t.Fatalf("unexpected create error: %v", err)
+	}
+	if got := inner.lastReq.Options["lima.instance"]; got != "nexus-ws-prod-42" {
+		t.Fatalf("expected dedicated lima.instance %q, got %q", "nexus-ws-prod-42", got)
 	}
 }
 

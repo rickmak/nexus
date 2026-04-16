@@ -58,15 +58,21 @@ public final class AppState: ObservableObject {
     }
 
     public init() {
+        StartupTrace.beginSession()
+        StartupTrace.checkpoint("app.init", "before client")
         self.client = WebSocketDaemonClient(daemonURL: WebSocketDaemonClient.discoverURL())
         connectionState = .starting
+        StartupTrace.checkpoint("app.init", "after client; scheduling ensureDaemonAndLoad")
         Task { await self.ensureDaemonAndLoad() }
         startRefreshLoop()
     }
 
     // Designated for dependency injection in tests only
     public init(client: any DaemonClient) {
+        StartupTrace.beginSession()
+        StartupTrace.checkpoint("app.init.inject", "before storing client")
         self.client = client
+        StartupTrace.checkpoint("app.init.inject", "load scheduled")
         Task { await self.load() }
     }
 
@@ -84,44 +90,47 @@ public final class AppState: ObservableObject {
 
     // MARK: - Load
 
+    /// Wall-clock cap for markWorkspaceReady / ports / tunnel fan-out (many actives can wedge the daemon).
+    private static let workspaceEnrichmentDeadlineSeconds: UInt64 = 35
+    /// Hard cap for the entire auto-start + first successful data fetch (independent of per-RPC timeouts).
+    private static let startupDeadlineSeconds: UInt64 = 120
+
     public func load() async {
         connectionState = .connecting
         Self.logger.debug("load() started")
+        StartupTrace.checkpoint("load.enter")
         do {
-            async let wsFetch        = client.listWorkspaces()
+            async let wsFetch = client.listWorkspaces()
             async let relationsFetch = client.listRelations()
-            var workspaces  = try await wsFetch
-            let relations   = try await relationsFetch
-            let projects    = try await client.listProjects()
+            var workspaces = try await wsFetch
+            let relations = try await relationsFetch
+            let projects = try await client.listProjects()
 
-            // Fetch ports concurrently for all active workspaces
-            var activeTunnelWorkspaceID = ""
-            await withTaskGroup(of: (String, [ForwardedPort], String).self) { group in
-                for ws in workspaces where ws.state.isActive {
-                    group.addTask { [c = self.client] in
-                        // `workspace.ready` triggers daemon-side compose port auto-apply.
-                        try? await c.markWorkspaceReady(id: ws.id)
-                        let ports = (try? await c.listPorts(workspaceId: ws.id)) ?? []
-                        let status = (try? await c.tunnelStatus(workspaceId: ws.id))
-                        return (ws.id, ports, status?.activeWorkspaceId ?? "")
-                    }
-                }
-                for await (id, ports, activeID) in group {
-                    if let idx = workspaces.firstIndex(where: { $0.id == id }) {
-                        workspaces[idx].ports = ports
-                    }
-                    if !activeID.isEmpty { activeTunnelWorkspaceID = activeID }
-                }
-            }
-            for i in workspaces.indices {
-                workspaces[i].hasActiveTunnels = (workspaces[i].id == activeTunnelWorkspaceID)
-            }
-
+            // Phase 1 — connect the UI as soon as lists return (no per-workspace side effects yet).
             applyLoadedWorkspaces(workspaces, relations: relations, projects: projects)
-            Self.logger.debug("load() succeeded with \(workspaces.count, privacy: .public) workspaces and \(projects.count, privacy: .public) projects")
+            StartupTrace.checkpoint("load.phase1_ok", "workspaces=\(workspaces.count) projects=\(projects.count)")
+            Self.logger.debug("load() phase-1 connected with \(workspaces.count, privacy: .public) workspaces")
+
+            // Phase 2 — best-effort; must not block startup indefinitely or pin RAM on hung RPCs.
+            do {
+                StartupTrace.checkpoint("load.phase2_begin", "enrichment deadline \(Self.workspaceEnrichmentDeadlineSeconds)s")
+                workspaces = try await AsyncDeadline.withSecondsOnMainActor(Self.workspaceEnrichmentDeadlineSeconds) {
+                    await self.enrichActiveWorkspaceSideEffects(workspaces: workspaces)
+                }
+                applyLoadedWorkspaces(workspaces, relations: relations, projects: projects)
+                StartupTrace.checkpoint("load.phase2_ok")
+            } catch {
+                if error is AsyncDeadlineError {
+                    StartupTrace.checkpoint("load.phase2_deadline_skip")
+                    Self.logger.warning("load() enrichment skipped: deadline \(Self.workspaceEnrichmentDeadlineSeconds, privacy: .public)s (ports/tunnels may be stale until next refresh)")
+                } else {
+                    throw error
+                }
+            }
+
+            Self.logger.debug("load() finished with \(workspaces.count, privacy: .public) workspaces and \(projects.count, privacy: .public) projects")
         } catch {
             if injectedDaemonURL == nil, isMethodNotFound(error) {
-                // Hard cutover: old local daemon APIs are not supported; restart into latest binary.
                 Self.logger.error("load() hit method-not-found on local daemon; restarting managed daemon")
                 await restartDaemon()
                 return
@@ -133,8 +142,35 @@ public final class AppState: ObservableObject {
             } else if self.error == nil {
                 self.error = "Cannot reach daemon: \(error.localizedDescription)"
             }
+            StartupTrace.checkpoint("load.failed", error.localizedDescription)
             Self.logger.error("load() failed: \(error.localizedDescription, privacy: .public)")
         }
+    }
+
+    /// Per-active-workspace RPC fan-out (runs under a deadline in `load()`).
+    private func enrichActiveWorkspaceSideEffects(workspaces: [Workspace]) async -> [Workspace] {
+        var workspaces = workspaces
+        var activeTunnelWorkspaceID = ""
+        await withTaskGroup(of: (String, [ForwardedPort], String).self) { group in
+            for ws in workspaces where ws.state.isActive {
+                group.addTask { [c = self.client] in
+                    try? await c.markWorkspaceReady(id: ws.id)
+                    let ports = (try? await c.listPorts(workspaceId: ws.id)) ?? []
+                    let status = (try? await c.tunnelStatus(workspaceId: ws.id))
+                    return (ws.id, ports, status?.activeWorkspaceId ?? "")
+                }
+            }
+            for await (id, ports, activeID) in group {
+                if let idx = workspaces.firstIndex(where: { $0.id == id }) {
+                    workspaces[idx].ports = ports
+                }
+                if !activeID.isEmpty { activeTunnelWorkspaceID = activeID }
+            }
+        }
+        for i in workspaces.indices {
+            workspaces[i].hasActiveTunnels = (workspaces[i].id == activeTunnelWorkspaceID)
+        }
+        return workspaces
     }
 
     // MARK: - Background refresh (4 s polling)
@@ -145,10 +181,16 @@ public final class AppState: ObservableObject {
             while !Task.isCancelled {
                 try? await Task.sleep(for: .seconds(4))
                 guard !Task.isCancelled, let self else { break }
-                if self.connectionState != .starting,
-                   case .outdated = self.daemonStatus {} else {
-                    await self.load()
+                // Never poll `load()` during initial handshake — it stacks concurrent RPCs,
+                // duplicates WebSocket work, and grows memory while the UI stays on "Starting…".
+                if self.connectionState == .starting || self.connectionState == .connecting {
+                    continue
                 }
+                // Avoid hammering JSON-RPC when the daemon is too old (handled by restart/upgrade flows).
+                if case .outdated = self.daemonStatus {
+                    continue
+                }
+                await self.load()
             }
         }
     }
@@ -160,8 +202,39 @@ public final class AppState: ObservableObject {
     func ensureDaemonAndLoad() async {
         let targetDaemonPort = DaemonLauncher.preferredPort()
         connectionState = .connecting
+        StartupTrace.checkpoint("ensure.enter", "port=\(targetDaemonPort)")
         Self.logger.info("ensureDaemonAndLoad() started; preferred port \(targetDaemonPort, privacy: .public)")
 
+        do {
+            StartupTrace.checkpoint("ensure.before_startup_deadline", "cap=\(Self.startupDeadlineSeconds)s")
+            try await AsyncDeadline.withSecondsOnMainActor(Self.startupDeadlineSeconds) {
+                await self.ensureDaemonAndLoadUnbounded(preferredPort: targetDaemonPort)
+            }
+            StartupTrace.checkpoint("ensure.startup_deadline_returned_ok")
+        } catch {
+            if let ad = error as? AsyncDeadlineError, case .exceeded(let s) = ad {
+                connectionState = .disconnected
+                daemonStatus = .offline
+                self.error = "Startup did not finish within \(s) seconds. Check ~/.config/nexus/run/daemon.log and daemon health."
+                if let ws = client as? WebSocketDaemonClient {
+                    ws.disconnect()
+                }
+                StartupTrace.checkpoint("ensure.startup_deadline_exceeded", "\(s)s")
+                Self.logger.error("ensureDaemonAndLoad exceeded \(s, privacy: .public)s startup deadline")
+                return
+            }
+            StartupTrace.checkpoint("ensure.error", error.localizedDescription)
+            connectionState = .disconnected
+            daemonStatus = .offline
+            if self.error == nil {
+                self.error = error.localizedDescription
+            }
+            Self.logger.error("ensureDaemonAndLoad failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    private func ensureDaemonAndLoadUnbounded(preferredPort targetDaemonPort: Int) async {
+        StartupTrace.checkpoint("ensure.unbounded.enter")
         // Step 1: Check daemon version compatibility (unauthenticated HTTP).
         if let wsClient = client as? WebSocketDaemonClient {
             if let info = await wsClient.fetchDaemonInfo() {
@@ -174,22 +247,25 @@ public final class AppState: ObservableObject {
                         error = "Daemon protocol v\(info.protocolVersion) is older than required v\(DaemonInfo.requiredProtocol)."
                         return
                     }
-                    // Local daemon is outdated; continue and force managed restart to latest.
                 }
+                StartupTrace.checkpoint("ensure.version_ok", "protocol=\(info.protocolVersion) v=\(info.version)")
             } else {
                 daemonStatus = .offline
+                StartupTrace.checkpoint("ensure.version_http_nil")
             }
         }
 
-        // Step 2: Fast path — try to connect using current credentials.
+        // Step 2: Fast path — lists only (no per-workspace side effects; matches bounded `load()`).
+        StartupTrace.checkpoint("ensure.attempt_load_begin")
         do {
             try await attemptLoad()
+            StartupTrace.checkpoint("ensure.fast_path_ok")
             Self.logger.info("Fast-path daemon load succeeded")
             return
-        } catch {}
+        } catch {
+            StartupTrace.checkpoint("ensure.fast_path_threw", error.localizedDescription)
+        }
 
-        // Step 3: If a daemon URL was injected (XCUITest or external daemon), never
-        // kill or restart — just retry briefly then report failure.
         if injectedDaemonURL != nil {
             var lastError: Error?
             for delay in [0.5, 1.0, 2.0] as [Double] {
@@ -208,22 +284,25 @@ public final class AppState: ObservableObject {
             return
         }
 
-        // Step 4: No injected URL — we own the daemon lifecycle.
-        // If fast-path auth fails, force a restart so daemon and keychain token
-        // are guaranteed to match.
         connectionState = .starting
+        StartupTrace.checkpoint("ensure.kill_begin", "port=\(targetDaemonPort)")
         await Task.detached { DaemonLauncher.killRunning(port: targetDaemonPort) }.value
+        StartupTrace.checkpoint("ensure.kill_done")
         try? await Task.sleep(for: .seconds(0.4))
+        StartupTrace.checkpoint("ensure.launch_begin")
         do {
             try await DaemonLauncher.ensureRunning(port: targetDaemonPort)
+            StartupTrace.checkpoint("ensure.launch_ok")
             Self.logger.info("Managed daemon started on port \(targetDaemonPort, privacy: .public)")
         } catch {
             connectionState = .disconnected
             self.error = error.localizedDescription
+            StartupTrace.checkpoint("ensure.launch_failed", error.localizedDescription)
             Self.logger.error("Failed to start managed daemon: \(error.localizedDescription, privacy: .public)")
             return
         }
         let newURL = WebSocketDaemonClient.discoverURL()
+        StartupTrace.checkpoint("ensure.new_client", newURL.absoluteString)
         client = WebSocketDaemonClient(daemonURL: newURL)
         if let wsClient = client as? WebSocketDaemonClient,
            let info = await wsClient.fetchDaemonInfo() {
@@ -231,7 +310,9 @@ public final class AppState: ObservableObject {
         } else {
             daemonStatus = .unknown
         }
+        StartupTrace.checkpoint("ensure.before_full_load")
         await load()
+        StartupTrace.checkpoint("ensure.after_full_load")
     }
 
     private func setInjectedDaemonUnavailableError(reason: String?) {
@@ -280,35 +361,14 @@ public final class AppState: ObservableObject {
         daemonStatus = .offline
     }
 
-    /// Throws on failure; used by ensureDaemonAndLoad's fast-path probe.
+    /// Fast-path: three list RPCs only (no markWorkspaceReady / ports fan-out).
     private func attemptLoad() async throws {
-        async let wsFetch        = client.listWorkspaces()
+        StartupTrace.checkpoint("attempt_load.enter")
+        async let wsFetch = client.listWorkspaces()
         async let relationsFetch = client.listRelations()
-        var workspaces  = try await wsFetch
-        let relations   = try await relationsFetch
-        let projects    = try await client.listProjects()
-
-        var activeTunnelWorkspaceID = ""
-        await withTaskGroup(of: (String, [ForwardedPort], String).self) { group in
-            for ws in workspaces where ws.state.isActive {
-                group.addTask { [c = self.client] in
-                    try? await c.markWorkspaceReady(id: ws.id)
-                    let ports = (try? await c.listPorts(workspaceId: ws.id)) ?? []
-                    let status = (try? await c.tunnelStatus(workspaceId: ws.id))
-                    return (ws.id, ports, status?.activeWorkspaceId ?? "")
-                }
-            }
-            for await (id, ports, activeID) in group {
-                if let idx = workspaces.firstIndex(where: { $0.id == id }) {
-                    workspaces[idx].ports = ports
-                }
-                if !activeID.isEmpty { activeTunnelWorkspaceID = activeID }
-            }
-        }
-        for i in workspaces.indices {
-            workspaces[i].hasActiveTunnels = (workspaces[i].id == activeTunnelWorkspaceID)
-        }
-
+        let workspaces = try await wsFetch
+        let relations = try await relationsFetch
+        let projects = try await client.listProjects()
         applyLoadedWorkspaces(workspaces, relations: relations, projects: projects)
     }
 
