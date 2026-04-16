@@ -145,6 +145,9 @@ schemes:
       launchAutomaticallySubstyle: 2
     test:
       config: Debug
+      # Integration tests expect a workspace daemon on this port (see CONTRIBUTING / task daemon:restart).
+      environmentVariables:
+        NEXUS_DAEMON_PORT: "19998"
       targets:
         - name: NexusAppTests
           parallelizable: false

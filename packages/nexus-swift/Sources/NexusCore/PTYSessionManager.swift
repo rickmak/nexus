@@ -182,9 +182,11 @@ public final class PTYSessionManager: ObservableObject {
         refreshTask?.cancel()
         refreshTask = Task { [weak self] in
             while !Task.isCancelled {
-                guard let self else { break }
-                await self.refreshTabs()
+                // Sleep first: avoids a tight retry loop (fail fast → no delay → allocate → repeat)
+                // when the daemon is unreachable at the time the view appears.
                 try? await Task.sleep(for: .seconds(5))
+                guard !Task.isCancelled, let self else { break }
+                await self.refreshTabs()
             }
         }
     }

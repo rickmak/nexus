@@ -207,7 +207,7 @@ func TestDarwinBootstrapReturnsErrorWhenLimaStartFails(t *testing.T) {
 	}
 }
 
-func TestDarwinBootstrapUsesSeatbeltWhenNestedVirtUnsupported(t *testing.T) {
+func TestDarwinBootstrapUsesLimaGuestWhenNestedVirtUnsupported(t *testing.T) {
 	origPF := darwinInitPreflightRunner
 	darwinInitPreflightRunner = func(string) nexusruntime.FirecrackerPreflightResult {
 		return nexusruntime.FirecrackerPreflightResult{Status: nexusruntime.PreflightUnsupportedNested}

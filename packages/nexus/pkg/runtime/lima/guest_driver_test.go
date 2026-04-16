@@ -1,4 +1,4 @@
-package seatbelt
+package lima
 
 import (
 	"context"
@@ -20,7 +20,7 @@ import (
 )
 
 func TestGuestWorkdir_ScopedPerWorkspaceID(t *testing.T) {
-	d := NewDriver()
+	d := NewGuestDriver()
 	if got := d.GuestWorkdir("ws-feat-1"); got != "/workspace/ws-feat-1" {
 		t.Fatalf("expected /workspace/ws-feat-1, got %q", got)
 	}
@@ -29,15 +29,28 @@ func TestGuestWorkdir_ScopedPerWorkspaceID(t *testing.T) {
 	}
 }
 
+func TestWorkspaceBindMountScript_includesGitPermissionRepair(t *testing.T) {
+	s := workspaceBindMountScript("/workspace/ws-1", "/Users/me/proj")
+	if !strings.Contains(s, ".git/objects") || !strings.Contains(s, "chmod") {
+		t.Fatalf("expected git permission normalization in mount script:\n%s", s)
+	}
+	if strings.Contains(s, "exit 0") {
+		t.Fatal("mount script should not exit before git chmod when bind is already correct")
+	}
+	if !strings.Contains(s, "CUR_CANON") || !strings.Contains(s, "!=") {
+		t.Fatal("expected remount-only-when-source-differs logic")
+	}
+}
+
 func TestCreateRequiresLimaForIsolation(t *testing.T) {
-	d := NewDriver()
-	oldLookPath := seatbeltLookPath
+	d := NewGuestDriver()
+	oldLookPath := guestLookPath
 	old := d.bootstrapInstance
 	t.Cleanup(func() {
 		d.bootstrapInstance = old
-		seatbeltLookPath = oldLookPath
+		guestLookPath = oldLookPath
 	})
-	seatbeltLookPath = func(file string) (string, error) { return "", errors.New("not found") }
+	guestLookPath = func(file string) (string, error) { return "", errors.New("not found") }
 	d.bootstrapInstance = func(ctx context.Context, instance, configBundle string) error { return nil }
 
 	err := d.Create(context.Background(), runtime.CreateRequest{
@@ -51,10 +64,10 @@ func TestCreateRequiresLimaForIsolation(t *testing.T) {
 }
 
 func TestCreateRunsBootstrapAndMount(t *testing.T) {
-	d := NewDriver()
-	oldLookPath := seatbeltLookPath
-	t.Cleanup(func() { seatbeltLookPath = oldLookPath })
-	seatbeltLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
+	d := NewGuestDriver()
+	oldLookPath := guestLookPath
+	t.Cleanup(func() { guestLookPath = oldLookPath })
+	guestLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
 
 	calledBootstrap := false
 	calledPrepare := false
@@ -91,10 +104,10 @@ func TestCreateRunsBootstrapAndMount(t *testing.T) {
 }
 
 func TestCreateAppliesConfigBundleViaApplyHook(t *testing.T) {
-	d := NewDriver()
-	oldLookPath := seatbeltLookPath
-	t.Cleanup(func() { seatbeltLookPath = oldLookPath })
-	seatbeltLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
+	d := NewGuestDriver()
+	oldLookPath := guestLookPath
+	t.Cleanup(func() { guestLookPath = oldLookPath })
+	guestLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
 
 	d.bootstrapInstance = func(ctx context.Context, instance, configBundle string) error { return nil }
 	d.prepareWorkspaceFS = func(ctx context.Context, instance, targetPath, localPath string) error { return nil }
@@ -119,19 +132,19 @@ func TestCreateAppliesConfigBundleViaApplyHook(t *testing.T) {
 	}
 }
 
-func TestCreateFallsBackToDefaultInstanceWhenSeatbeltMountPrepareFails(t *testing.T) {
-	d := NewDriver()
-	oldLookPath := seatbeltLookPath
-	t.Cleanup(func() { seatbeltLookPath = oldLookPath })
-	seatbeltLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
+func TestCreateFallsBackToDefaultInstanceWhenMountPrepareFails(t *testing.T) {
+	d := NewGuestDriver()
+	oldLookPath := guestLookPath
+	t.Cleanup(func() { guestLookPath = oldLookPath })
+	guestLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
 
-	d.instanceEnv = "nexus-seatbelt"
+	d.instanceEnv = "nexus-ci-alt"
 	d.bootstrapInstance = func(ctx context.Context, instance, configBundle string) error { return nil }
 
 	seen := make([]string, 0)
 	d.prepareWorkspaceFS = func(ctx context.Context, instance, targetPath, localPath string) error {
 		seen = append(seen, instance)
-		if instance == "nexus-seatbelt" {
+		if instance == "nexus-ci-alt" {
 			return errors.New("instance does not exist")
 		}
 		if instance == "nexus" {
@@ -149,8 +162,8 @@ func TestCreateFallsBackToDefaultInstanceWhenSeatbeltMountPrepareFails(t *testin
 		t.Fatalf("expected fallback create to succeed, got %v", err)
 	}
 
-	if len(seen) < 2 || seen[0] != "nexus-seatbelt" || seen[1] != "nexus" {
-		t.Fatalf("expected prepare sequence [nexus-seatbelt nexus], got %v", seen)
+	if len(seen) < 2 || seen[0] != "nexus-ci-alt" || seen[1] != "nexus" {
+		t.Fatalf("expected prepare sequence [nexus-ci-alt nexus], got %v", seen)
 	}
 
 	d.mu.RLock()
@@ -165,10 +178,10 @@ func TestCreateFallsBackToDefaultInstanceWhenSeatbeltMountPrepareFails(t *testin
 }
 
 func TestCreateExistingWorkspaceRefreshesMountPath(t *testing.T) {
-	d := NewDriver()
-	oldLookPath := seatbeltLookPath
-	t.Cleanup(func() { seatbeltLookPath = oldLookPath })
-	seatbeltLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
+	d := NewGuestDriver()
+	oldLookPath := guestLookPath
+	t.Cleanup(func() { guestLookPath = oldLookPath })
+	guestLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
 
 	oldPath := t.TempDir()
 	newPath := t.TempDir()
@@ -206,10 +219,10 @@ func TestCreateExistingWorkspaceRefreshesMountPath(t *testing.T) {
 }
 
 func TestCreateFailsWhenBootstrapFails(t *testing.T) {
-	d := NewDriver()
-	oldLookPath := seatbeltLookPath
-	t.Cleanup(func() { seatbeltLookPath = oldLookPath })
-	seatbeltLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
+	d := NewGuestDriver()
+	oldLookPath := guestLookPath
+	t.Cleanup(func() { guestLookPath = oldLookPath })
+	guestLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
 
 	d.bootstrapInstance = func(ctx context.Context, instance, configBundle string) error {
 		return errors.New("bootstrap failed")
@@ -226,7 +239,7 @@ func TestCreateFailsWhenBootstrapFails(t *testing.T) {
 }
 
 func TestCheckpointForkCreatesSnapshotFromWorkspaceRoot(t *testing.T) {
-	d := NewDriver()
+	d := NewGuestDriver()
 	d.snapshotRoot = t.TempDir()
 
 	sourceRoot := t.TempDir()
@@ -276,11 +289,11 @@ func TestCheckpointForkCreatesSnapshotFromWorkspaceRoot(t *testing.T) {
 }
 
 func TestCreateRestoresLineageSnapshotIntoProjectRoot(t *testing.T) {
-	d := NewDriver()
+	d := NewGuestDriver()
 	d.snapshotRoot = t.TempDir()
-	oldLookPath := seatbeltLookPath
-	t.Cleanup(func() { seatbeltLookPath = oldLookPath })
-	seatbeltLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
+	oldLookPath := guestLookPath
+	t.Cleanup(func() { guestLookPath = oldLookPath })
+	guestLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
 	d.bootstrapInstance = func(ctx context.Context, instance, configBundle string) error { return nil }
 	d.prepareWorkspaceFS = func(ctx context.Context, instance, targetPath, localPath string) error { return nil }
 	d.applyConfigBundle = func(ctx context.Context, instance, configBundle string) error { return nil }
@@ -315,8 +328,8 @@ func TestCreateRestoresLineageSnapshotIntoProjectRoot(t *testing.T) {
 	}
 }
 
-func TestBuildSeatbeltBootstrapScriptIncludesIsolationAndForwarding(t *testing.T) {
-	script := buildSeatbeltBootstrapScript("")
+func TestBuildLimaGuestBootstrapScriptIncludesIsolationAndForwarding(t *testing.T) {
+	script := buildLimaGuestBootstrapScript("")
 
 	for _, token := range []string{
 		"unset DOCKER_HOST DOCKER_CONTEXT",
@@ -335,8 +348,8 @@ func TestBuildSeatbeltBootstrapScriptIncludesIsolationAndForwarding(t *testing.T
 	}
 }
 
-func TestBuildSeatbeltBootstrapScriptInstallsRegistryPackages(t *testing.T) {
-	script := buildSeatbeltBootstrapScript("")
+func TestBuildLimaGuestBootstrapScriptInstallsRegistryPackages(t *testing.T) {
+	script := buildLimaGuestBootstrapScript("")
 	for _, pkg := range agentprofile.AllInstallPkgs() {
 		if !strings.Contains(script, pkg) {
 			t.Fatalf("bootstrap script missing install package %q", pkg)
@@ -344,8 +357,8 @@ func TestBuildSeatbeltBootstrapScriptInstallsRegistryPackages(t *testing.T) {
 	}
 }
 
-func TestBuildSeatbeltBootstrapScriptChecksRegistryBinaries(t *testing.T) {
-	script := buildSeatbeltBootstrapScript("")
+func TestBuildLimaGuestBootstrapScriptChecksRegistryBinaries(t *testing.T) {
+	script := buildLimaGuestBootstrapScript("")
 	for _, bin := range agentprofile.AllBinaries() {
 		if !strings.Contains(script, bin) {
 			t.Fatalf("bootstrap script missing binary check for %q", bin)
@@ -353,8 +366,8 @@ func TestBuildSeatbeltBootstrapScriptChecksRegistryBinaries(t *testing.T) {
 	}
 }
 
-func TestBuildSeatbeltBootstrapScriptExtractsBundleWhenProvided(t *testing.T) {
-	script := buildSeatbeltBootstrapScript("QUJDREVGRw==")
+func TestBuildLimaGuestBootstrapScriptExtractsBundleWhenProvided(t *testing.T) {
+	script := buildLimaGuestBootstrapScript("QUJDREVGRw==")
 	if !strings.Contains(script, "/tmp/nexus-auth.tar.gz.b64") {
 		t.Fatal("bootstrap script must write auth bundle payload to temp file")
 	}
@@ -366,25 +379,25 @@ func TestBuildSeatbeltBootstrapScriptExtractsBundleWhenProvided(t *testing.T) {
 	}
 }
 
-func TestBuildSeatbeltBootstrapScriptNoBundleWhenEmpty(t *testing.T) {
-	script := buildSeatbeltBootstrapScript("")
+func TestBuildLimaGuestBootstrapScriptNoBundleWhenEmpty(t *testing.T) {
+	script := buildLimaGuestBootstrapScript("")
 	if strings.Contains(script, "nexus-auth.tar.gz") {
 		t.Fatal("bootstrap script must not contain tar extraction when bundle path is empty")
 	}
 }
 
 func TestShellOpenDefaultsToWorkspaceMountPath(t *testing.T) {
-	d := NewDriver()
+	d := NewGuestDriver()
 	root := t.TempDir()
 	d.mu.Lock()
-	d.workspaces["ws-open"] = &workspaceState{projectRoot: root, state: "created", instance: "nexus-seatbelt"}
+	d.workspaces["ws-open"] = &workspaceState{projectRoot: root, state: "created", instance: "nexus-ci-alt"}
 	d.mu.Unlock()
 
 	bootstrapCalls := 0
 	d.bootstrapInstance = func(ctx context.Context, instance, configBundle string) error {
 		bootstrapCalls++
-		if instance != "nexus-seatbelt" {
-			t.Fatalf("expected bootstrap instance nexus-seatbelt, got %q", instance)
+		if instance != "nexus-ci-alt" {
+			t.Fatalf("expected bootstrap instance nexus-ci-alt, got %q", instance)
 		}
 		return nil
 	}
@@ -441,6 +454,7 @@ func TestStartLimaShellSkipsUnavailableCandidatesWhenPreparingWorkspaceMount(t *
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
+	t.Setenv("NEXUS_RUNTIME_LIMAGUEST_INSTANCE", "")
 	t.Setenv("NEXUS_RUNTIME_SEATBELT_INSTANCE", "")
 
 	origEnsure := ensureLimaInstanceRunningFn
@@ -474,7 +488,7 @@ func TestStartLimaShellSkipsUnavailableCandidatesWhenPreparingWorkspaceMount(t *
 		return nil, errors.New("stop after observe")
 	}
 
-	_, _, err := startLimaShell(ctx, "nexus-seatbelt", "/nexus/ws/test-ws", "/tmp/repo", "bash")
+	_, _, err := startLimaShell(ctx, "nexus-ci-alt", "/nexus/ws/test-ws", "/tmp/repo", "bash")
 	if err == nil {
 		t.Fatal("expected startLimaShell to fail once pty start is stubbed")
 	}
@@ -492,7 +506,7 @@ func TestEnsureLimaInstanceRunningReturnsErrorForMissingInstance(t *testing.T) {
 	}()
 
 	limactlOutputFn = func(_ context.Context, args ...string) ([]byte, error) {
-		if len(args) == 3 && args[0] == "list" && args[1] == "--json" && args[2] == "nexus-seatbelt" {
+		if len(args) == 3 && args[0] == "list" && args[1] == "--json" && args[2] == "nexus-ci-alt" {
 			return []byte("[]"), nil
 		}
 		return nil, errors.New("unexpected limactl output args")
@@ -501,20 +515,20 @@ func TestEnsureLimaInstanceRunningReturnsErrorForMissingInstance(t *testing.T) {
 		return nil, errors.New("unexpected limactl start args")
 	}
 
-	err := ensureLimaInstanceRunning(context.Background(), "nexus-seatbelt")
+	err := ensureLimaInstanceRunning(context.Background(), "nexus-ci-alt")
 	if err == nil {
 		t.Fatal("expected ensureLimaInstanceRunning to fail for missing instance")
 	}
-	if !strings.Contains(err.Error(), "lima instance nexus-seatbelt is missing") {
+	if !strings.Contains(err.Error(), "lima instance nexus-ci-alt is missing") {
 		t.Fatalf("expected missing instance error, got: %v", err)
 	}
 }
 
 func TestCreateReturnsErrWorkspaceMountFailedWhenAllMountsFail(t *testing.T) {
-	d := NewDriver()
-	oldLookPath := seatbeltLookPath
-	t.Cleanup(func() { seatbeltLookPath = oldLookPath })
-	seatbeltLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
+	d := NewGuestDriver()
+	oldLookPath := guestLookPath
+	t.Cleanup(func() { guestLookPath = oldLookPath })
+	guestLookPath = func(file string) (string, error) { return "/usr/local/bin/limactl", nil }
 
 	d.bootstrapInstance = func(ctx context.Context, instance, configBundle string) error { return nil }
 	d.prepareWorkspaceFS = func(ctx context.Context, instance, targetPath, localPath string) error {

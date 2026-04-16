@@ -24,7 +24,6 @@ import (
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/firecracker"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/lima"
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/process"
-	"github.com/inizio/nexus/packages/nexus/pkg/runtime/seatbelt"
 	"github.com/inizio/nexus/packages/nexus/pkg/server"
 	"github.com/inizio/nexus/packages/nexus/pkg/spotlight"
 )
@@ -134,13 +133,13 @@ func runServer(port int, workspaceDir string, token string) error {
 
 	// Create runtime drivers.
 	firecrackerDriver := firecracker.NewDriver(runner, firecracker.WithManager(fcManager))
-	limaGuestDriver := seatbelt.NewDriver()
+	guest := lima.NewGuestDriver()
 	firecrackerAvailable := probeFirecrackerTooling(exec.LookPath)
 	firecrackerRuntimeDriver := runtime.Driver(firecrackerDriver)
 	if firecrackerProbeGOOS == "darwin" {
 		// On macOS, firecracker backend is hosted through Lima and can switch
 		// pooled/dedicated instances via driver options.
-		firecrackerRuntimeDriver = lima.NewDriver(limaGuestDriver)
+		firecrackerRuntimeDriver = lima.NewDriver(guest)
 	}
 
 	_, codexErr := exec.LookPath("codex")
@@ -168,7 +167,7 @@ func runServer(port int, workspaceDir string, token string) error {
 	srv.SetRuntimeFactory(factory)
 
 	// Initialize live port monitoring
-	agentConnFn := limaGuestDriver.AgentConn
+	agentConnFn := guest.AgentConn
 	if connector, ok := firecrackerRuntimeDriver.(interface {
 		AgentConn(context.Context, string) (net.Conn, error)
 	}); ok {

@@ -14,6 +14,7 @@
 		2100A3C463E25A759B40B8F1 /* DaemonSettingsPanel.swift in Sources */ = {isa = PBXBuildFile; fileRef = 59B54A26C62C6D8473AD660D /* DaemonSettingsPanel.swift */; };
 		2CCD8461D600482E18166009 /* libNexusCore.a in Frameworks */ = {isa = PBXBuildFile; fileRef = E3045A4B1F455132950EB624 /* libNexusCore.a */; };
 		3E04BAB98CAECB30936BB575 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = A2237CDA02F353B6B534D6A0 /* SwiftTerm */; };
+		5142C089169B296EB634FB67 /* StartupTrace.swift in Sources */ = {isa = PBXBuildFile; fileRef = CBE87649ADC2236DDDD799E3 /* StartupTrace.swift */; };
 		5294C6DF01F200E1219CC1D2 /* Theme.swift in Sources */ = {isa = PBXBuildFile; fileRef = E82D4B646E6A09E4463C92C5 /* Theme.swift */; };
 		6A3FAF5507F5406EDF804D0C /* NexusTerminalUITests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E06F1FDED2DC1368200DA652 /* NexusTerminalUITests.swift */; };
 		7E776D62015DFBCF25EEE644 /* TerminalView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6231766FDA3F470858042A87 /* TerminalView.swift */; };
@@ -81,6 +82,7 @@
 		BE2B07751BE8ACCB41EBA453 /* PTYSessionManager.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PTYSessionManager.swift; sourceTree = "<group>"; };
 		BFBDA3B5F4182BD67D9EB847 /* NexusUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusUITests.swift; sourceTree = "<group>"; };
 		C6C584F5FBD31845678BD347 /* NexusUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = NexusUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		CBE87649ADC2236DDDD799E3 /* StartupTrace.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StartupTrace.swift; sourceTree = "<group>"; };
 		D8BD091C6D75E7BF48014347 /* NexusApp.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = NexusApp.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		E06F1FDED2DC1368200DA652 /* NexusTerminalUITests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = NexusTerminalUITests.swift; sourceTree = "<group>"; };
 		E3045A4B1F455132950EB624 /* libNexusCore.a */ = {isa = PBXFileReference; explicitFileType = archive.ar; includeInIndex = 0; path = libNexusCore.a; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -185,6 +187,7 @@
 				52D96DD4872B23F7851C58FC /* debug_pty.swift */,
 				E8D2BD862DC1CF0BC0340EF9 /* HostToolsSetup.swift */,
 				BE2B07751BE8ACCB41EBA453 /* PTYSessionManager.swift */,
+				CBE87649ADC2236DDDD799E3 /* StartupTrace.swift */,
 				2E3741BD5102248BC1C00360 /* Workspace.swift */,
 				36DB5E4ECA85CE38724246A2 /* Client */,
 			);
@@ -424,6 +427,7 @@
 				02BF55A8E1DB9D2B8AA212C5 /* DaemonLauncher.swift in Sources */,
 				AAD95B3DEC7CDE28C6E99EA9 /* HostToolsSetup.swift in Sources */,
 				DCD55CD52BA08D65FF1A4C57 /* PTYSessionManager.swift in Sources */,
+				5142C089169B296EB634FB67 /* StartupTrace.swift in Sources */,
 				A512F81B9A51ED222CBECA5F /* WebSocketClient.swift in Sources */,
 				0C76B45650EA71489DE56713 /* Workspace.swift in Sources */,
 				B5EC8D397B7A962CD2BDF820 /* debug_pty.swift in Sources */,

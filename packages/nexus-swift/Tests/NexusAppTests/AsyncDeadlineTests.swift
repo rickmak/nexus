@@ -21,4 +21,12 @@ final class AsyncDeadlineTests: XCTestCase {
             XCTAssertEqual(s, 1)
         }
     }
+
+    @MainActor
+    func testWithSecondsOnMainActorReturnsWhenOperationFinishesUnderDeadline() async throws {
+        let v = try await AsyncDeadline.withSecondsOnMainActor(30) {
+            42
+        }
+        XCTAssertEqual(v, 42)
+    }
 }

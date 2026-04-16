@@ -420,32 +420,66 @@ public struct DaemonLauncher {
         let canonicalRoot = URL(fileURLWithPath: root).resolvingSymlinksInPath().path
         let runDir = resolveRunDir()
         let preferred = preferredProcessPort(canonicalRoot)
-        for offset in 0..<processPortSpan {
+
+        // Reuse a port already recorded for this worktree (may include `preferred`).
+        if let existing = portOwnedByWorktree(runDir: runDir, canonicalRoot: canonicalRoot) {
+            return existing
+        }
+
+        // Claim preferred slot if nothing on disk conflicts.
+        let preferredOwner = readDaemonOwner(runDir: runDir, port: preferred)
+        if preferredOwner == nil || preferredOwner!.isEmpty {
+            return preferred
+        }
+
+        // Preferred is taken by another worktree — scan the ring for a free or owned slot (disk-only).
+        for offset in 1..<processPortSpan {
             let candidate = processPortBase + ((preferred - processPortBase + offset) % processPortSpan)
-            let owner = readDaemonOwner(runDir: runDir, port: candidate)
-            if isPortHealthySync(candidate) {
-                if owner == canonicalRoot { return candidate }
-                continue
+            if readDaemonOwner(runDir: runDir, port: candidate) == canonicalRoot {
+                return candidate
             }
-            if let owner, !owner.isEmpty, owner != canonicalRoot {
-                let ownerPath = "\(runDir)/daemon-\(candidate).owner"
-                try? FileManager.default.removeItem(atPath: ownerPath)
+            let o = readDaemonOwner(runDir: runDir, port: candidate)
+            if o == nil || o!.isEmpty {
+                return candidate
             }
-            return candidate
         }
         return preferred
     }
 
+    /// If the process-isolation worktree is active, returns a port that already has `daemon-PORT.owner`
+    /// matching this worktree (authoritative Nexus slot for the current repo checkout).
+    public static func existingPortForCurrentProcessWorktree() -> Int? {
+        guard let root = processWorktreeRoot() else { return nil }
+        let canonicalRoot = URL(fileURLWithPath: root).resolvingSymlinksInPath().path
+        return portOwnedByWorktree(runDir: resolveRunDir(), canonicalRoot: canonicalRoot)
+    }
+
+    /// Returns a port whose `daemon-PORT.owner` file matches this worktree, if any.
+    private static func portOwnedByWorktree(runDir: String, canonicalRoot: String) -> Int? {
+        guard let entries = try? FileManager.default.contentsOfDirectory(atPath: runDir) else { return nil }
+        for entry in entries where entry.hasPrefix("daemon-") && entry.hasSuffix(".owner") {
+            let inner = String(entry.dropFirst("daemon-".count).dropLast(".owner".count))
+            guard let port = Int(inner) else { continue }
+            if readDaemonOwner(runDir: runDir, port: port) == canonicalRoot {
+                return port
+            }
+        }
+        return nil
+    }
+
     private static func processWorktreeRoot() -> String? {
         let fm = FileManager.default
-        var dir = URL(fileURLWithPath: fm.currentDirectoryPath).standardizedFileURL
+        var dir = URL(fileURLWithPath: fm.currentDirectoryPath).resolvingSymlinksInPath()
         while true {
             let workspacePath = dir.appendingPathComponent(".nexus/workspace.json").path
             if fm.fileExists(atPath: workspacePath),
                workspaceConfigEnablesProcessIsolation(atPath: workspacePath) {
                 return dir.path
             }
-            let parent = dir.deletingLastPathComponent()
+            // Must resolve symlinks on the parent too — `deletingLastPathComponent()` on `/`
+            // returns `/..` (path grows unboundedly) rather than `/`, so a bare path comparison
+            // never terminates. Resolving both sides collapses `/..` → `/` at the filesystem root.
+            let parent = dir.deletingLastPathComponent().resolvingSymlinksInPath()
             if parent.path == dir.path { break }
             dir = parent
         }
@@ -480,23 +514,6 @@ public struct DaemonLauncher {
         guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
-    }
-
-    private static func isPortHealthySync(_ port: Int) -> Bool {
-        guard let url = URL(string: "http://localhost:\(port)/healthz") else { return false }
-        var req = URLRequest(url: url)
-        req.timeoutInterval = 0.4
-        let sem = DispatchSemaphore(value: 0)
-        final class Box: @unchecked Sendable { var ok = false }
-        let box = Box()
-        URLSession.shared.dataTask(with: req) { _, resp, _ in
-            if let http = resp as? HTTPURLResponse {
-                box.ok = http.statusCode == 200
-            }
-            sem.signal()
-        }.resume()
-        _ = sem.wait(timeout: .now() + 1)
-        return box.ok
     }
 
     private static func daemonTokenService(env: [String: String]) -> String {

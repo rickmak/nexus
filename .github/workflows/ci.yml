@@ -162,6 +162,7 @@ jobs:
         run: |
           set -euo pipefail
           limactl delete -f nexus-firecracker || true
+          limactl delete -f nexus-ci-alt || true
           limactl delete -f nexus-seatbelt || true
 
       - name: Run runtime backend selection E2E (strict)
@@ -172,7 +173,7 @@ jobs:
           source "${GITHUB_WORKSPACE}/.nexus-e2e-env.sh"
           set +a
           if [[ "${RUNNER_OS}" == "macOS" ]]; then
-            export NEXUS_RUNTIME_SEATBELT_INSTANCE=nexus-seatbelt
+            export NEXUS_RUNTIME_LIMAGUEST_INSTANCE=nexus-ci-alt
           fi
                 pnpm --filter @nexus/e2e-flows run pretest:ci
                 pnpm --filter @nexus/e2e-flows exec jest --runInBand --ci --forceExit -- src/cases/runtime/runtime-selection.e2e.test.ts

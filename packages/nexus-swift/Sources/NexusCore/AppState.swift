@@ -58,15 +58,21 @@ public final class AppState: ObservableObject {
     }
 
     public init() {
+        StartupTrace.beginSession()
+        StartupTrace.checkpoint("app.init", "before client")
         self.client = WebSocketDaemonClient(daemonURL: WebSocketDaemonClient.discoverURL())
         connectionState = .starting
+        StartupTrace.checkpoint("app.init", "after client; scheduling ensureDaemonAndLoad")
         Task { await self.ensureDaemonAndLoad() }
         startRefreshLoop()
     }
 
     // Designated for dependency injection in tests only
     public init(client: any DaemonClient) {
+        StartupTrace.beginSession()
+        StartupTrace.checkpoint("app.init.inject", "before storing client")
         self.client = client
+        StartupTrace.checkpoint("app.init.inject", "load scheduled")
         Task { await self.load() }
     }
 
@@ -92,6 +98,7 @@ public final class AppState: ObservableObject {
     public func load() async {
         connectionState = .connecting
         Self.logger.debug("load() started")
+        StartupTrace.checkpoint("load.enter")
         do {
             async let wsFetch = client.listWorkspaces()
             async let relationsFetch = client.listRelations()
@@ -101,16 +108,20 @@ public final class AppState: ObservableObject {
 
             // Phase 1 — connect the UI as soon as lists return (no per-workspace side effects yet).
             applyLoadedWorkspaces(workspaces, relations: relations, projects: projects)
+            StartupTrace.checkpoint("load.phase1_ok", "workspaces=\(workspaces.count) projects=\(projects.count)")
             Self.logger.debug("load() phase-1 connected with \(workspaces.count, privacy: .public) workspaces")
 
             // Phase 2 — best-effort; must not block startup indefinitely or pin RAM on hung RPCs.
             do {
-                workspaces = try await AsyncDeadline.withSeconds(Self.workspaceEnrichmentDeadlineSeconds) {
+                StartupTrace.checkpoint("load.phase2_begin", "enrichment deadline \(Self.workspaceEnrichmentDeadlineSeconds)s")
+                workspaces = try await AsyncDeadline.withSecondsOnMainActor(Self.workspaceEnrichmentDeadlineSeconds) {
                     await self.enrichActiveWorkspaceSideEffects(workspaces: workspaces)
                 }
                 applyLoadedWorkspaces(workspaces, relations: relations, projects: projects)
+                StartupTrace.checkpoint("load.phase2_ok")
             } catch {
                 if error is AsyncDeadlineError {
+                    StartupTrace.checkpoint("load.phase2_deadline_skip")
                     Self.logger.warning("load() enrichment skipped: deadline \(Self.workspaceEnrichmentDeadlineSeconds, privacy: .public)s (ports/tunnels may be stale until next refresh)")
                 } else {
                     throw error
@@ -131,6 +142,7 @@ public final class AppState: ObservableObject {
             } else if self.error == nil {
                 self.error = "Cannot reach daemon: \(error.localizedDescription)"
             }
+            StartupTrace.checkpoint("load.failed", error.localizedDescription)
             Self.logger.error("load() failed: \(error.localizedDescription, privacy: .public)")
         }
     }
@@ -190,12 +202,15 @@ public final class AppState: ObservableObject {
     func ensureDaemonAndLoad() async {
         let targetDaemonPort = DaemonLauncher.preferredPort()
         connectionState = .connecting
+        StartupTrace.checkpoint("ensure.enter", "port=\(targetDaemonPort)")
         Self.logger.info("ensureDaemonAndLoad() started; preferred port \(targetDaemonPort, privacy: .public)")
 
         do {
-            try await AsyncDeadline.withSeconds(Self.startupDeadlineSeconds) {
+            StartupTrace.checkpoint("ensure.before_startup_deadline", "cap=\(Self.startupDeadlineSeconds)s")
+            try await AsyncDeadline.withSecondsOnMainActor(Self.startupDeadlineSeconds) {
                 await self.ensureDaemonAndLoadUnbounded(preferredPort: targetDaemonPort)
             }
+            StartupTrace.checkpoint("ensure.startup_deadline_returned_ok")
         } catch {
             if let ad = error as? AsyncDeadlineError, case .exceeded(let s) = ad {
                 connectionState = .disconnected
@@ -204,9 +219,11 @@ public final class AppState: ObservableObject {
                 if let ws = client as? WebSocketDaemonClient {
                     ws.disconnect()
                 }
+                StartupTrace.checkpoint("ensure.startup_deadline_exceeded", "\(s)s")
                 Self.logger.error("ensureDaemonAndLoad exceeded \(s, privacy: .public)s startup deadline")
                 return
             }
+            StartupTrace.checkpoint("ensure.error", error.localizedDescription)
             connectionState = .disconnected
             daemonStatus = .offline
             if self.error == nil {
@@ -217,6 +234,7 @@ public final class AppState: ObservableObject {
     }
 
     private func ensureDaemonAndLoadUnbounded(preferredPort targetDaemonPort: Int) async {
+        StartupTrace.checkpoint("ensure.unbounded.enter")
         // Step 1: Check daemon version compatibility (unauthenticated HTTP).
         if let wsClient = client as? WebSocketDaemonClient {
             if let info = await wsClient.fetchDaemonInfo() {
@@ -230,17 +248,23 @@ public final class AppState: ObservableObject {
                         return
                     }
                 }
+                StartupTrace.checkpoint("ensure.version_ok", "protocol=\(info.protocolVersion) v=\(info.version)")
             } else {
                 daemonStatus = .offline
+                StartupTrace.checkpoint("ensure.version_http_nil")
             }
         }
 
         // Step 2: Fast path — lists only (no per-workspace side effects; matches bounded `load()`).
+        StartupTrace.checkpoint("ensure.attempt_load_begin")
         do {
             try await attemptLoad()
+            StartupTrace.checkpoint("ensure.fast_path_ok")
             Self.logger.info("Fast-path daemon load succeeded")
             return
-        } catch {}
+        } catch {
+            StartupTrace.checkpoint("ensure.fast_path_threw", error.localizedDescription)
+        }
 
         if injectedDaemonURL != nil {
             var lastError: Error?
@@ -261,18 +285,24 @@ public final class AppState: ObservableObject {
         }
 
         connectionState = .starting
+        StartupTrace.checkpoint("ensure.kill_begin", "port=\(targetDaemonPort)")
         await Task.detached { DaemonLauncher.killRunning(port: targetDaemonPort) }.value
+        StartupTrace.checkpoint("ensure.kill_done")
         try? await Task.sleep(for: .seconds(0.4))
+        StartupTrace.checkpoint("ensure.launch_begin")
         do {
             try await DaemonLauncher.ensureRunning(port: targetDaemonPort)
+            StartupTrace.checkpoint("ensure.launch_ok")
             Self.logger.info("Managed daemon started on port \(targetDaemonPort, privacy: .public)")
         } catch {
             connectionState = .disconnected
             self.error = error.localizedDescription
+            StartupTrace.checkpoint("ensure.launch_failed", error.localizedDescription)
             Self.logger.error("Failed to start managed daemon: \(error.localizedDescription, privacy: .public)")
             return
         }
         let newURL = WebSocketDaemonClient.discoverURL()
+        StartupTrace.checkpoint("ensure.new_client", newURL.absoluteString)
         client = WebSocketDaemonClient(daemonURL: newURL)
         if let wsClient = client as? WebSocketDaemonClient,
            let info = await wsClient.fetchDaemonInfo() {
@@ -280,7 +310,9 @@ public final class AppState: ObservableObject {
         } else {
             daemonStatus = .unknown
         }
+        StartupTrace.checkpoint("ensure.before_full_load")
         await load()
+        StartupTrace.checkpoint("ensure.after_full_load")
     }
 
     private func setInjectedDaemonUnavailableError(reason: String?) {
@@ -331,6 +363,7 @@ public final class AppState: ObservableObject {
 
     /// Fast-path: three list RPCs only (no markWorkspaceReady / ports fan-out).
     private func attemptLoad() async throws {
+        StartupTrace.checkpoint("attempt_load.enter")
         async let wsFetch = client.listWorkspaces()
         async let relationsFetch = client.listRelations()
         let workspaces = try await wsFetch
