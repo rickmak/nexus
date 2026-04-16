@@ -19,6 +19,16 @@ import (
 	"github.com/inizio/nexus/packages/nexus/pkg/runtime/drivers/shared"
 )
 
+func TestGuestWorkdir_ScopedPerWorkspaceID(t *testing.T) {
+	d := NewDriver()
+	if got := d.GuestWorkdir("ws-feat-1"); got != "/workspace/ws-feat-1" {
+		t.Fatalf("expected /workspace/ws-feat-1, got %q", got)
+	}
+	if got := d.GuestWorkdir("a/b"); got != "/workspace/a-b" {
+		t.Fatalf("expected sanitized segment, got %q", got)
+	}
+}
+
 func TestCreateRequiresLimaForIsolation(t *testing.T) {
 	d := NewDriver()
 	oldLookPath := seatbeltLookPath
@@ -413,8 +423,9 @@ func TestShellOpenDefaultsToWorkspaceMountPath(t *testing.T) {
 		t.Fatal("spawnShell was not invoked")
 	}
 
-	if gotWorkdir != "/workspace" {
-		t.Fatalf("expected workdir /workspace, got %q", gotWorkdir)
+	wantGuest := "/workspace/ws-open"
+	if gotWorkdir != wantGuest {
+		t.Fatalf("expected workdir %q, got %q", wantGuest, gotWorkdir)
 	}
 	if gotLocalPath != root {
 		t.Fatalf("expected localPath %q, got %q", root, gotLocalPath)

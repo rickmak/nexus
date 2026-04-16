@@ -187,9 +187,14 @@ func buildTmuxSessionName(workspaceID, sessionID string) string {
 	return "nexus_" + workspaceID + "_" + sessionID
 }
 
-func buildTmuxAttachCommand(tmuxSession string) string {
+func buildTmuxAttachCommand(tmuxSession, guestWorkdir string) string {
 	quoted := shellQuoteUnixExport(tmuxSession)
-	return "if tmux has-session -t " + quoted + " >/dev/null 2>&1; then CUR=$(tmux display-message -p -t " + quoted + " '#{pane_current_path}' 2>/dev/null || true); if [ -n \"$CUR\" ] && [ ! -d \"$CUR\" ]; then tmux kill-session -t " + quoted + " >/dev/null 2>&1 || true; fi; fi; TERM=xterm-256color tmux new-session -A -c /workspace -s " + quoted + " \\; set-option -t " + quoted + " status off\n"
+	cwd := strings.TrimSpace(guestWorkdir)
+	if cwd == "" {
+		cwd = "/workspace"
+	}
+	cwdQ := shellQuoteUnixExport(cwd)
+	return "if tmux has-session -t " + quoted + " >/dev/null 2>&1; then CUR=$(tmux display-message -p -t " + quoted + " '#{pane_current_path}' 2>/dev/null || true); if [ -n \"$CUR\" ] && [ ! -d \"$CUR\" ]; then tmux kill-session -t " + quoted + " >/dev/null 2>&1 || true; fi; fi; TERM=xterm-256color tmux new-session -A -c " + cwdQ + " -s " + quoted + " \\; set-option -t " + quoted + " status off\n"
 }
 
 func buildTmuxHealthCheckCommand(tmuxSession string) string {
@@ -204,6 +209,14 @@ func canonicalGuestWorkdir(driver runtime.Driver, workspaceID string) string {
 		}
 	}
 	return "/workspace"
+}
+
+func guestWorkdirForPTY(driver runtime.Driver, workspaceID, workDirHint string) string {
+	w := strings.TrimSpace(workDirHint)
+	if w == "" || w == "/workspace" {
+		return canonicalGuestWorkdir(driver, workspaceID)
+	}
+	return w
 }
 
 func HandleOpen(deps *Deps, conn Conn, params json.RawMessage, ws *workspace.Workspace) (interface{}, *rpckit.RPCError) {
@@ -437,7 +450,7 @@ func handleFirecrackerPTYOpen(deps *Deps, conn Conn, p OpenParams, wsRecord *wor
 	if useTmux {
 		session.IsTmux = true
 		session.TmuxSession = buildTmuxSessionName(wsRecord.ID, sessionID)
-		if err := sendRemoteShellWrite(enc, dec, nil, sessionID, buildTmuxAttachCommand(session.TmuxSession)); err != nil {
+		if err := sendRemoteShellWrite(enc, dec, nil, sessionID, buildTmuxAttachCommand(session.TmuxSession, workDirHint)); err != nil {
 			// Fall back to a plain shell when tmux is unavailable/misconfigured.
 			// This keeps terminal startup usable on fresh machines where tmux has
 			// not been installed yet.
@@ -990,12 +1003,13 @@ func recoverPersistedTmuxSession(deps *Deps, info SessionInfo) error {
 	if tmuxSession == "" {
 		tmuxSession = buildTmuxSessionName(info.WorkspaceID, info.ID)
 	}
+	guestCWD := guestWorkdirForPTY(driverAny, info.WorkspaceID, info.WorkDir)
 	session := &Session{
 		ID:          info.ID,
 		WorkspaceID: info.WorkspaceID,
 		Name:        info.Name,
 		Shell:       "bash",
-		WorkDir:     info.WorkDir,
+		WorkDir:     guestCWD,
 		Cols:        info.Cols,
 		Rows:        info.Rows,
 		RemoteConn:  agentConn,
@@ -1007,7 +1021,7 @@ func recoverPersistedTmuxSession(deps *Deps, info SessionInfo) error {
 		IsTmux:      true,
 		TmuxSession: tmuxSession,
 	}
-	if err := sendRemoteShellWrite(enc, dec, nil, info.ID, buildTmuxAttachCommand(tmuxSession)); err != nil {
+	if err := sendRemoteShellWrite(enc, dec, nil, info.ID, buildTmuxAttachCommand(tmuxSession, guestCWD)); err != nil {
 		_ = agentConn.Close()
 		return err
 	}

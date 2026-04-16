@@ -478,8 +478,32 @@ func startLimaShell(ctx context.Context, instanceName, workdir, localPath, shell
 }
 
 func guestWorkdirForID(workspaceID string) string {
-	_ = workspaceID
-	return "/workspace"
+	id := strings.TrimSpace(workspaceID)
+	if id == "" {
+		return "/workspace/_"
+	}
+	return "/workspace/" + sanitizeGuestWorkspaceSegment(id)
+}
+
+func sanitizeGuestWorkspaceSegment(id string) string {
+	var b strings.Builder
+	for _, r := range id {
+		switch {
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9', r == '-', r == '_', r == '.':
+			b.WriteRune(r)
+		default:
+			b.WriteByte('-')
+		}
+	}
+	out := strings.Trim(b.String(), "-.")
+	if out == "" {
+		return "ws"
+	}
+	const maxSeg = 120
+	if len(out) > maxSeg {
+		out = out[:maxSeg]
+	}
+	return out
 }
 
 func (d *Driver) GuestWorkdir(workspaceID string) string {
@@ -497,7 +521,7 @@ func prepareWorkspacePath(ctx context.Context, instance, targetPath, localPath s
 		return fmt.Errorf("target path is required")
 	}
 
-	// Avoid remount churn when /workspace is already bound to the same source.
+	// Avoid remount churn when the guest mount point is already bound to the same host path.
 	// Repeated lazy unmount/remount cycles can invalidate cwd for long-running
 	// tools (e.g. opencode), which then fail with "cwd was deleted".
 	script := fmt.Sprintf(
