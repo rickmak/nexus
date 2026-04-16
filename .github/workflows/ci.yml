@@ -197,6 +197,9 @@ jobs:
           go build -o /usr/local/bin/nexus ./cmd/nexus
           go build -o /usr/local/bin/nexus-daemon ./cmd/daemon
 
+      - name: Install bubblewrap (process sandbox dependency)
+        run: sudo apt-get install -y bubblewrap
+
       - name: Run sandbox integration tests
         run: |
           cd packages/nexus
