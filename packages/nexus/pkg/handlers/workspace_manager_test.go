@@ -660,7 +660,7 @@ func TestHandleWorkspaceCreate_MissingRuntimeRequiredUsesDefaultLinux(t *testing
 	}
 }
 
-func TestHandleWorkspaceCreate_MissingRuntimeRequiredDoesNotUseSpecBackend(t *testing.T) {
+func TestHandleWorkspaceCreate_ExplicitSpecBackendIsHonored(t *testing.T) {
 	mgrRoot := t.TempDir()
 	mgr := workspacemgr.NewManager(mgrRoot)
 	repo := setupRepoWithWorkspaceConfig(t, `{"version":1}`)
@@ -688,9 +688,15 @@ func TestHandleWorkspaceCreate_MissingRuntimeRequiredDoesNotUseSpecBackend(t *te
 		},
 	}
 
-	_, rpcErr := HandleWorkspaceCreate(context.Background(), params, mgr, factory)
-	if rpcErr == nil {
-		t.Fatal("expected rpc error when runtime.required is missing")
+	result, rpcErr := HandleWorkspaceCreate(context.Background(), params, mgr, factory)
+	if rpcErr != nil {
+		t.Fatalf("expected success when explicit backend=process is provided, got %+v", rpcErr)
+	}
+	if result == nil || result.Workspace == nil {
+		t.Fatalf("expected workspace, got %#v", result)
+	}
+	if result.Workspace.Backend != "process" {
+		t.Fatalf("expected backend %q from explicit spec, got %q", "process", result.Workspace.Backend)
 	}
 }
 

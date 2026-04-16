@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	goruntime "runtime"
+	"strings"
 
 	"github.com/inizio/nexus/packages/nexus/pkg/config"
 	rpckit "github.com/inizio/nexus/packages/nexus/pkg/rpcerrors"
@@ -25,11 +26,14 @@ func PrepareCreate(ctx context.Context, spec workspacemgr.CreateSpec, factory *r
 		}
 	}
 
-	backend, mode, err := selection.SelectBackend(goruntime.GOOS, cfg)
-	if err != nil {
-		return workspacemgr.CreateSpec{}, &rpckit.RPCError{Code: -32603, Message: fmt.Sprintf("backend selection failed: %v", err)}, false
+	// Only auto-select backend when the caller has not explicitly specified one.
+	if strings.TrimSpace(spec.Backend) == "" {
+		backend, mode, err := selection.SelectBackend(goruntime.GOOS, cfg)
+		if err != nil {
+			return workspacemgr.CreateSpec{}, &rpckit.RPCError{Code: -32603, Message: fmt.Sprintf("backend selection failed: %v", err)}, false
+		}
+		spec.Backend = backend
+		_ = mode // mode is carried separately; backend name is sufficient for spec routing
 	}
-	spec.Backend = backend
-	_ = mode // mode is carried separately; backend name is sufficient for spec routing
 	return spec, nil, false
 }
