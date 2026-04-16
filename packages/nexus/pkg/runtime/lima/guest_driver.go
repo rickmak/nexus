@@ -60,6 +60,7 @@ type workspaceState struct {
 	projectRoot string
 	state       string
 	instance    string
+	mode        string // "pool" or "dedicated"
 }
 
 func NewGuestDriver() *GuestDriver {
@@ -98,11 +99,16 @@ func (d *GuestDriver) Create(ctx context.Context, req runtime.CreateRequest) err
 	}
 
 	instance := d.instanceNameForOptions(req.Options)
+	wsMode := strings.ToLower(strings.TrimSpace(req.Options["vm.mode"]))
+	if wsMode == "" {
+		wsMode = "pool"
+	}
 
 	d.mu.Lock()
 	if existing, exists := d.workspaces[req.WorkspaceID]; exists {
 		existing.projectRoot = req.ProjectRoot
 		existing.instance = instance
+		existing.mode = wsMode
 		d.mu.Unlock()
 		if err := d.ensureInstanceBootstrapped(ctx, instance, ""); err != nil {
 			return err
@@ -115,7 +121,7 @@ func (d *GuestDriver) Create(ctx context.Context, req runtime.CreateRequest) err
 		}
 		return nil
 	}
-	d.workspaces[req.WorkspaceID] = &workspaceState{projectRoot: req.ProjectRoot, state: "created", instance: instance}
+	d.workspaces[req.WorkspaceID] = &workspaceState{projectRoot: req.ProjectRoot, state: "created", instance: instance, mode: wsMode}
 	d.mu.Unlock()
 
 	if err := d.ensureInstanceBootstrapped(ctx, instance, ""); err != nil {
@@ -341,6 +347,9 @@ func (d *GuestDriver) serveShellProtocol(ctx context.Context, workspaceID string
 					localPath = d.workspaceProjectRoot(workspaceID)
 				}
 				workdir = perWsPath
+				// In pool mode wrap the shell so the process sees /workspace,
+				// not /workspace/<id>, via a per-process mount namespace.
+				shell = d.buildRemoteShellCmd(workspaceID)
 			}
 
 			instance := d.workspaceInstance(workspaceID)
@@ -877,6 +886,26 @@ func (d *GuestDriver) workspaceInstance(workspaceID string) string {
 		return ws.instance
 	}
 	return d.defaultInstanceName()
+}
+
+func (d *GuestDriver) workspaceMode(workspaceID string) string {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	if ws, ok := d.workspaces[workspaceID]; ok {
+		return ws.mode
+	}
+	return "pool"
+}
+
+// buildRemoteShellCmd returns the shell command to run on the remote guest.
+// In pool mode, the command is wrapped with a per-process mount namespace so
+// the workspace process sees /workspace as its cwd, not /workspace/<id>.
+func (d *GuestDriver) buildRemoteShellCmd(workspaceID string) string {
+	cmd := "bash -i"
+	if d.workspaceMode(workspaceID) == "pool" {
+		cmd = namespaceWrapCommand(cmd, workspaceID)
+	}
+	return cmd
 }
 
 func (d *GuestDriver) scanPorts(ctx context.Context, workspaceID string) []map[string]any {
