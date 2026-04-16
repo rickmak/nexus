@@ -177,3 +177,36 @@ jobs:
           fi
                 pnpm --filter @nexus/e2e-flows run pretest:ci
                 pnpm --filter @nexus/e2e-flows exec jest --runInBand --ci --forceExit -- src/cases/runtime/runtime-selection.e2e.test.ts
+
+  integration-sandbox:
+    name: Integration Tests (process/sandbox)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: packages/nexus/go.mod
+
+      - name: Run sandbox integration tests
+        run: |
+          cd packages/nexus
+          go test -tags integration -v -timeout 10m -run TestAllDrivers/process ./test/integration/...
+
+  # Lima/macOS integration tests require macOS runners with nested virtualization.
+  # Uncomment when macos-15-intel runners are available in this org.
+  # integration-lima:
+  #   name: Integration Tests (lima/macOS)
+  #   runs-on: macos-15-intel
+  #   steps:
+  #     - uses: actions/checkout@v4
+  #     - uses: actions/setup-go@v5
+  #       with:
+  #         go-version-file: packages/nexus/go.mod
+  #     - name: Run lima integration tests
+  #       run: |
+  #         cd packages/nexus
+  #         go test -tags integration -v -timeout 30m -run 'TestAllDrivers/lima|TestPoolCoexistence/lima' ./test/integration/...
