@@ -117,9 +117,7 @@ func linuxBubblewrapCommand(shell, workDir string, relaxed bool) (*exec.Cmd, err
 		"--unshare-pid",
 		"--chdir", workDir,
 	}
-	if !relaxed {
-		args = append(args, "--unshare-net")
-	}
+	_ = relaxed // network unshare requires CAP_NET_ADMIN; omit for portability
 	args = append(args, shell)
 	cmd := exec.Command("bwrap", args...)
 	cmd.Dir = workDir
