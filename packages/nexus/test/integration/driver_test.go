@@ -18,11 +18,15 @@ func TestAllDrivers(t *testing.T) {
 			t.Parallel()
 			driver.SkipUnless(t)
 
-			projectRoot := t.TempDir()
-			initGitRepo(t, projectRoot)
+			newRepo := func(t *testing.T) string {
+				t.Helper()
+				dir := t.TempDir()
+				initGitRepo(t, dir)
+				return dir
+			}
 
 			t.Run("Create", func(t *testing.T) {
-				ws := CreateWorkspace(t, driver, projectRoot)
+				ws := CreateWorkspace(t, driver, newRepo(t))
 				out := ExecInWorkspace(t, ws, "echo ok")
 				if !strings.Contains(out, "ok") {
 					t.Errorf("exec in workspace returned %q, want 'ok'", out)
@@ -30,7 +34,7 @@ func TestAllDrivers(t *testing.T) {
 			})
 
 			t.Run("PathNormalization", func(t *testing.T) {
-				ws := CreateWorkspace(t, driver, projectRoot)
+				ws := CreateWorkspace(t, driver, newRepo(t))
 				pwd := strings.TrimSpace(ExecInWorkspace(t, ws, "pwd"))
 				if pwd != "/workspace" {
 					t.Errorf("pwd = %q, want /workspace", pwd)
@@ -38,7 +42,7 @@ func TestAllDrivers(t *testing.T) {
 			})
 
 			t.Run("WriteRead", func(t *testing.T) {
-				ws := CreateWorkspace(t, driver, projectRoot)
+				ws := CreateWorkspace(t, driver, newRepo(t))
 				ExecInWorkspace(t, ws, "echo hello > /workspace/test-write-read.txt")
 				content := strings.TrimSpace(ExecInWorkspace(t, ws, "cat /workspace/test-write-read.txt"))
 				if content != "hello" {
@@ -47,7 +51,7 @@ func TestAllDrivers(t *testing.T) {
 			})
 
 			t.Run("Fork", func(t *testing.T) {
-				parent := CreateWorkspace(t, driver, projectRoot)
+				parent := CreateWorkspace(t, driver, newRepo(t))
 				ExecInWorkspace(t, parent, "echo before-fork > /workspace/pre-fork.txt")
 
 				start := time.Now()
@@ -77,7 +81,7 @@ func TestAllDrivers(t *testing.T) {
 			})
 
 			t.Run("Git", func(t *testing.T) {
-				ws := CreateWorkspace(t, driver, projectRoot)
+				ws := CreateWorkspace(t, driver, newRepo(t))
 				out := ExecInWorkspace(t, ws, "git status; echo exit:$?")
 				if !strings.Contains(out, "exit:0") {
 					t.Errorf("git status failed inside workspace: %s", out)
