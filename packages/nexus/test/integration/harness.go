@@ -13,6 +13,11 @@ import (
 	"time"
 )
 
+// ansiEscape strips ANSI terminal escape sequences from s.
+var ansiEscape = regexp.MustCompile(`\x1b\[[0-9;?]*[a-zA-Z]|\x1b[()][AB012]`)
+
+func stripANSI(s string) string { return ansiEscape.ReplaceAllString(s, "") }
+
 // DriverConfig identifies a driver configuration under test.
 type DriverConfig struct {
 	Backend    string // "firecracker", "lima", "process"
@@ -108,16 +113,28 @@ func CreateWorkspace(t *testing.T, cfg DriverConfig, projectRoot string) Workspa
 }
 
 // ExecInWorkspace runs a shell command inside the workspace and returns stdout.
+// It wraps the command with sentinel markers to extract output from PTY noise.
 func ExecInWorkspace(t *testing.T, ws WorkspaceHandle, shellCmd string) string {
 	t.Helper()
+	const begin = "__NEXUS_BEGIN__"
+	const end = "__NEXUS_END__"
+	wrapped := fmt.Sprintf("echo %s; %s; echo %s", begin, shellCmd, end)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, "nexus", "sandbox", "exec", ws.ID, "--", "sh", "-c", shellCmd)
+	cmd := exec.CommandContext(ctx, "nexus", "sandbox", "exec", ws.ID, "--", "sh", "-c", wrapped)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("exec in workspace %s: %v\n%s", ws.ID, err, out)
 	}
-	return string(out)
+	clean := stripANSI(strings.ReplaceAll(string(out), "\r\n", "\n"))
+	// Extract lines between sentinels.
+	startIdx := strings.Index(clean, begin)
+	endIdx := strings.LastIndex(clean, end)
+	if startIdx == -1 || endIdx == -1 || endIdx <= startIdx {
+		return strings.TrimSpace(clean)
+	}
+	inner := clean[startIdx+len(begin) : endIdx]
+	return strings.TrimSpace(inner)
 }
 
 // DestroyWorkspace destroys a workspace by ID, ignoring errors (used in cleanup).
@@ -140,6 +157,12 @@ func ForkWorkspace(t *testing.T, parent WorkspaceHandle) WorkspaceHandle {
 		t.Fatalf("could not parse child workspace ID from fork output: %q", string(out))
 	}
 	t.Cleanup(func() { DestroyWorkspace(t, childID) })
+
+	startOut, startErr := exec.Command("nexus", "sandbox", "start", childID).CombinedOutput()
+	if startErr != nil {
+		t.Fatalf("start forked workspace %s: %v\n%s", childID, startErr, startOut)
+	}
+
 	return WorkspaceHandle{ID: childID, Backend: parent.Backend, Mode: parent.Mode}
 }
 
