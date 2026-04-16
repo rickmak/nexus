@@ -110,12 +110,13 @@ func linuxBubblewrapCommand(shell, workDir string, relaxed bool) (*exec.Cmd, err
 	}
 	args := []string{
 		"--bind", "/", "/",
+		"--bind", workDir, "/workspace",
 		"--proc", "/proc",
 		"--dev", "/dev",
 		"--die-with-parent",
 		"--new-session",
 		"--unshare-pid",
-		"--chdir", workDir,
+		"--chdir", "/workspace",
 	}
 	if !relaxed {
 		args = append(args, "--unshare-net")
