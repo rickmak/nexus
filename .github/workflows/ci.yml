@@ -191,6 +191,11 @@ jobs:
         with:
           go-version-file: packages/nexus/go.mod
 
+      - name: Build nexus CLI
+        run: |
+          cd packages/nexus
+          go build -o /usr/local/bin/nexus ./cmd/nexus
+
       - name: Run sandbox integration tests
         run: |
           cd packages/nexus
