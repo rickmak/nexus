@@ -641,9 +641,6 @@ func HandleWorkspaceFork(ctx context.Context, req WorkspaceForkParams, mgr *work
 		if !ok {
 			return nil, rpckit.ErrWorkspaceNotFound
 		}
-		if rpcErr := ensureLocalRuntimeWorkspace(ctx, parent, factory, mgr, ""); rpcErr != nil {
-			return nil, rpcErr
-		}
 
 		driver, selErr := selectDriverForWorkspaceBackend(factory, parent.Backend)
 		if selErr != nil {
